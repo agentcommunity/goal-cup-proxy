@@ -16,7 +16,7 @@ use common::upstream::{Script, Upstream};
 use goalcup::cli;
 use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
 use goalcup::proxy::ca::RUN_CA_FILE;
-use goalcup::watchdog::{self, StartFacts};
+use goalcup::watchdog;
 use goalcup_format::{GapReason, Record};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -25,10 +25,9 @@ use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use watchdog_share::{CONNECT, connect_tls, exchange, loopback_only, tls_over, until};
-
-const RUN: &str = "r0123456789abcdef";
-const ENTRY: &str = "e0123456789abcdef";
+use watchdog_share::{
+    CONNECT, ENTRY, RUN, connect_tls, exchange, facts, loopback_only, tls_over, until,
+};
 
 #[test]
 fn watchdog_restart_keeps_port_backlog_and_ca() {
@@ -75,12 +74,7 @@ fn watchdog_restart_keeps_port_backlog_and_ca() {
         source: Default::default(),
     };
     let harness = format!("while [ ! -e {dd}/stop ]; do sleep 0.05; done");
-    let facts: StartFacts = serde_json::from_value(json!({"run": RUN, "entry": ENTRY,
-        "segment": 0, "entry_dir": entry_dir, "local_wall": 0, "workspace": d, "keep": true,
-        "connector": connector, "hosts": hosts, "hosts_sha256": hosts.sha256(),
-        "native": NativeSources::default(), "mask_rules": [], "values": [],
-        "ca": {"cert": "", "key": ""}, "notes": []}))
-    .unwrap();
+    let facts = facts(&entry_dir, &d, &hosts, json!({"cert": "", "key": ""}));
     let plan = LaunchPlan {
         connector,
         harness_version: None,

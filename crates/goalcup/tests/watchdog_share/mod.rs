@@ -4,7 +4,10 @@
 #![allow(dead_code)]
 
 use crate::common::pki::{HTTP11, provider};
+use goalcup::connector::{HostList, NativeSources};
 use goalcup::proxy::ca::{RUN_CA_FILE, certificates};
+use goalcup::watchdog::StartFacts;
+use serde_json::{Value, json};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
@@ -24,6 +27,21 @@ pub fn until<T>(what: &str, mut f: impl FnMut() -> Option<T>) -> T {
         assert!(start.elapsed() < WAIT, "timed out waiting for {what}");
         std::thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// The run and entry ids of a `watchdog_*` test entry.
+pub const RUN: &str = "r0123456789abcdef";
+pub const ENTRY: &str = "e0123456789abcdef";
+
+/// Start facts for the test entry in `entry_dir`: a fake built-in connector, `hosts`, no mask
+/// rules or values, the CA `ca` (a `CaPem` as JSON) and every optional fact left out.
+pub fn facts(entry_dir: &Path, workspace: &Path, hosts: &HostList, ca: Value) -> StartFacts {
+    serde_json::from_value(json!({"run": RUN, "entry": ENTRY, "segment": 0,
+        "entry_dir": entry_dir, "local_wall": 0, "workspace": workspace, "keep": true,
+        "connector": {"id": "fake", "name": "Fake", "sha256": "0".repeat(64), "source": "builtin"},
+        "hosts": hosts, "hosts_sha256": hosts.sha256(), "native": NativeSources::default(),
+        "mask_rules": [], "values": [], "ca": ca, "notes": []}))
+    .unwrap()
 }
 
 /// L-C12: the one socket listening on `port` is bound to 127.0.0.1 (none on IPv6).

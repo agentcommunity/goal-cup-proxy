@@ -11,7 +11,7 @@ use common::pki::HTTP11;
 use common::recorder::records;
 use common::upstream::{Script, Upstream};
 use goalcup::cli::{self, proc_start_id, read_json, status_json, watchdog_pid};
-use goalcup::connector::{HostList, NativeSources, builtin};
+use goalcup::connector::{HostList, builtin};
 use goalcup::proxy::ca::RunCa;
 use goalcup::watchdog::{self, HarnessFacts, NotRecovered, StartFacts, ToRecorder, spawn};
 use goalcup_format::{GapReason, Record};
@@ -22,7 +22,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
-use watchdog_share::{connect_tls, exchange, loopback_only, until};
+use watchdog_share::{ENTRY, RUN, connect_tls, exchange, facts, loopback_only, until};
 
 struct Dead {
     tmp: tempfile::TempDir,
@@ -52,9 +52,8 @@ fn setup(keep: bool) -> Dead {
         );
         std::env::set_var("GOALCUP_TEST_EXTRA_ROOTS", up.pki().roots_file(tmp.path()));
     }
-    let (run, entry) = ("r0123456789abcdef", "e0123456789abcdef");
     let home = tmp.path().join("g");
-    let entry_dir = cli::entry_dir(&home, run, entry);
+    let entry_dir = cli::entry_dir(&home, RUN, ENTRY);
     let rec = entry_dir.join("rec");
     std::fs::create_dir_all(&rec).unwrap();
     std::fs::set_permissions(&rec, std::fs::Permissions::from_mode(0o700)).unwrap();
@@ -82,16 +81,7 @@ fn setup(keep: bool) -> Dead {
         started: "2026-11-01T00:00:00Z".into(),
         start_id: proc_start_id(pid).unwrap(),
     };
-    let mut facts: StartFacts = serde_json::from_value(json!({
-        "run": run, "entry": entry, "segment": 0, "entry_dir": entry_dir, "deadline": null,
-        "server_time": null, "local_wall": 0, "workspace": tmp.path(),
-        "connector": {"id": "fake", "name": "Fake", "sha256": "0".repeat(64), "source": "builtin"},
-        "harness_version": null, "keep": true, "build": null, "hosts": to_value(&hosts).unwrap(),
-        "hosts_sha256": hosts.sha256(), "native": to_value(NativeSources::default()).unwrap(),
-        "mask_rules": [], "values": [], "ca": ca.export(), "prev": null, "harness": null,
-        "null_since": null, "notes": [],
-    }))
-    .unwrap();
+    let mut facts = facts(&entry_dir, tmp.path(), &hosts, to_value(ca.export()).unwrap());
     let (listener, addr) = common::ports::held();
     let (to, theirs) = UnixStream::pair().unwrap();
     let mut recorder = spawn::recorder(&common::bin(), false, &listener, &theirs).unwrap();
@@ -169,7 +159,10 @@ fn files(dir: &Path) -> Vec<PathBuf> {
 fn watchdog_recover_restarts_the_recorder_only() {
     let mut d = setup(false);
     let try_it = |d: &Dead| watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
-    assert_eq!(try_it(&d), Ok(watchdog::Recovered { port: d.port }));
+    assert_eq!(try_it(&d), Ok(watchdog::Recovered {
+            port: d.port,
+            late: false
+        }));
     loopback_only(d.port);
     assert!(get(&d.entry_dir, d.port).ends_with(b"hi"));
     let (pid, start_id) = watchdog_pid(&d.entry_dir).expect("rec/watchdog.pid");
@@ -270,4 +263,36 @@ fn watchdog_recover_refusals_start_nothing() {
     let _ = d.harness.wait();
     assert_eq!(try_it(&d), Err(NotRecovered::HarnessGone));
     assert!(watchdog_pid(&d.entry_dir).is_none());
+}
+
+/// Point 3 under recover: a first recorder that ends at boot (here a mask rule its masker
+/// refuses, so every normal boot exits) is reported late, not as nothing started. The watchdog
+/// keeps running, its restart loop takes the recorder on into null mode, the port stays held, the
+/// harness is never touched, and its exit still seals.
+#[test]
+fn watchdog_recover_keeps_a_late_boot() {
+    let mut d = setup(false);
+    let mut facts = d.facts.clone();
+    facts.mask_rules = json!([{"kind": "run_secret", "header_prefix": "x-a"}]);
+    let got = watchdog::recover_with(&d.entry_dir, facts, &common::bin());
+    assert_eq!(
+        got,
+        Ok(watchdog::Recovered {
+            port: d.port,
+            late: true
+        })
+    );
+    let (pid, start_id) = watchdog_pid(&d.entry_dir).expect("rec/watchdog.pid");
+    assert!(cli::alive(pid, start_id), "the new watchdog runs");
+    let status = || read_json::<Value>(&status_json(&d.entry_dir));
+    until("null mode", || status().filter(|s| s["mode"] == "null"));
+    loopback_only(d.port);
+    assert!(cli::alive(pid, start_id), "the new watchdog runs");
+    assert!(d.harness.try_wait().unwrap().is_none(), "the harness ended");
+    assert!(!d.tmp.path().join("signalled").exists(), "signalled");
+
+    d.harness.kill().unwrap();
+    d.harness.wait().unwrap();
+    let sealed = until("the seal", || status().filter(|s| !s["seal"].is_null()));
+    assert_eq!(sealed["seal"]["reason"], "harness_exit", "{sealed}");
 }

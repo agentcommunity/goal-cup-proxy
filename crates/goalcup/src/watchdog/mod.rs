@@ -428,13 +428,12 @@ fn watch(
                 if let Some(d) = moved(&word) {
                     deadline = Some(d);
                     // A recorder started after this gets the moved deadline on its first line.
-                    let left_ms = d.0.saturating_sub(Mono::now().0) / 1_000_000;
-                    facts.deadline = Some(clock::wall_ns() / 1_000_000 + left_ms);
+                    facts.deadline = Some(wall_of(d));
                 }
                 match stop_of(&word) {
                     Some(SealReason::Deadline) => {
                         deadline = Some(Mono(0));
-                        facts.deadline = Some(clock::wall_ns() / 1_000_000);
+                        facts.deadline = Some(wall_of(Mono::now()));
                     }
                     // Any other stop: seal at once and leave the harness alone (ledger section 7).
                     Some(reason) if seal.is_none() => {
@@ -476,7 +475,7 @@ fn watch(
         let gone = match own {
             Some(_) => harness_pid.and_then(spawn::look),
             // Recover: watched by pid and start id; its exit status is not ours to read.
-            None => (harness_pid)
+            None => harness_pid
                 .filter(|p| !cli::alive(*p, harness_start))
                 .map(|_| None),
         };
@@ -556,7 +555,7 @@ fn watch(
         // loop starts a null one (R3a). After the seal one runs too while the harness lives, so
         // its connections are always served (section 8 step 10): a boot on a sealed entry relays
         // and records nothing. Only a boot that died at boot spaces the next (`Restarts::space`).
-        let held = (restarts.hold).is_some_and(|h| Mono::now() < h);
+        let held = restarts.hold.is_some_and(|h| Mono::now() < h);
         if boot.ended && !held && (!(sealed || left) || harness_pid.is_some()) {
             // A null boot due when the wait is already over: the normal try takes its place.
             if next_null && restarts.wait_over() {
@@ -665,6 +664,7 @@ impl Boot {
         let start = Mono::now();
         loop {
             if self.next() == Some(ToWatchdog::Ready) {
+                self.ready = true;
                 return Ok(());
             }
             if let Ok(Some(status)) = self.child.try_wait() {
@@ -850,6 +850,12 @@ fn due(from: Mono, ms_left: u64) -> Mono {
 pub(crate) fn deadline_of(wall: Option<u64>) -> Option<Mono> {
     let now_ms = clock::wall_ns() / 1_000_000;
     wall.map(|d| due(Mono::now(), d.saturating_sub(now_ms)))
+}
+
+/// The inverse of [`deadline_of`]: a boot-time deadline as wall unix ms (now when it is past).
+fn wall_of(d: Mono) -> u64 {
+    let left_ms = d.0.saturating_sub(Mono::now().0) / 1_000_000;
+    (clock::wall_ns() / 1_000_000).saturating_add(left_ms)
 }
 
 /// The deadline a server word sets: `seconds_left` from when it was asked, on boot time.

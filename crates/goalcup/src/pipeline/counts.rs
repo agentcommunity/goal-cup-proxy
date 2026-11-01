@@ -313,6 +313,7 @@ impl Counter {
         }
     }
 
+    /// This boot's counts so far.
     pub fn counts(&self) -> Counts {
         self.counts.clone()
     }
@@ -323,6 +324,7 @@ impl Counter {
         self.spans
     }
 
+    /// The open-stream table, for [`CountsLog::append`].
     pub fn open_table(&self) -> &HashMap<u64, Open> {
         &self.open
     }
@@ -427,9 +429,13 @@ impl Boot {
     }
 }
 
-/// `counts.jsonl` (PRD-02 section 5 step 3), local only, one compact line per LINK (a [`Boot`]).
-/// A later boot takes a dead boot's COUNT from it without decoding part files, and
-/// [`entry_totals`] takes a boot's totals from it once its part files are pruned (ledger U1).
+/// `counts.jsonl` (PRD-02 section 5 step 3), local only, one compact line per LINK (a [`Boot`]):
+/// `{"seq":<link seq>,"count":<the COUNT event JSON at that LINK>,"spans":<n>,"open":<table>,
+/// "fail_closed":<rule numbers>}`, where `spans` is the boot's own `recorder_down` spans so far
+/// ([`Counter::off_spans`]), `open` the writer's open-stream table ([`Counter::open_table`]) and
+/// `fail_closed` its `fail_closed` rule numbers. A later boot takes a dead boot's COUNT from it
+/// without decoding part files, and [`entry_totals`] takes a boot's totals from it once the
+/// boot's part files are pruned after upload (ledger U1).
 pub struct CountsLog {
     path: PathBuf,
     /// The last line of each boot, by boot.
@@ -448,7 +454,9 @@ impl CountsLog {
         }
     }
 
-    /// Appends one line at the LINK with `seq`.
+    /// Appends one line at a LINK: this boot's COUNT event JSON at the LINK with that `seq`, the
+    /// boot's own `recorder_down` spans so far, its open-stream table, when known, and its
+    /// `fail_closed` rule numbers.
     pub fn append(
         &mut self,
         seq: u64,

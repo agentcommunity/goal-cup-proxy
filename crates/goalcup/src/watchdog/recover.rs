@@ -22,10 +22,13 @@ use std::time::Duration;
 /// How long the caller waits for the new watchdog's report: its `ready` wait and some.
 const REPORT: Duration = Duration::from_nanos(super::READY_NS + 2 * super::SEC);
 
-/// The recorder is back on `port`, under a new watchdog in its own session.
+/// A new watchdog runs on `port`, in its own session, and records.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Recovered {
     pub port: u16,
+    /// Its first recorder gave no `ready` in time (slow, or ended at boot): the watchdog goes on
+    /// all the same, and its restart loop takes the recorder on.
+    pub late: bool,
 }
 
 /// Why nothing was started. PRD-10 words each (its section 3.2, ask N9).
@@ -41,23 +44,30 @@ pub enum NotRecovered {
     HarnessGone,
     /// `rec/run-ca.key` or `run-ca.pem` is missing, unreadable or does not load.
     KeyMissing,
-    /// The port in `status.json` is unknown or another program holds it.
+    /// The port in `status.json` is unknown (missing or 0) or another program holds it.
     PortTaken,
-    /// The new recorder gave no `ready` in time. Its watchdog goes on: the recorder is not ended,
-    /// and the restart loop takes it on.
-    NoReady,
+    /// No new watchdog runs: it or its recorder could not be started, or it ended before it
+    /// reported.
+    NotStarted,
 }
+
+/// The report byte the new watchdog writes: its recorder gave `ready` in time.
+const READY: u8 = 1;
+/// The report byte: the watchdog runs, its recorder is late or ended at boot.
+const LATE: u8 = 2;
+/// The report byte: the recorder could not be started, and the watchdog ends.
+const FAILED: u8 = 0;
 
 /// [`recover_with`] with this binary as the recorder.
 pub fn recover(entry_dir: &Path, facts: StartFacts) -> Result<Recovered, NotRecovered> {
-    let exe = std::env::current_exe().map_err(|_| NotRecovered::NoReady)?;
+    let exe = std::env::current_exe().map_err(|_| NotRecovered::NotStarted)?;
     recover_with(entry_dir, facts, &exe)
 }
 
 /// Section 8.1: the checks and the bind here, then `recorder_exe` started as a new process in its
 /// own session (the hidden recorder entry, told by a `recover` first line to be the watchdog; no
 /// fork, so any thread of the caller is harmless). That watchdog starts the recorder (`prev`
-/// `{"cause":"watchdog_lost"}`), reports whether it gave `ready` in time with one byte, and then
+/// `{"cause":"watchdog_lost"}`), reports with one byte whether it gave `ready` in time, and then
 /// watches the harness in the shared loop.
 pub fn recover_with(
     entry_dir: &Path,
@@ -95,20 +105,24 @@ pub fn recover_with(
     (facts.ca, facts.entry_dir) = (pem, entry_dir.to_path_buf());
     facts.prev = Some(Prev::Cause(Cause::WatchdogLost));
 
-    let (mut report, theirs) = UnixStream::pair().map_err(|_| NotRecovered::NoReady)?;
+    let (mut report, theirs) = UnixStream::pair().map_err(|_| NotRecovered::NotStarted)?;
     // Never waited on: it outlives the caller, which leaves at once.
     let _watchdog = spawn::recorder(recorder_exe, false, &listener, &theirs)
-        .map_err(|_| NotRecovered::NoReady)?;
+        .map_err(|_| NotRecovered::NotStarted)?;
     drop((theirs, listener));
     if !send_line(&report, &ToRecorder::Recover(Box::new(facts))) {
-        return Err(NotRecovered::NoReady);
+        return Err(NotRecovered::NotStarted);
     }
     let _ = report.set_read_timeout(Some(REPORT));
     let mut byte = [0u8];
-    match report.read(&mut byte) {
-        Ok(1) if byte[0] == 1 => Ok(Recovered { port }),
-        _ => Err(NotRecovered::NoReady),
-    }
+    let late = match report.read(&mut byte) {
+        Ok(1) if byte[0] == READY => false,
+        Ok(1) if byte[0] == LATE => true,
+        // No byte in time: a watchdog whose pid file names a live process runs all the same.
+        Err(_) if cli::watchdog_alive(entry_dir) => true,
+        _ => return Err(NotRecovered::NotStarted),
+    };
+    Ok(Recovered { port, late })
 }
 
 /// The new watchdog, in the process [`recover_with`] started: `listener` on fd 3, `report` on fd
@@ -129,7 +143,7 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     let exe = std::env::current_exe().unwrap_or_default();
     let recorder_pid = Arc::new(Mutex::new(0));
     let Ok(mut boot) = Boot::start(&exe, &listener, &facts, &recorder_pid, false) else {
-        let _ = report.write_all(&[0]);
+        let _ = report.write_all(&[FAILED]);
         line(
             &dir,
             "watchdog_failed",
@@ -137,11 +151,17 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
         );
         return ExitCode::from(super::NOT_STARTED);
     };
-    let ready = boot.wait_ready(false).is_ok();
-    let _ = report.write_all(&[u8::from(ready)]);
+    let ready = boot.wait_ready(false);
+    let _ = report.write_all(&[if ready.is_ok() { READY } else { LATE }]);
     drop(report);
-    let late = [("ready", Fact::Word("late"))];
-    line(&dir, "watchdog_recovered", if ready { &[] } else { &late });
+    // A recorder that ended at boot is logged with its code, not as late.
+    let code = |c: i32| Fact::N(u64::from(c.unsigned_abs()));
+    let facts_line = match ready {
+        Ok(()) => vec![],
+        Err(None) => vec![("ready", Fact::Word("late"))],
+        Err(Some(c)) => vec![("ready", Fact::Word("ended")), ("code", code(c))],
+    };
+    line(&dir, "watchdog_recovered", &facts_line);
     let pid = facts.harness.as_ref().map(|h| h.pid);
     let _ = watch(boot, facts, None, (&exe, &listener, &recorder_pid), pid);
     ExitCode::SUCCESS
