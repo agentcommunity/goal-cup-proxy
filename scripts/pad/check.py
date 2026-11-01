@@ -448,6 +448,9 @@ def usage_checks(r, few):
     sub = r.check("subagents_present")
     r.flag(read(r) and sub not in ("pass", "named"), "C2", "FAIL" if sub else "INCONCLUSIVE",
            "subagents_present %s" % (sub or "not in the report"))
+    pin = r.meta.get("pinned_model")  # the cheapest-model rule: any other recorded model is a rig fault; none read says nothing
+    for m in sorted({x["model"] for x in models(r.usage)}):
+        r.flag(isinstance(pin, str) and pin.strip() and bare(m) != bare(pin), "C5", "FAIL", "recorded model %s, pinned %s" % (m, pin))
     if few:
         return r.mark("C5", "INCONCLUSIVE", "the record holds fewer than 2 model calls and pinned tunnels")
     tok = dict(items(dig(r.usage, "s7_tokens")))
@@ -456,9 +459,6 @@ def usage_checks(r, few):
     r.flag(any(not dig(t, "t_models") or not (dig(t, "t_wire") or dig(t, "t_native")) for t in threads), "C5", "FAIL",
            "a thread with no model or no calls")
     r.flag(dig(r.usage, "s7_unattributed") != 0, "C5", "FAIL", "coverage.unattributed %s" % dig(r.usage, "s7_unattributed"))
-    pin = r.meta.get("pinned_model")  # the cheapest-model rule: any other recorded model is a rig fault; none read says nothing
-    for m in sorted({x["model"] for x in models(r.usage)}):
-        r.flag(isinstance(pin, str) and pin.strip() and bare(m) != bare(pin), "C5", "FAIL", "recorded model %s, pinned %s" % (m, pin))
 
 def scan(r, name, where):
     """One C3 scan: hits fail; no scan (None) is INCONCLUSIVE, never a PASS."""

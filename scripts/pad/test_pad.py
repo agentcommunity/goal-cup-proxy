@@ -933,7 +933,7 @@ class PinnedModel(unittest.TestCase):
         if not read:
             del use["models"]
         return evaluate({"meta.json": {"connector": "claude-code-cli", "case": case, "model_host": "api.example", "server": "off",
-                                       "keep": True, "entry": "e1", "pinned_model": pinned, "started": "2026-10-30T10:00:00+00:00"},
+                                       "keep": True, "entry": "e1", "commits_since_start": 1, "pinned_model": pinned, "started": "2026-10-30T10:00:00+00:00"},
                          "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "counts": {"model_requests": 5}, "checks": []}]},
                          "verify/usage/e1.json": use})
 
@@ -941,9 +941,9 @@ class PinnedModel(unittest.TestCase):
         bad = self.row("claude-haiku-5-5", ["claude-opus-5-5"])
         self.assertEqual(bad["checks"]["C5"], "FAIL")
         self.assertEqual(bad["pinned_model"], "claude-haiku-5-5")
-        self.assertNotEqual(self.row("claude-haiku-5-5", ["claude-haiku-5-5"])["checks"]["C5"], "FAIL")
-        self.assertNotEqual(self.row("anthropic/claude-haiku-5.5", ["claude-haiku-5.5"], "gateway")["checks"]["C5"], "FAIL")
-        self.assertNotEqual(self.row(" claude-haiku-5-5 ", ["anthropic/claude-haiku-5-5"])["checks"]["C5"], "FAIL")
+        self.assertEqual(self.row("claude-haiku-5-5", ["claude-haiku-5-5"])["checks"]["C5"], "PASS")
+        self.assertEqual(self.row("anthropic/claude-haiku-5.5", ["claude-haiku-5.5"], "gateway")["checks"]["C5"], "PASS")
+        self.assertEqual(self.row(" claude-haiku-5-5 ", ["anthropic/claude-haiku-5-5"])["checks"]["C5"], "PASS")
         self.assertEqual(self.row("claude-haiku-5-5", ["claude-haiku-5-5", "claude-opus-5-5"])["checks"]["C5"], "FAIL")
 
     def test_no_models_read_or_no_pin_says_nothing(self):
