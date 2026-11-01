@@ -924,8 +924,8 @@ def main(argv):
         pad = read_toml(os.path.join(HERE, "pad.toml"))
         s = load_settings(read_toml(argv[1]), pad)
         harness = read_toml(os.path.join(HERE, "harnesses", s["harness"] + ".toml"))  # a missing one is an OSError
-        if harness.get("key_kind") == "none":  # Amp, Droid: no key to give it, so nothing to run (no box, no case)
-            print("%s: not verified: no key" % s["harness"])
+        if harness.get("key_kind") == "none" or harness.get("not_verified"):  # Amp, Droid: no key to give it; a row with a stated reason: nothing to run (no box, no case)
+            print("%s: not verified: %s" % (s["harness"], harness.get("not_verified") or "no key"))
             return 3  # nothing proven: the INCONCLUSIVE exit, never "every row PASS"
         if not (harness.get("version") and harness.get("version_cmd")):
             raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])

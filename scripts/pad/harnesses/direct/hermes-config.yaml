@@ -2,7 +2,7 @@
 model:
   provider: deepseek
   default: deepseek-flash
-# The "Help improve Hermes?" answer, preset to "No thanks" (shared_metrics_consent.py at v0.22.5; docs only, not run).
+# The "Help improve Hermes?" answer, preset to "No thanks" (shared_metrics_consent.py at v0.22.5; measured in sweep 2 to remove the screen).
 telemetry:
   shared_metrics:
     enabled: false
