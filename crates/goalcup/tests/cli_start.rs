@@ -268,6 +268,20 @@ fn a_harness_exit_of_78_is_not_a_masking_refusal() {
     assert!(shown.contains(text::PART_RECORDED), "{shown}");
 }
 
+/// Every `goalcup.log` under `dir`, joined.
+fn logs(dir: &std::path::Path) -> String {
+    let mut all = String::new();
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            all += &logs(&p);
+        } else if p.file_name().is_some_and(|n| n == "goalcup.log") {
+            all += &std::fs::read_to_string(&p).unwrap_or_default();
+        }
+    }
+    all
+}
+
 /// An unreadable harness version is said on the start screen and the run still starts; a read
 /// version says nothing of the kind.
 #[test]
@@ -287,9 +301,12 @@ fn an_unread_harness_version_is_said_and_the_run_starts() {
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
         Fix::with_program(script.to_str().unwrap(), "{home}/skills", "")
     };
-    let line = text::version_unread("Tester");
+    let line = text::version_unread("Tester", true);
     let unread = fake("tester-none", "#!/bin/sh\nexit 1\n");
     assert!(screen(&unread).contains(&line));
+    // On record in goalcup.log too, for when the harness clears the terminal.
+    assert!(logs(unread.t.home()).contains("version_unread"));
     let read = fake("tester-bin", "#!/bin/sh\necho tester 1.2.3\n");
     assert!(!screen(&read).contains(&line));
+    assert!(!logs(read.t.home()).contains("version_unread"));
 }

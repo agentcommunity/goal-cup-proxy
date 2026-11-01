@@ -334,4 +334,7 @@ fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
     w.part(1, false, Some(World::sealed(json!({"model_requests": 2}))));
     w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
     assert_eq!(seen.join().unwrap()["harness_version"], json!("unknown"));
+    let log = w.run_dir().join(e(2)).join("goalcup.log");
+    let log = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(log.contains("version_unread"), "{log}");
 }

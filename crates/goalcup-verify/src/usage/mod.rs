@@ -271,6 +271,9 @@ pub struct CallTable {
     pub connector: Option<String>,
     pub harness_version: Option<String>,
     pub sealed: bool,
+    /// Listed hosts the harness reached through a tunnel (host, reason, connections): their calls
+    /// are not on the wire.
+    pub not_on_wire: Vec<(String, String, u64)>,
 }
 
 impl Default for CallTable {
@@ -293,6 +296,7 @@ impl Default for CallTable {
             connector: None,
             harness_version: None,
             sealed: false,
+            not_on_wire: Vec::new(),
         }
     }
 }
@@ -435,6 +439,7 @@ impl Calls {
             connector: c.connector.clone(),
             harness_version: c.harness_version.clone(),
             sealed: c.sealed,
+            not_on_wire: self.wire.not_on_wire(),
             ..CallTable::default()
         };
         let (mut rows, replies) = self.wire.finish(&self.ctx);

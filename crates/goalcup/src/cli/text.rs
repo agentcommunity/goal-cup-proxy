@@ -423,7 +423,8 @@ pub fn size_words(bytes: u64) -> String {
 pub fn span_words(ms: u64) -> String {
     let s = ms / 1000;
     match s {
-        0..60 => format!("{s} s"),
+        0 => "under 1 s".to_owned(),
+        1..60 => format!("{s} s"),
         60..3600 => format!("{} min {} s", s / 60, s % 60),
         _ => format!("{} h {} min", s / 3600, s % 3600 / 60),
     }
@@ -728,10 +729,15 @@ pub fn continue_now(run: &str) -> String {
     format!("To go on, run: goalcup continue {run} (you can do it in another terminal now).")
 }
 
-pub fn no_request_written(name: &str) -> String {
-    format!(
-        "No model request was written. {name} may not use the recording proxy, or it made no call."
-    )
+pub fn no_request_written(name: &str, pinned: Option<&str>) -> String {
+    match pinned {
+        Some(host) => format!(
+            "No model request was written. The host list pins {host}, so its traffic passed through unread."
+        ),
+        None => format!(
+            "No model request was written. {name} may not use the recording proxy, or it made no call."
+        ),
+    }
 }
 
 pub fn requests_written(n: u64, hosts: &[(&str, u64)]) -> String {
@@ -1117,11 +1123,15 @@ pub fn run_kind(mode: RunMode) -> &'static str {
     }
 }
 
-/// The harness version could not be read: said on every tier, because the upload carries "unknown".
-pub fn version_unread(name: &str) -> String {
-    format!(
-        "{name}'s version could not be read, so the run starts without it. The upload says unknown."
-    )
+/// The harness version could not be read. The upload sentence is said only when there is an upload,
+/// because the upload carries "unknown".
+pub fn version_unread(name: &str, upload: bool) -> String {
+    let said = format!("{name}'s version could not be read, so the run starts without it.");
+    if upload {
+        format!("{said} The upload says unknown.")
+    } else {
+        said
+    }
 }
 
 pub fn upload_to(host: Option<&str>) -> String {
