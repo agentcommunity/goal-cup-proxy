@@ -253,7 +253,13 @@ fn listed_tunnels_with_a_named_reason_are_named_and_without_a_gap_fail() {
         ("hello_too_big", MemoryGuard, guard),
     ] {
         let mut e = Entry::new("listed-tunnel");
-        tunnel_bytes(&mut e, "t.example.test", reason, Some((cause, tail)), (512, 2048));
+        tunnel_bytes(
+            &mut e,
+            "t.example.test",
+            reason,
+            Some((cause, tail)),
+            (512, 2048),
+        );
         let (code, v) = sealed(e);
         assert_eq!(result(&v, "listed_hosts_decrypted"), "named", "{reason}");
         assert_eq!(code, 1, "{reason}");
