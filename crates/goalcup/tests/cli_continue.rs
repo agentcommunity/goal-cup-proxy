@@ -325,7 +325,10 @@ fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
     let body = std::fs::read_to_string(&w.connector).unwrap();
     std::fs::write(
         &w.connector,
-        body.replace("program = \"true\"", &format!("program = \"{}\"", script.display())),
+        body.replace(
+            "program = \"true\"",
+            &format!("program = \"{}\"", script.display()),
+        ),
     )
     .unwrap();
     w.part(1, false, Some(World::sealed(json!({"model_requests": 2}))));
