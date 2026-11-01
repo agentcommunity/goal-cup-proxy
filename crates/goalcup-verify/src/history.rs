@@ -617,7 +617,9 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
             e.1 += 1;
             checked += 1;
             let miss: Vec<bool> = (keys.iter())
-                .filter(|k| !h.answers.contains(&k.0) && !k.2.is_some_and(|e| h.answers.contains(&e)))
+                .filter(|k| {
+                    !h.answers.contains(&k.0) && !k.2.is_some_and(|e| h.answers.contains(&e))
+                })
                 .map(|k| k.1)
                 .collect();
             if miss.is_empty() {

@@ -753,9 +753,7 @@ fn a_masked_websocket_resend_is_matched_by_its_ends() {
                     "content": [{"type": "output_text", "text": t}]})
             };
             let meta = json!({"thread_id": T});
-            let create = |input: Vec<Value>| {
-                json!({"type": "response.create", "input": input, "client_metadata": meta})
-            };
+            let create = |input: Vec<Value>| json!({"type": "response.create", "input": input, "client_metadata": meta});
             let streamed = format!("{HEAD}[redacted]{TAIL}");
             let first = create(vec![user(Responses)]).to_string();
             e.data(up, 0, 0x10 | FLAG_FIN, first.as_bytes());
@@ -777,7 +775,12 @@ fn a_masked_websocket_resend_is_matched_by_its_ends() {
             let end = at + second.len() as u64;
             let close = json!({"close_code": 1000});
             e.end(up, EndReason::Complete, end, close.clone());
-            e.end(down, EndReason::Complete, done.to_string().len() as u64, close);
+            e.end(
+                down,
+                EndReason::Complete,
+                done.to_string().len() as u64,
+                close,
+            );
             e.end(c, EndReason::Complete, 0, json!({"up": 400, "down": 300}));
         }),
         "pass",
