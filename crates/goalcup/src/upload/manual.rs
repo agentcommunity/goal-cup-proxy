@@ -1,8 +1,9 @@
 //! `goalcup upload` (PRD-06 section 9): closes a dead entry with the `recovered` seal (PRD-02 9.4)
-//! and sends what is left of one sealed entry by hand, in the wrap-up's order (final heartbeat, chunks, the final again until sealed), then prunes. It gives
-//! up only on 401, 404, 410 or `stuck`; a network or server failure waits on section 5's backoff,
-//! with no cap of ours. The words are PRD-10's; [`run`] returns the facts. The same step, one
-//! entry round, serves the upload thread's [`Queue`] of older sealed entries (section 1).
+//! and sends what is left of one sealed entry by hand, in the wrap-up's order (final heartbeat,
+//! chunks, the final again until sealed), then prunes. It gives up only on 401, 404, 410 or
+//! `stuck`; a network or server failure waits on section 5's backoff, with no cap of ours. The
+//! words are PRD-10's; [`run`] returns the facts. The same step, one entry round, serves the upload
+//! thread's [`Queue`] of older sealed entries (section 1).
 
 use super::beat::{Beat, FinalFacts, health};
 use super::chunk::Bound;
@@ -52,12 +53,15 @@ pub enum Outcome {
 /// Sends the entry in `entry_dir` of the run in `run_dir`. Says `StillRecording` at once while a
 /// recorder holds `rec/lock`, checked before `upload.lock` and on every 1 s tick spent waiting for
 /// another uploader to let `upload.lock` go. An entry is sealed when `status.json` says `sealed`
-/// with its seal, or `upload.json` says the server sealed it. Only an entry with no seal anywhere
-/// and no live watchdog is handed to `pipeline::close_dead_entry` (section 9 step 2), under
-/// `upload.lock`, and then sent with the `recovered` seal; a failed close is `NotClosed`. A live
-/// watchdog leaves `rec/lock` unheld between boots, so it alone says `StillRecording` there. A sealed entry with nothing left
-/// on disk to check against (every part pruned and `upload.json` lost) is decided by the server:
-/// `AlreadyThere` when it holds the entry sealed, `Stuck` otherwise.
+/// with its seal, or `upload.json` says the server sealed it. Only an entry with no seal anywhere,
+/// no live watchdog and no live harness is handed to `pipeline::close_dead_entry` (section 9 step
+/// 2), under `upload.lock`, and then sent with the `recovered` seal; a failed close is
+/// `NotClosed`. A live watchdog leaves `rec/lock` unheld between boots, so it alone says
+/// `StillRecording` there. A live harness whose goalcup processes are gone says `StillRecording`
+/// too: that entry is `goalcup recover`'s (PRD-02 9.1, ledger R3b), and a close here would remove
+/// the run key recover needs. A sealed entry with nothing left on disk to check against (every
+/// part pruned and `upload.json` lost) is decided by the server: `AlreadyThere` when it holds the
+/// entry sealed, `Stuck` otherwise.
 pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> Outcome {
     let held = loop {
         if recording(entry_dir) {
@@ -78,7 +82,9 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
         // No seal anywhere and no watchdog to boot another recorder: the entry is dead, closed
         // here while `upload.lock` is held. A live watchdog may be between boots (its restart
         // spacing holds a boot back up to 30 s); closing then would seal the live entry for good.
-        if cli::watchdog_alive(entry_dir) {
+        // A live harness with both goalcup processes gone is `goalcup recover`'s, which needs the
+        // entry unsealed and its run key; this also covers a watchdog with no `watchdog.pid` yet.
+        if cli::watchdog_alive(entry_dir) || harness_alive(entry_dir) {
             return Outcome::StillRecording;
         }
         match pipeline::close_dead_entry(entry_dir) {
@@ -137,6 +143,13 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
 fn sealed(entry_dir: &Path) -> Option<Status> {
     let status = cli::read_json::<Status>(&cli::status_json(entry_dir));
     status.filter(|s| s.mode == Mode::Sealed && s.seal.is_some())
+}
+
+/// Whether the harness `status.json` names still runs (same pid and OS start time).
+fn harness_alive(entry_dir: &Path) -> bool {
+    let status = cli::read_json::<Status>(&cli::status_json(entry_dir));
+    let harness = status.and_then(|s| s.harness);
+    harness.is_some_and(|h| cli::alive(h.pid, h.start_id))
 }
 
 /// The seal's facts: a seal not known in `status.json` is `recovered`, a dead entry's reason,

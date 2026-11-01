@@ -3,9 +3,10 @@
 //! refuses while a recorder holds `rec/lock` and never holds `rec/lock` after it returns; the final
 //! heartbeat carries the counts of `counts.jsonl`; a dead entry (no seal anywhere, no recorder) is
 //! closed with the `recovered` seal and sent whole, and is left alone while a recorder holds
-//! `rec/lock` or its watchdog lives (U8); a sealed entry with bytes left ends sealed with the server holding
-//! `cat rec-*.gcr.zst` and the parts pruned; an entry the position already calls sealed is not
-//! sent again, and is pruned even with `upload.json` lost.
+//! `rec/lock`, its watchdog lives, or its harness lives (U8; that entry is `goalcup recover`'s); a
+//! sealed entry with bytes left ends sealed with the server holding `cat rec-*.gcr.zst` and the
+//! parts pruned; an entry the position already calls sealed is not sent again, and is pruned even
+//! with `upload.json` lost.
 
 mod common;
 
@@ -14,12 +15,12 @@ use common::recorder::{entry_dir, real, wait_settled};
 use common::records::{BOOT_ID, ENTRY, at};
 use common::worker::{CREDENTIAL, FakeWorker, Inject, RUN_ID, Route};
 use goalcup::cli;
-use goalcup::pipeline::status::{Mode, SealStatus};
+use goalcup::pipeline::status::{HarnessStatus, Mode, SealStatus};
 use goalcup::pipeline::{EndReason, OpenFlags, Status, StreamKind};
-use goalcup::upload::manual::{Outcome, run};
+use goalcup::upload::manual::Outcome;
 use goalcup::upload::state::{self, Final};
 use goalcup::watchdog::SealReason;
-use goalcup_format::read::part_files;
+use goalcup_format::read::{Item, open_dir, part_files};
 use goalcup_format::{PartOptions, PartWriter, Record, hex};
 use serde_json::json;
 use std::fs::{self, File};
@@ -121,12 +122,15 @@ fn serve(run: &Path, fake: &FakeWorker, deadline: &str) {
 const DEADLINE: &str = "2026-11-07T10:00:00Z";
 
 fn upload(run: &Path, entry: &Path, keep: bool) -> Outcome {
-    let (run, entry) = (run.to_path_buf(), entry.to_path_buf());
-    common::within(common::HANG, move || run_on(&entry, &run, keep))
+    upload_as(run, entry, ENTRY, keep)
 }
 
-fn run_on(entry: &Path, run_dir: &Path, keep: bool) -> Outcome {
-    run(entry, run_dir, (RUN_ID, ENTRY), keep)
+/// As [`upload`], for the entry whose id is `id`.
+fn upload_as(run: &Path, entry: &Path, id: &str, keep: bool) -> Outcome {
+    let (run_dir, entry, id) = (run.to_path_buf(), entry.to_path_buf(), id.to_owned());
+    common::within(common::HANG, move || {
+        goalcup::upload::manual::run(&entry, &run_dir, (RUN_ID, &id), keep)
+    })
 }
 
 #[test]
@@ -316,10 +320,11 @@ fn a_killed_recorders_entry_is_closed_and_sent_whole() {
     wait_settled(&rec, |c| c.http_post >= CALLS);
     let fake = FakeWorker::start();
     let dir = tempfile::tempdir().unwrap();
-    let entry = dir.path().join(ENTRY);
+    let id = first_entry_id(&live.path().join("rec"));
+    let entry = dir.path().join(&id);
     copy(live.path(), &entry);
     serve(dir.path(), &fake, DEADLINE);
-    assert_eq!(upload(dir.path(), &entry, true), Outcome::Done);
+    assert_eq!(upload_as(dir.path(), &entry, &id, true), Outcome::Done);
     let status: Status =
         serde_json::from_slice(&fs::read(cli::status_json(&entry)).unwrap()).unwrap();
     assert_eq!(status.seal.unwrap().reason, SealReason::Recovered);
@@ -328,10 +333,62 @@ fn a_killed_recorders_entry_is_closed_and_sent_whole() {
     assert_eq!(beats[0]["counts"]["http_post"], CALLS);
     assert_eq!(beats[0]["model_requests"], CALLS);
     assert_eq!(
-        fake.stream(ENTRY),
+        fake.stream(&id),
         parts(&entry).concat(),
         "cat rec-*.gcr.zst"
     );
+}
+
+/// A killed recorder and watchdog whose harness still runs, with no `watchdog.pid`: the entry is
+/// `goalcup recover`'s (ledger R3b), so it is neither closed nor sent and stays unsealed.
+#[test]
+fn a_dead_entry_whose_harness_lives_is_left_for_recover() {
+    let live = entry_dir();
+    let rec = real(live.path());
+    let flags = OpenFlags::POST | OpenFlags::DECRYPTED;
+    let mut h = rec.open(StreamKind::HttpReq, 0, 0, 0, flags, json!({}));
+    h.data(rec.now(), Bytes::from_static(b"{\"model\":\"m\"}"));
+    h.end(rec.now(), EndReason::Complete, None);
+    wait_settled(&rec, |c| c.http_post >= 1);
+    let fake = FakeWorker::start();
+    let dir = tempfile::tempdir().unwrap();
+    let id = first_entry_id(&live.path().join("rec"));
+    let entry = dir.path().join(&id);
+    copy(live.path(), &entry);
+    serve(dir.path(), &fake, DEADLINE);
+    let _ = fs::remove_file(entry.join("rec/watchdog.pid"));
+    let path = cli::status_json(&entry);
+    let mut status = cli::read_json::<Status>(&path).unwrap_or_default();
+    let pid = std::process::id();
+    status.harness = Some(HarnessStatus {
+        pid,
+        started: "2026-11-01T00:00:00Z".into(),
+        start_id: cli::proc_start_id(pid).unwrap(),
+        exit: None,
+    });
+    status.mode = Mode::default();
+    status.seal = None;
+    fs::write(&path, serde_json::to_vec(&status).unwrap()).unwrap();
+    let (before, bytes) = (parts(&entry), fs::read(&path).unwrap());
+    assert_eq!(
+        upload_as(dir.path(), &entry, &id, false),
+        Outcome::StillRecording
+    );
+    assert!(fake.chunks().is_empty() && fake.heartbeats().is_empty());
+    assert_eq!(parts(&entry), before, "no part file changed");
+    assert_eq!(fs::read(&path).unwrap(), bytes, "not sealed");
+}
+
+/// The entry id a recorder wrote into the first PART of `rec`.
+fn first_entry_id(rec: &Path) -> String {
+    let first = open_dir(rec).unwrap().next();
+    match first {
+        Some(Ok(Item {
+            rec: Record::Part { entry, .. },
+            ..
+        })) => entry,
+        other => panic!("the first record is a PART: {other:?}"),
+    }
 }
 
 /// Copies the files of `from` into `to`, skipping temp files a live writer may rename away.
