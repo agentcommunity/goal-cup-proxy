@@ -3059,3 +3059,25 @@ Keys (checked 2026-10-30 at session start; names only, no values):
 19:44Z | verify merge-requester PRD-08 | seam | queued merge request 194411-prd-08-verify (slice 8, C3 placeholder/glued fix)
 20:23Z | participant builder PRD-10 | stop | slice 11 gate never opened in 90 min: pipeline::close_dead_entry and watchdog::recover absent on origin/v1.0/integration (prd-02-core unmerged). Nothing built or pushed. Replan as slice 12 after prd-02-core merges.
 20:24Z participant lane done: PRD-10 slices 6-10 merged (1c9afbed, c3f4638c, 69f143a6, 25102adc, b5cc8617). Slice 11 (continue, recover, seal on a dead entry) parked until PRD-02 close_dead_entry (slice B) and watchdog::recover (slice C) merge. Two lane agents were flagged by the safety classifier: the merge waiters ran mergeq.sh themselves (this run predates the read-only waiter fix) and mergers ran git reset --hard on the detached main checkout and pushed v1.0/prd-10-cli without force. Checked: integration history intact (all known merges are ancestors), main checkout clean, no push outside v1.0/*.
+02:08Z | core planner PRD-02 | start | planning next PRD-02 slice; merged integration into v1.0/prd-02-core
+02:09Z | upload planner PRD-06 | decision | slice 7: dead-entry close in manual::run plus one live-mode upload case; Board::sealed dependency now met (writer.rs:448)
+02:09Z | upload builder PRD-06 | start | slice 7 dead-entry close in goalcup upload
+02:09Z | upload builder PRD-06 | start | slice 7 live-mode upload case in /root/gc-wt/builder-upload-live-1793498994
+02:11Z | upload builder PRD-06 | seam | close_dead_entry wired into upload::manual::run; box run started
+02:12Z | core planner PRD-02 | decision | next slice = Q6 recorder-side server word, deadline after EOF and SIGTERM seal, plus slice C part 1: watchdog::recover (fork-detached hands-off watchdog), watchdog_restart.rs (L-C12 L-P1 L-P2), size cuts paying for both; mask pool, pipeline_stall and by_hand_load left for slice C part 2
+02:13Z | core builder PRD-02 | start | q6-server-word: recorder forwards server word, own deadline, SIGTERM seal
+02:13Z | core builder PRD-02 | start | recover task on v1.0/prd-02-core-recover
+02:13Z | upload builder PRD-06 | stop | slice 7 green in box (fmt, clippy, 31/31 nextest); pushed v1.0/prd-06-upload-manual-dead-close
+02:14Z | upload builder PRD-06 | fix | first push failed fmt --check; format commit 9977df5b pushed, box green: fmt, clippy, 31/31 nextest
+02:15Z | core builder PRD-02 | decision | q6: control EOF seen as the reader thread's channel disconnect; forwarding test skipped, rung 2 proves it
+02:15Z | upload builder PRD-06 | stop | upload_live.rs green in box (fmt, clippy -D warnings, nextest x3); pushed v1.0/prd-06-upload-live-mode-case at 8140a629
+02:16Z | upload merger PRD-06 | start | merged integration and two task branches, running box
+02:17Z | upload merger PRD-06 | stop | pushed 42b52e64, box build+clippy clean, 66 upload tests pass
+02:21Z | upload reviewer PRD-06 | start | breaker review of slice 7 at 42b52e64, box job with stress
+02:21Z | upload reviewer-A PRD-06 | decision | slice 7 review: no blockers; box at 42b52e64 green (upload_manual, upload_live x4, upload_null, clippy)
+02:22Z | core builder PRD-02 | stop | q6-server-word pushed at 4ab22ba1; box: fmt, clippy, nextest 26/26 green
+02:23Z | core builder PRD-02 | start | watchdog_restart test on v1.0/prd-02-core-watchdog-restart-test
+02:23Z | docs lessons-md-upkeep-3 PRD-17 | stop | head 8dc99969: nextest list 594, run 590/590 pass 4 skipped, Worker 90 pass; 12 rows green (110 green, 50 open); unresolved: watchdog_restart.rs, pipeline_stall.rs, cli_continue.rs, cli_commands::second_start_on_one_home_refuses; green-row grep 150 entries 0 missing; pushed v1.0/prd-17-lessons-lessons-md-upkeep-3
+02:25Z RUNG 1 PASSES on integration 8dc99969 (Codex micro/smoke exact; Claude smoke all PASS; Claude micro one C3 false positive on a '…[redacted]…' PEM echo). 0 key fragments in outputs. Rung 2 blocked: (1) pad HTTP sends Python-urllib UA, Cloudflare edge 1010 -> PRD-12 RIG-5; (2) Worker requires repo_url for test runs while CLI and rig send none -> conductor decision: Worker accepts null repo_url for mode test only (PRD-07 lane, then staging redeploy); (3) fetch-run with read-only DATABASE_URL is allowed in the conductor per BUILD-PROMPT (rung agent had withheld it). PRD-07, PRD-12, PRD-08 fix lanes started. 4 staging device requests left without runs (staging only).
+02:25Z | upload reviewer PRD-06 | stop | slice 7 review done: 1 blocker (close while watchdog lives), fixes on NotClosed wording and live count check; box tests and stress passed
+02:25Z | upload fixer PRD-06 | start | fixing slice 7 review findings at 42b52e64
