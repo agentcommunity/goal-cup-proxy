@@ -27,10 +27,10 @@ use watchdog_share::{
 
 #[test]
 fn watchdog_restart_keeps_port_backlog_and_ca() {
-    let mut script = Script::ok(b"restart-p2-answer").with_tls(&["api.openai.com"], &[HTTP11]);
+    let mut answers = Script::ok(b"restart-p2-answer").with_tls(&["api.openai.com"], &[HTTP11]);
     // Every answer waits, so the kill below meets a request in flight.
-    script.hold_answer = Some(Duration::from_secs(2));
-    let up = Upstream::start(script);
+    answers.hold_answer = Some(Duration::from_secs(2));
+    let up = Upstream::start(answers);
     // Boot 2 notes its start, waits 3 s, notes its exec: the restart window is known.
     let Setup {
         _tmp,
