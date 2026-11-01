@@ -263,13 +263,19 @@ fn spy(worker: &FakeWorker) -> (Server, std::sync::Arc<Mutex<Vec<Value>>>) {
                         return;
                     };
                     if head.starts_with("POST /v1/runs ") {
-                        kept.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
+                        kept.lock()
+                            .unwrap()
+                            .push(serde_json::from_slice(&body).unwrap());
                     }
-                    u.get_mut().write_all(&[head.as_bytes(), &body].concat()).unwrap();
+                    u.get_mut()
+                        .write_all(&[head.as_bytes(), &body].concat())
+                        .unwrap();
                     let Some((head, body)) = message(&mut u) else {
                         return;
                     };
-                    c.get_mut().write_all(&[head.as_bytes(), &body].concat()).unwrap();
+                    c.get_mut()
+                        .write_all(&[head.as_bytes(), &body].concat())
+                        .unwrap();
                 }
             });
         }
