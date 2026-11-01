@@ -232,6 +232,12 @@ class Run:
         got = doc.get("masks") if isinstance(doc, dict) else None
         return {k: count(n) for k, n in items(got)} if isinstance(got, dict) else None
 
+LOST_TERMINAL = "goalcup is not running. To go on, run: goalcup continue"  # the status words when the recorder is gone (cli/text.rs)
+
+def lost_terminal(r):
+    """True when a status line says goalcup is gone and the run goes on only by `goalcup continue`: the harness lost its terminal."""
+    return any(f.get("kind") == "status" and LOST_TERMINAL in str(f.get("said")) for f in r.faults)
+
 def cause(r):
     """Section 8: the INCONCLUSIVE causes that are never goalcup's failure, from the record first."""
     errs = [(k, n) for e in r.entries for k, n in items(dig(e, "s6_errors")) if isinstance(n, int)]
@@ -251,8 +257,8 @@ def judge(r):
     pin = r.meta.get("model_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
     tunnels = (r.hosts("s6_tunnel_hosts") or {}).get(pin, 0)  # section 2: a dodger's calls ride `pinned` tunnels
     work = (seen or tunnels or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
-    stop = cause(r) or (None if work else "the harness did no work (commits since start %s, model requests %s)"
-                        % (r.meta.get("commits_since_start"), seen))
+    idle = "the harness did no work (commits since start %s, model requests %s)" % (r.meta.get("commits_since_start"), seen)
+    stop = cause(r) or (None if work else ("the harness lost its terminal; " if lost_terminal(r) else "") + idle)
     if stop:
         for c in ("C1", "C2", "C4", "C5", "C6", "faults"):
             r.mark(c, "INCONCLUSIVE", stop)
@@ -581,7 +587,7 @@ def recover(r, gaps):
     for kind in ("kill-watchdog", "kill-recorder"):  # PRD-10 acceptance 11 needs both kills
         if not fired(r, kind):
             return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % kind)
-    if any("goalcup continue" in str(f.get("said")) for f in r.faults):
+    if lost_terminal(r):
         return r.mark("faults", "INCONCLUSIVE", "harness lost its terminal")
     for what, name in (("harness pid", "s4_harness_pid"), ("port", "s4_port")):  # record-only: judged whatever came after
         r.flag(len({dig(s, name) for s in r.samples} - {None}) > 1, "faults", "FAIL", "the %s changed" % what)
