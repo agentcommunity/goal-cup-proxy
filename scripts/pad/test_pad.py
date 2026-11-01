@@ -522,6 +522,31 @@ class StatedLoss(unittest.TestCase):
         self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
 
 
+class UpstreamRedaction(unittest.TestCase):
+    """C3 for a harness file with redacts_tool_output (point 4): open until the owner answers, never PASS."""
+
+    DELTAS = StatedLoss.DELTAS
+
+    def c3(self, up, masks, known=(), shapes=()):
+        return evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": up},
+                         "verify/secrets.json": {"masks": masks, "known_hits": list(known), "shape_hits": list(shapes), "big_masks": []},
+                         "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/exits.json": {"secrets": 2 if known or shapes else 1, "secrets-out": 0, "secrets-plain": 0}}
+                        )["checks"]["C3"]
+
+    def test_no_mask_and_no_hit_is_never_a_pass(self):
+        self.assertEqual(self.c3(True, {}), "INCONCLUSIVE")  # no sign of any exercise
+        self.assertEqual(self.c3(True, {"masked_key": 3}), "INCONCLUSIVE")  # exercised, planted kinds open: stated loss, not PASS
+        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0)), "INCONCLUSIVE")
+        self.assertEqual(self.c3(False, {"masked_key": 3}), "INCONCLUSIVE")  # control: the flag is what counts masked_key as exercise
+
+    def test_a_known_hit_still_fails(self):
+        self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN]), "FAIL")
+
+    def test_deltas_only_shape_is_open_not_a_fail(self):
+        self.assertEqual(self.c3(True, SecretCheck.PLANTED, shapes=[self.DELTAS]), "INCONCLUSIVE")
+
+
 class SecretCheck(unittest.TestCase):
     """C3 (point 4, section 5): a known-value hit fails, and so does a planted shape with no MASK. Only C3 is asserted."""
 
