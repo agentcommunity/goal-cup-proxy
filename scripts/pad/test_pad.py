@@ -515,6 +515,70 @@ class StartRefusal(unittest.TestCase):
             self.assertEqual(r.st["end_screen_requests"], want, screen)
 
 
+class PasteAndMask(unittest.TestCase):
+    """RIG-8: paste waits for status.json to say recording. RIG-9: fetch credentials are never shown or written."""
+
+    ENV = {"DATABASE_URL": "postgres://padtester:Zq7fakePw@db.fake-host-123.example.com:6543/postgres",
+           "CLOUDFLARE_ACCOUNT_ID": "acct0fakeid42", "CLOUDFLARE_API_TOKEN": "tok-madeup-not-real-77"}
+    VALUES = ("padtester", "Zq7fakePw", "db.fake-host-123.example.com", "acct0fakeid42", "tok-madeup-not-real-77")
+
+    def failing(self):
+        err = "psql: could not translate host name; " + " ".join(self.VALUES) + " refused"
+        return subprocess.CompletedProcess(["x"], 1, "", "noise\n" + err)
+
+    def test_said_hides_every_fetch_credential(self):
+        with mock.patch.dict(os.environ, self.ENV):
+            got = pad.said("server copy not fetched", self.failing())
+        for v in self.VALUES:
+            self.assertNotIn(v, got)
+        self.assertIn("refused", got)
+
+    def test_failed_fetch_writes_no_credential(self):
+        with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, self.ENV), \
+                mock.patch.object(pad, "call", lambda argv, timeout=None, env=None: self.failing()):
+            s = pad.load_settings(dict(BASE, mode="micro", server="staging"), PADCFG)
+            r = pad.Run(s, "direct", PADCFG, Walk.HARNESS, out)
+            self.addCleanup(shutil.rmtree, r.tmp, True)
+            r.meta["entry"] = "e" + "0" * 16
+            result, text = r.step_fetch("fetch", 10)
+            r.log("fetch-run host " + self.VALUES[2])
+            logged = open(os.path.join(r.dir, "calls.log")).read()
+        self.assertEqual(result, "FAIL")
+        for v in self.VALUES:
+            self.assertNotIn(v, text + logged)
+
+    def paste_run(self, mode, dead):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"harness": {}}), ("state.json", {"home": run})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        r = padrun.Run(run, "verify")
+        r.end = time.time() + 5
+        typed = []
+        status = {}
+        for key in check.SEAM["s4_mode"][::-1]:
+            status = {key: mode if status == {} else status}
+        patches = [mock.patch.object(padrun, "tool", lambda n: "/bin/true"), mock.patch.object(padrun, "wait", lambda fn, *a: fn()),
+                   mock.patch.object(r, "status", lambda: status), mock.patch.object(r, "pane_exit", lambda: (dead, "1")),
+                   mock.patch.object(r, "capture", lambda *a: "a cleared screen"), mock.patch.object(r, "refusal", lambda: None),
+                   mock.patch.object(r, "pane", lambda *a, **k: ""), mock.patch.object(r, "daemon_check", lambda **k: None),
+                   mock.patch.object(r, "type_prompt", lambda: typed.append(1) or ("ok", "typed"))]
+        for p in patches:
+            self.enterContext(p)
+        return r, typed
+
+    def test_paste_goes_ahead_when_status_says_recording(self):
+        r, typed = self.paste_run("recording", False)
+        self.assertEqual(r.paste(None)[0], "ok")
+        self.assertEqual(typed, [1])
+
+    def test_paste_on_a_dead_pane_without_recording_is_refused_at_once(self):
+        r, typed = self.paste_run(None, True)
+        with self.assertRaises(padrun.Step) as got:
+            r.paste(None)
+        self.assertEqual((got.exception.args[0], typed), ("INCONCLUSIVE", []))
+
+
 class KillBothVerify(unittest.TestCase):
     """pad-run verify after kill-both: the row is the old entry's, so its server copy is the one compared and scanned."""
 
