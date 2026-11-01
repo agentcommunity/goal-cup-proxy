@@ -430,6 +430,10 @@ def case_rows(r):
     r.flag(any(dig(c, "c_thread") for c in mine), "C2", "FAIL", "a thread claimed from the pinned host %s" % own)
     r.flag(any(c.get(k) for c in mine for k in S7_TOKENS), "C5", "FAIL", "wire tokens claimed for the pinned host %s" % own)
 
+def bare(model):
+    """A model id as compared: spaces trimmed, any `provider/` prefix dropped."""
+    return str(model).strip().rsplit("/", 1)[-1]
+
 def usage_checks(r, few):
     """C2 (every subagent recorded) and C5 (usage stats present), both from the S7 summary."""
     if not r.usage:
@@ -452,6 +456,9 @@ def usage_checks(r, few):
     r.flag(any(not dig(t, "t_models") or not (dig(t, "t_wire") or dig(t, "t_native")) for t in threads), "C5", "FAIL",
            "a thread with no model or no calls")
     r.flag(dig(r.usage, "s7_unattributed") != 0, "C5", "FAIL", "coverage.unattributed %s" % dig(r.usage, "s7_unattributed"))
+    pin = r.meta.get("pinned_model")  # the cheapest-model rule: any other recorded model is a rig fault; none read says nothing
+    for m in sorted({x["model"] for x in models(r.usage)}):
+        r.flag(isinstance(pin, str) and pin.strip() and bare(m) != bare(pin), "C5", "FAIL", "recorded model %s, pinned %s" % (m, pin))
 
 def scan(r, name, where):
     """One C3 scan: hits fail; no scan (None) is INCONCLUSIVE, never a PASS."""
@@ -805,6 +812,7 @@ def facts(r):
             "secret_hits": r.hits("secrets"), "masks": r.masks() or {}, "plain_hits": r.hits("secrets-plain"),
             "screen_known": m.get("screen_known"), "canary": "not planted", "tokens": dig(u, "s7_tokens"),
             "models": [x.get("model") for x in dig(u, "s7_models") or [] if isinstance(x, dict)],
+            "pinned_model": m.get("pinned_model"),
             "raw_bytes": size.get("raw"), "compressed_bytes": size.get("compressed"), "over_cap": m.get("over_cap") is True,
             "recorder_rss_peak_mb": round(max(rss) / 1024, 1) if rss else None, "spend_usd_est": m.get("spend_usd_est"),
             "priced_high": m.get("priced_high") or [], "first_live_alarm": (alarm or [None])[0],
