@@ -5,11 +5,14 @@
 //!   connector rules and the exact values, with the left guard, the quote cut and escape
 //!   alignment.
 //! - `stream`: the streaming hold, whose output equals the whole-record masker below the hold.
-//! - `values`: exact values in their 11 forms, and the project's `GH_TOKEN` reader.
+//! - `values`: exact values in every form they take, and their readers (the project's key files
+//!   and the harness environment), behind the section 9 name gate. Its header counts the forms
+//!   and states the reader order.
 //! - `meta`: header, scheme, URL and query rules for metadata.
 //!
-//! The masker is pure: no I/O but the `GH_TOKEN` reader, no threads, no clock, no panics by
-//! design. No error text here ever formats a byte, a value or the length of a value.
+//! The masker is pure: no I/O but the readers of the key files and of a harness environment
+//! (`values`), no threads, no clock, no panics by design. No error text here ever formats a
+//! byte, a value or the length of a value.
 
 mod meta;
 mod rules;
@@ -22,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
-pub use values::workspace_values;
+pub use values::{launch_values, process_env};
 
 /// The name of the rule that stars bytes the masker could not decide.
 pub const FAIL_CLOSED: &str = stream::FAIL_CLOSED_KIND;
@@ -73,16 +76,39 @@ pub enum ValueSource {
 }
 
 /// One exact secret value. It crosses the first control line (S17) and is never written,
-/// hashed or logged. `Debug` prints the source only.
+/// hashed or logged. `Debug` prints the source and `left_out` only.
+///
+/// On the wire `bytes` is a JSON string. A used value is printable ASCII (`values::is_usable`),
+/// so it round-trips exactly; a value that is not UTF-8 becomes U+FFFD in its lossy form, which
+/// is not printable ASCII, so it stays unusable. One count-only entry
+/// ([`SecretValue::left_out`]) carries the number of values a reader left out past the guard of
+/// 32, so the start event's `skipped` stays right.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretValue {
     source: ValueSource,
+    #[serde(with = "value_text")]
     bytes: Vec<u8>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    left_out: u32,
 }
 
 impl SecretValue {
     pub fn new(source: ValueSource, bytes: Vec<u8>) -> SecretValue {
-        SecretValue { source, bytes }
+        SecretValue {
+            source,
+            bytes,
+            left_out: 0,
+        }
+    }
+
+    /// The count-only entry: `n` values were left out by a reader and are counted in `skipped`.
+    /// It holds no byte.
+    pub fn left_out(n: u32) -> SecretValue {
+        SecretValue {
+            source: ValueSource::Workspace,
+            bytes: Vec::new(),
+            left_out: n,
+        }
     }
 
     pub fn source(&self) -> ValueSource {
@@ -94,10 +120,28 @@ impl SecretValue {
     }
 }
 
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// `SecretValue.bytes` as one JSON string.
+mod value_text {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&String::from_utf8_lossy(bytes))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        Ok(String::deserialize(d)?.into_bytes())
+    }
+}
+
 impl std::fmt::Debug for SecretValue {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SecretValue")
             .field("source", &self.source)
+            .field("left_out", &self.left_out)
             .finish_non_exhaustive()
     }
 }
@@ -115,9 +159,10 @@ impl Masker {
     /// A built-in shape that differs from its recognizer or does not compile is
     /// `MaskError::Shape`; a connector rule whose regex does not compile, or whose kind is
     /// `run_secret` or `fail_closed`, is `MaskError::Rule`. A value that cannot be used is
-    /// skipped and counted in `skipped`, never an error. Until the owner's yes to question 3
-    /// builds the section 9 name gate, only `workspace` values are used; an `env` or `harness`
-    /// value is counted in `skipped`, so a model name or a base URL is never masked by value.
+    /// skipped and counted in `skipped`, never an error. `workspace` and `env` values are used
+    /// (the readers apply the section 9 name gate, so a model name or a base URL never arrives);
+    /// a `harness` value (source 4, not built) is counted in `skipped`. Ordering, dedupe and the
+    /// 32-value guard are stated once, in the `values` module header.
     pub fn new(rules: &[MaskRule], values: Vec<SecretValue>) -> Result<Masker, MaskError> {
         let policy = stream::Policy::new(rules, &values)?;
         let mut names = meta::Names::default();
@@ -274,7 +319,7 @@ mod tests {
         let counts = m.value_counts();
         assert_eq!(
             (counts.workspace, counts.env, counts.harness, counts.skipped),
-            (1, 0, 0, 2)
+            (1, 0, 0, 1)
         );
         assert!(!format!("{m:?}").contains(std::str::from_utf8(&key)?));
         Ok(())

@@ -189,5 +189,26 @@ class PaneBeforePaste(unittest.TestCase):
         self.assertEqual(order, ["pane", "paste"])
 
 
+class MaskValues(unittest.TestCase):
+    """The start event's mask_values reaches check.py: the dump's event lines (as goalcup-verify prints them) are read up to the start."""
+
+    def read(self, lines):
+        proc = mock.MagicMock()
+        proc.__enter__.return_value = proc
+        proc.stdout = iter(lines)
+        r = bare()
+        r.run, r.left = ".", lambda: 5
+        with mock.patch.object(padrun.subprocess, "Popen", return_value=proc):
+            return r.mask_values("e")
+
+    def test_start_event_line_is_read(self):
+        mv = {"workspace": 3, "env": 0, "harness": 1, "skipped": 0}
+        got = self.read(['{"k": "event", "o": 9, "ev": "other"}\n',
+                         '{"k": "event", "o": 10, "ev": "start", "mask_values": {"workspace": 3, "env": 0, "harness": 1, "skipped": 0}}\n',
+                         'not read'])
+        self.assertEqual(got, mv)
+        self.assertIsNone(self.read(['{"k": "event", "ev": "start"}\n']))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -304,7 +304,7 @@ class CrashRows(unittest.TestCase):
 
     @staticmethod
     def row(kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
-            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1, extra=None):
+            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1, extra=None, known_box=False):
         told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
                 for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
         kills = [dict({"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"}, **({"quiet": True} if quiet else {}))
@@ -312,7 +312,7 @@ class CrashRows(unittest.TestCase):
         rec = [{"kind": "wait-recovery", "result": x, "at": "2026-10-30T%s:00+00:00" % t} for x, t in recovery]
         files = {"meta.json": {"connector": "codex-cli", "case": case, "model_host": "api.example", "variant": [kind + "@3"], "server": "off",
                                "keep": True, "commits_since_start": commits, "entry": "e1", "over_cap": over_cap,
-                               "started": "2026-10-30T10:00:00+00:00"},
+                               "started": "2026-10-30T10:00:00+00:00", **({"known_box": True} if known_box else {})},
                  "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "seal_reason": seal,
                      "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
                          {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
@@ -481,7 +481,7 @@ class StatedLoss(unittest.TestCase):
                  "verify/secrets-conductor.json": {"hits": 0},
                  "verify/exits.json": {"secrets": 2 if known or shapes else 0, "secrets-out": 0, "secrets-plain": 0}}
         gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
-        return CrashRows.row("kill-recorder", gap, code=code, extra=extra)
+        return CrashRows.row("kill-recorder", gap, code=code, extra=extra, known_box=True)
 
     def plain_row(self, shapes, code, counts, extra_checks=()):
         checks = ([{"id": "secrets", "result": "fail"}] if shapes else []) + list(extra_checks)
@@ -492,12 +492,12 @@ class StatedLoss(unittest.TestCase):
                          "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": 2 if shapes else 0, "secrets-out": 0, "secrets-plain": 0}})
 
-    def test_deltas_only_shape_is_open_not_a_fail_and_never_a_pass(self):
+    def test_deltas_only_shape_is_a_pass_with_the_stated_loss_note(self):  # owner answer D1
         row = self.run_row(shapes=[self.DELTAS])
-        self.assertEqual(row["checks"]["C3"], "INCONCLUSIVE")
+        self.assertEqual(row["checks"]["C3"], "PASS", row["why"])
+        self.assertTrue(any("stated loss: shape in streamed reply" in w for w in row["why"]), row["why"])
         self.assertNotEqual(row["faults"], "FAIL")
         self.assertNotEqual(row["result"], "FAIL")
-        self.assertNotEqual(row["result"], "PASS")
 
     def test_stated_loss_does_not_hide_an_unexplained_gap(self):
         gaps = {"s6_gaps": {"memory_guard": 1}}
@@ -540,34 +540,52 @@ class StatedLoss(unittest.TestCase):
 
 
 class UpstreamRedaction(unittest.TestCase):
-    """C3 for a harness file with redacts_tool_output (point 4): open until the owner answers, never PASS."""
+    """C3 for a harness file with redacts_tool_output (point 4): no hit and no planted MASK is masked upstream, a PASS."""
 
     DELTAS = StatedLoss.DELTAS
 
     def c3(self, up, masks, known=(), shapes=()):
-        return evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": up},
+        return evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": up,
+                                      "redacts_kinds": ["openai_key", "github_token"]},
                          "verify/secrets.json": {"masks": masks, "known_hits": list(known), "shape_hits": list(shapes), "big_masks": []},
                          "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": 2 if known or shapes else 1, "secrets-out": 0, "secrets-plain": 0}}
                         )["checks"]["C3"]
 
-    def test_no_mask_and_no_hit_is_never_a_pass(self):
-        self.assertEqual(self.c3(True, {}), "INCONCLUSIVE")  # no sign of any exercise
-        self.assertEqual(self.c3(True, {"masked_key": 3}), "INCONCLUSIVE")  # exercised, planted kinds open: stated loss, not PASS
-        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0)), "INCONCLUSIVE")
-        self.assertEqual(self.c3(False, {"masked_key": 3}), "INCONCLUSIVE")  # control: the flag is what counts masked_key as exercise
+    def test_no_hit_and_no_planted_mask_passes_upstream(self):
+        rest = {"google_key": 1, "jwt": 1, "private_key": 1, "url_password": 1}  # kinds the vendor rule does not name
+        self.assertEqual(self.c3(True, dict(rest, masked_key=3)), "PASS")
+        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0, masked_key=3)), "INCONCLUSIVE")  # jwt is no vendor-named kind
+        self.assertEqual(self.c3(True, {"masked_key": 3}), "INCONCLUSIVE")
+
+    def test_no_exercise_evidence_is_not_a_pass(self):  # nothing shows the planted file reached the harness
+        self.assertEqual(self.c3(True, {}), "INCONCLUSIVE")
+        self.assertEqual(self.c3(True, {"auth": 8}), "INCONCLUSIVE")
+
+    def test_a_plain_hit_with_exact_off_is_evidence_not_less(self):
+        files = {"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": True,
+                           "redacts_kinds": ["openai_key", "github_token"]},
+                 "verify/secrets.json": {"masks": {"masked_key": 3, "google_key": 1, "jwt": 1, "private_key": 1, "url_password": 1}, "known_hits": [], "shape_hits": [], "big_masks": []},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 1, "secrets-out": 0, "secrets-plain": 2}}
+        self.assertEqual(evaluate(files)["checks"]["C3"], "PASS")
+
+    def test_a_harness_without_the_flag_stays_open(self):  # control: same files
+        self.assertEqual(self.c3(False, {"masked_key": 3}), "INCONCLUSIVE")
+        self.assertEqual(self.c3(False, {}), "INCONCLUSIVE")
 
     def test_a_known_hit_still_fails(self):
         self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN]), "FAIL")
 
-    def test_deltas_only_shape_is_open_not_a_fail(self):
-        self.assertEqual(self.c3(True, SecretCheck.PLANTED, shapes=[self.DELTAS]), "INCONCLUSIVE")
+    def test_deltas_only_shape_is_a_stated_loss_not_a_fail(self):
+        self.assertEqual(self.c3(True, SecretCheck.PLANTED, shapes=[self.DELTAS]), "PASS")
+        self.assertEqual(self.c3(True, {}, shapes=[self.DELTAS]), "INCONCLUSIVE")  # still no exercise evidence
 
 
 class SecretCheck(unittest.TestCase):
     """C3 (point 4, section 5): a known-value hit fails, and so does a planted shape with no MASK. Only C3 is asserted."""
 
-    PLANTED = {"openai_key": 1, "github_token": 1, "generic_secret_assignment": 1, "jwt": 1, "private_key": 1,
+    PLANTED = {"openai_key": 1, "github_token": 1, "google_key": 1, "jwt": 1, "private_key": 1,
                "url_password": 1, "auth": 8}
 
     def c3(self, masks, secrets_exit=1, plain_exit=0):
@@ -580,6 +598,40 @@ class SecretCheck(unittest.TestCase):
         self.assertEqual(self.c3(self.PLANTED, secrets_exit=2), "FAIL")
         self.assertEqual(self.c3(dict(self.PLANTED, jwt=0), secrets_exit=2), "FAIL")  # a hit in a kind with no MASK
         self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "INCONCLUSIVE")  # no hit, no MASK: not exercised
+
+    def exact(self, masks, plain_exit=0, on=True, skipped=0):
+        meta = {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"}
+        if on:
+            meta["mask_values"] = {"workspace": 1, "env": 0, "harness": 0, "skipped": skipped}
+        return evaluate({"meta.json": meta, "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/exits.json": {"secrets": 1, "secrets-out": 0, "secrets-plain": plain_exit}})["checks"]["C3"]
+
+    def test_exact_values_on(self):
+        self.assertEqual(self.exact(dict(self.PLANTED, run_secret=2), plain_exit=2), "FAIL")  # the planted value reached the record
+        self.assertEqual(self.exact(self.PLANTED), "PASS")
+        self.assertEqual(self.exact({"auth": 8, "run_secret": 4}), "INCONCLUSIVE")  # run_secret is no proof: env or auth can make it
+        self.assertEqual(self.exact({"auth": 8}), "INCONCLUSIVE")
+        self.assertEqual(self.exact(dict(self.PLANTED, jwt=0)), "INCONCLUSIVE")  # a kind with no MASK is not exercised
+        self.assertEqual(self.exact(self.PLANTED, plain_exit=2, skipped=1), "INCONCLUSIVE")  # a stated cut
+
+    def hermes(self, masks):
+        meta = {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": True,
+                "redacts_kinds": ["openai_key", "github_token"],
+                "mask_values": {"workspace": 4, "env": 0, "harness": 0, "skipped": 0}}
+        out = evaluate({"meta.json": meta, "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
+                        "verify/exits.json": {"secrets": 1, "secrets-out": 0, "secrets-plain": 0}})
+        return out["checks"]["C3"], out["facts"].get("masked_upstream")
+
+    def test_run_secret_never_stands_for_a_planted_kind(self):
+        # Redacting harness, exact values on: masked_key and run_secret with no openai/github/google MASK is the unconfirmed
+        # masked-upstream PASS (refused by the release check), never a plain PASS; run_secret alone is no evidence.
+        shaped = {"google_key": 1, "jwt": 1, "private_key": 1, "url_password": 1, "masked_key": 3, "run_secret": 1, "auth": 8}
+        self.assertEqual(self.hermes(shaped), ("PASS", True))
+        self.assertEqual(self.hermes({"run_secret": 4, "auth": 8})[0], "INCONCLUSIVE")
+
+    def test_exact_values_off_keeps_a_plain_hit_as_proof(self):
+        self.assertEqual(self.exact(self.PLANTED, plain_exit=2, on=False), "PASS")
+        self.assertEqual(self.exact({"auth": 8}, plain_exit=2, on=False), "INCONCLUSIVE")  # plain proves exercise, kinds unmasked
 
     FILES = {"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
              "verify/secrets-conductor.json": {"hits": 0},

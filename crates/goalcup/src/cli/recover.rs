@@ -12,7 +12,7 @@ use super::{
     watchdog_alive,
 };
 use crate::connector::{self, Env, HomeLock};
-use crate::mask::{Masker, workspace_values};
+use crate::mask::{Masker, launch_values, process_env};
 use crate::pipeline::status::{Mode, Status};
 use crate::watchdog::{HarnessFacts, NotRecovered, StartFacts, recover};
 
@@ -153,6 +153,7 @@ fn support(run: &str, dir: &std::path::Path) -> String {
 /// The start facts again, from the run's own files: the part's folder and host lists as `start` or
 /// `continue` saved them in `server.json` (never this terminal's), the run's own server, and the
 /// connector the first part used. None when one is missing or changed, and nothing is guessed.
+/// The exact values come from the live harness's own environment where the system shows it.
 /// The plan is made while this process holds the home lock itself: the plan then writes nothing in
 /// the running harness's home and does not run the harness.
 fn rebuild(
@@ -194,8 +195,22 @@ fn rebuild(
     let _lock = HomeLock::take(&isolated).ok()?;
     let mut plan = connector::plan(&loaded, &env, &isolated);
     plan.hosts = hosts;
-    let values = workspace_values(&workspace);
-    Masker::new(&plan.mask_rules, values.clone()).ok()?;
+    // The values the live harness holds: its own start environment where the system shows it,
+    // plus this terminal's plan, which may differ (extra values only add masking; PRD-05 section 10).
+    // A name held with two values keeps both, the plan's under a suffixed name that passes the same gate.
+    let mut harness_env = process_env(pid).unwrap_or_default();
+    for (name, value) in &plan.env {
+        match harness_env.get(name) {
+            None => harness_env.insert(name.clone(), value.clone()),
+            Some(live) if live != value => {
+                harness_env.insert(format!("{name}_PLAN"), value.clone())
+            }
+            Some(_) => None,
+        };
+    }
+    let values = launch_values(&workspace, &harness_env);
+    // Only the shapes and rules can refuse; the values are built once, by the recorder.
+    Masker::new(&plan.mask_rules, Vec::new()).ok()?;
     let part = Part {
         run: found.run.clone(),
         entry: found.entry.clone(),

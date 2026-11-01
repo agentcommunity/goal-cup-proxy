@@ -2045,3 +2045,29 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - Owner rule: every Claude Code test run uses Haiku 5.5 (direct `claude-haiku-5-5`, gateway `anthropic/claude-haiku-5.5`, main and background model both). The earlier full1 run used the default Opus and cost 7.33 USD in 22 minutes. Codex is pinned to its cheapest model in both cases and the DeepSeek harnesses use deepseek-flash (section 6, "Pinned models"). The row records `pinned_model` and C5 flags a recorded model that differs.
 - The vendor env name for the background model is `ANTHROPIC_DEFAULT_HAIKU_MODEL`; `ANTHROPIC_SMALL_FAST_MODEL` is deprecated.
 - Open for the first Haiku run: the 2.1.312 first-run screens with a model set (`pre_keys` were probed without one), the gateway id spelling `anthropic/claude-haiku-5.5` (the Vercel pages were not reachable when this was written), and the spelling the direct API records for `claude-haiku-5-5` (a dated form would show as a warning line on a correct run; confirm it on the first run's record).
+
+- A harness file may carry `redacts_tool_output = true` (Hermes only; docs/harnesses/hermes-cli.md:28 is about Hermes's own logs, so the basis is not yet a vendor page on tool output). The pad copies it into the row meta under the same name. For such a harness only, a nonzero `masked_key` MASK counts as exercise evidence (the PASS rule is in the 2026-11-01 masked-upstream note below). Known-value hits, other shape hits, big masks and plain hits fail as before, and a harness without the key is unchanged. The C3 acceptance row ("every planted shaped value has at least one MASK") is unchanged. No locked ledger item is touched.
+
+### 2026-11-01, C3 with exact values, and masked upstream
+
+- **Exact values on.** `Run.exact_values()` returns the start event's `mask_values` (PRD-05 ValueCounts) from
+  `meta.json`; pad-run copies it there (via `goalcup-verify dump --kind event`, the `start` event) through
+  `meta-box.json`. Exact values are on when `workspace` is above 0. When on, a plain hit of `PAD_SECRET_PLAIN` is a
+  C3 FAIL, and `skipped` above 0 is INCONCLUSIVE ("the planted value may be cut"), not FAIL. Absent means off.
+- **Masked upstream (ledger 18:04Z, conductor ruling).** For a harness with `redacts_tool_output`, no known, shape or
+  plain hit, no stated loss and exercise evidence (a `masked_key` MASK), a planted kind with no MASK is a C3 PASS ("masked upstream") only when the harness file's `redacts_kinds` names it (Hermes: `openai_key`, `github_token`); any other bare kind stays INCONCLUSIVE "not exercised". With no exercise evidence C3 stays
+  INCONCLUSIVE. A known hit or unmasked shape hit still FAILs, the deltas-only stated loss stays INCONCLUSIVE, and a
+  harness without the flag keeps INCONCLUSIVE. Such a PASS carries `facts.masked_upstream` and is refused by
+  `--release-check` until the owner confirms it.
+- **Planted names (replaces the earlier gate-named note).** All six planted values sit under names PRD-05's
+  credential name gate does not admit (`PAD_OPENAI`, `PAD_GITHUB`, `PAD_GOOGLE`, `PAD_JWT`, `PAD_PEM`, and the remote
+  URL), so each shape rule claims its own value and C3 needs a MASK of its own kind. A `run_secret` MASK is not
+  evidence for any planted kind and not exercise proof: the harness env or an auth header can produce it, so it never
+  ties to the planted file (the earlier "run_secret is the exercise proof" text is withdrawn). Exercise evidence is a
+  MASK of a planted shape, a `masked_key` MASK for an upstream-redacting harness, or with exact values off a plain hit.
+  `PAD_SECRET_PLAIN` stays the exact-value canary: a plain hit of it with exact values on is a FAIL.
+
+### 2026-11-01, owner answer on the C3 stated loss, gateway rates
+
+- **C3 stated loss (owner answer, supersedes the owner question above).** A shape hit found only in joined streamed replies, with 0 known hits, is C3 PASS with the note "stated loss: shape in streamed reply". A known hit, a big MASK or any other shape still fails. A planted kind with no MASK stays open as before.
+- **Rates.** `pad.toml` prices the two gateway models of the 1 Nov gateway rows at the gateway list price of that day: the Anthropic one at its tier up to 100k input per call (0.1 in, 0.01 cached, 0.5 out per M; 0.5 and 2.5 above), and the DeepSeek one at 0.3, 0.007 cached, 1.2. The Codex gateway preset names the Anthropic model run in those rows. The Hermes gateway preset has been run (gateway smoke, 1 Nov). No locked ledger item is touched.

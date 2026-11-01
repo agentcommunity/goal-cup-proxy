@@ -46,6 +46,7 @@ const KINDS: &[&str] = &[
     "fk_key",
     "bedrock_key",
     "bedrock_key",
+    "stripe_webhook_secret",
 ];
 
 #[test]
@@ -514,6 +515,70 @@ fn dotted_assignment_values_are_masked_whole() -> Res {
     let input = format!("secret: {a}.Then more words");
     let out = m.mask_whole(input.as_bytes());
     assert!(String::from_utf8(out.bytes)?.ends_with(".Then more words"));
+    Ok(())
+}
+
+/// The Stripe pair (owner yes to PRD-00 question 3): test and restricted keys and webhook
+/// secrets are starred bare, after a name, in code and in JSON escaped once and twice, and the
+/// stream agrees at every split. Glued, too short or a prefix alone stays raw.
+#[test]
+fn stripe_test_keys_and_webhook_secrets_are_masked() -> Res {
+    let m = masker()?;
+    let sk = ["sk", "_test_", &run(ALNUM, 24, 90)].concat();
+    let rk = ["rk", "_test_", &run(ALNUM, 24, 91)].concat();
+    let live = ["sk", "_live_", &run(ALNUM, 24, 92)].concat();
+    let wh = [
+        "wh",
+        "sec_",
+        &run(ALNUM, 10, 93),
+        "+",
+        &run(ALNUM, 10, 94),
+        "/",
+        &run(ALNUM, 9, 95),
+        "=",
+    ]
+    .concat();
+    let name = "STRIPE_SECRET_KEY=";
+    let input = format!("{name}{sk}\n");
+    let out = m.mask_whole(input.as_bytes());
+    assert_eq!(&out.bytes[..name.len()], name.as_bytes());
+    assert!(starred(&out, name.len()..name.len() + sk.len()));
+    assert_eq!(kinds(&m, &out), ["stripe_key"]);
+    for key in [&rk, &live] {
+        let out = m.mask_whole(format!("key = \"{key}\"").as_bytes());
+        assert_eq!(kinds(&m, &out), ["stripe_key"], "{key}");
+        assert_masks(&m, &format!("key = \"{key}\""), key);
+    }
+    let code = format!("const signing = '{wh}';\n");
+    let out = m.mask_whole(code.as_bytes());
+    assert_eq!(kinds(&m, &out), ["stripe_webhook_secret"]);
+    let once = serde_json::json!({ "output": code }).to_string();
+    let twice = serde_json::json!({ "content": once }).to_string();
+    let env = format!("STRIPE_WEBHOOK_SECRET={wh}\n");
+    for input in [&code, &once, &twice, &env] {
+        assert_masks(&m, input, &wh);
+    }
+    let all = [code, once, twice, env, input].concat();
+    let whole = m.mask_whole(all.as_bytes());
+    for split in 0..=all.len() {
+        let got = common::stream_in(
+            &m,
+            goalcup_format::StreamKind::Native,
+            all.as_bytes(),
+            &[split],
+        );
+        assert!(got == whole, "split {split}");
+    }
+    for raw in [
+        format!("x{sk} "),
+        format!("RK{rk} "),
+        format!("my_{wh} "),
+        ["sk", "_test_", &run(ALNUM, 15, 96), " "].concat(),
+        ["wh", "sec_", &run(ALNUM, 23, 97), " "].concat(),
+        "Paste your sk_test_ key and the whsec_ secret into the dashboard.".to_string(),
+    ] {
+        assert_clear(&m, &raw);
+    }
     Ok(())
 }
 

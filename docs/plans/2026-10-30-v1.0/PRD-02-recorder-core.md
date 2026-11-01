@@ -1023,8 +1023,8 @@ RSS, the `memory_guard` gap count and S1 call time at the 99.9th percentile.
 | `oom_score_adj` of the recorder | 500 (Linux) | PRD-02 |
 | Restart pause | none: restarted at once | Nobody (ledger R3a, locked) |
 | Null mode | after 3 exits in 10 min each under 60 s (SIGKILL included); the count resets after 60 s up; retry by the `restart` line after 30 s, 1, 2, then every 5 min, never more apart, never stopping | Nobody (ledger R3a, locked) |
-| `goalcup recover` | orphan SIGKILL, then `rec/lock` polled every 10 ms for up to 10 s; ready wait 10 s | PRD-02 |
-| First boot ready wait | 10 s | PRD-10 |
+| `goalcup recover` | orphan SIGKILL, then `rec/lock` polled every 10 ms for up to 10 s; ready wait 30 s | PRD-02 |
+| First boot ready wait | 30 s | PRD-10 |
 | Harness end | SIGTERM to the tree, SIGKILL after 10 s; only at the deadline (incl. a server `stop` for the deadline) and on `goalcup seal` | PRD-02 (PRD-00 owner question 2, old 11) |
 | Grace after a harness exit | until 5 s with no relayed byte, at most 30 s | PRD-02 |
 | Seal drain | wire bytes only; no time limit while the writer writes (60 s with no write is the stall exit); 5 s on a signal | PRD-02 |
@@ -1655,7 +1655,7 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
   the same shape as `tests/cli_common/` and `tests/native_common/`. A folder module does not build as
   its own test binary, and `tests/common/` stays PRD-14's. The PRD-00 replan reads the PRD-02 row as
   `tests/watchdog_*`.
-- **Recover's first boot (review X R1):** a recorder that gives no `ready` within the 10 s wait is not
+- **Recover's first boot (review X R1):** a recorder that gives no `ready` within the 30 s wait is not
   ended under `goalcup recover`. The new watchdog writes report byte 2 (late) for a boot that is slow
   or ended at boot, and still watches it, so the restart loop and null mode (R3a) take over, as for
   any boot after a kill. Recover then returns `Ok(Recovered { port, late: true })`: the watchdog runs

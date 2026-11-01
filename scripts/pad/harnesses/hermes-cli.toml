@@ -6,7 +6,7 @@
 # Measured: the first run installs Python dependencies per HERMES_HOME (about a minute). The config.yaml preset in
 # direct/hermes-config.yaml removes the telemetry screen in the direct case only (measured in sweep 2: no "Help improve Hermes?" screen, the chat banner
 # "Type your message or /help" shows and the paste lands), so no key press is needed before the prompt. The gateway
-# preset (gateway/hermes-config.yaml) was not part of that sweep: same text, docs only, not run.
+# preset (gateway/hermes-config.yaml) has been run since (gateway smoke gw3, 1 Nov 2026): no telemetry screen, ready text seen, paste landed.
 version = "0.22.5"
 version_cmd = "hermes --version"
 install = "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/v0.22.5/scripts/install.sh | bash -s -- --skip-setup --skip-browser --skip-computer-use --commit bf0203a794a07aac3ff764972ab9087baa4e4f4e"
@@ -19,12 +19,14 @@ model_host = "api.deepseek.com"
 # Basis, stated plainly: https://hermes-agent.nousresearch.com/docs/user-guide/security, section "Credential Redaction", says
 # error messages from MCP tools are sanitized before they go back to the LLM, matches replaced by [REDACTED], for GitHub
 # tokens (ghp_...), OpenAI-style keys (sk-...), Bearer tokens and token=/key=/API_KEY=/password=/secret= parameters. It names no
-# redaction of ordinary tool output and no jwt, private_key or url_password shape, so check.py puts the "may be masked before
-# the wire" note only on the openai, github and key=/token= kinds; the other kinds stay "not exercised". docs/harnesses/
-# hermes-cli.md:28 (redacted delegation task logs) is about Hermes's own log files. The full3 record held 28 and 190
-# masked_key masks (the masker's rule for Hermes's own redacted form), which is the exercise evidence C3 asks for. C3 stays
-# INCONCLUSIVE with a stated loss, never PASS. pad copies this to the row meta under the same name.
+# redaction of ordinary tool output and no jwt, private_key or url_password shape; docs/harnesses/hermes-cli.md:28 (redacted
+# delegation task logs) is about Hermes's own log files. check.py reads the flag as: with no hit and no stated loss, a planted
+# kind with no MASK is a C3 PASS "masked upstream" only when the run shows the exercise (a masked_key MASK, the masker's rule
+# for Hermes's own redacted form; the full3 record held 28 and 190), else C3 stays INCONCLUSIVE. Such a PASS does not count
+# toward --release-check until the owner confirms the rule (point 4). pad copies this to the row meta under the same name.
 redacts_tool_output = true
+# The planted kinds the vendor rule above names (sk- and ghp_ shapes); only these can pass as masked upstream.
+redacts_kinds = ["openai_key", "github_token"]
 ready_text = "Type your message or /help"
 ready_wait = 120
 exit_keys = '/exit\r'
