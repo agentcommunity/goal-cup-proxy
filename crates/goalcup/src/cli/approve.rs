@@ -22,6 +22,9 @@ use super::{credential, parse_server, run_dir, server_json};
 use crate::pipeline::Mono;
 use crate::upload::client::{ServerClient, ServerError, Token};
 
+/// The shared repository every practice run names; the Worker's own check runs on it.
+const PRACTICE_REPO_URL: &str = "https://github.com/agentcommunity/goalcup-matrix-empty";
+
 /// GitHub's API, for the repository pre-check.
 pub const GITHUB_API: &str = "https://api.github.com";
 
@@ -56,7 +59,7 @@ pub struct Ask<'a> {
     pub workspace: &'a Path,
     pub session_id: &'a str,
     pub harness_version: Option<&'a str>,
-    /// `<owner>/<name>`; none for a practice run.
+    /// `<owner>/<name>`; none for a practice run (the server is then sent the shared practice URL).
     pub repo: Option<&'a str>,
     pub github_api: &'a str,
     pub hosts_file: Option<&'a Path>,
@@ -90,10 +93,12 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
             token: None,
         });
     };
-    let repo_url = ask
-        .repo
-        .map(|r| check_repo(ask.github_api, r))
-        .transpose()?;
+    // UPLOAD-API.md `POST /v1/runs`: practice sends the shared (empty by design) repository, a
+    // test run may send null, and a named repository is checked first.
+    let repo_url = match (ask.mode, ask.repo) {
+        (RunMode::Practice, _) => Some(PRACTICE_REPO_URL.to_owned()),
+        (_, repo) => repo.map(|r| check_repo(ask.github_api, r)).transpose()?,
+    };
     let _watch = Ctrl::new();
     let secret = approve(base, ask, out)?;
     if interrupted() {

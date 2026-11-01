@@ -202,7 +202,7 @@ pub struct ServerJson {
     pub mode: RunMode,
     /// RFC 3339 UTC; null when no server set one.
     pub deadline: Option<String>,
-    /// `<owner>/<name>`; null for a practice run.
+    /// `<owner>/<name>`; null for a practice run (what the participant named, not what the server was sent).
     pub repo: Option<String>,
     pub connector: ConnectorSource,
     /// The `--hosts` file, when one was given.
