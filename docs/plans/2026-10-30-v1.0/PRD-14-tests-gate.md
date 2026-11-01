@@ -1075,3 +1075,7 @@ touched.
 
 - **Test budget:** PRD-17 lessons tests are 3,462 lines, not 2,711, so PRD-14 has no part of the shared 3,000 row left. Its own guard tests must be cut or folded to hold the total near 14,200, and shared helpers go in `tests/common/` so PRD-17 can delete its private copies.
 - **Full tier:** `lessons_connect::idle_tunnel_survives_120s` is `ignore`d and must run in the gate full tier on the integration head. No locked ledger item is touched.
+
+### 2026-11-01, from PRD-17 slice 6 (merge c9b87ac5)
+
+- The lessons files hold 4,345 test lines against the 3,000 shared with PRD-14, so PRD-14 section 3 has no room left for its own support; it must shrink its own tests to keep the Rust test total near the 14,200 line. Gate check 1 needs the four missing names (see PRD-17) to exist or be dropped by a replan. No locked ledger item is touched.

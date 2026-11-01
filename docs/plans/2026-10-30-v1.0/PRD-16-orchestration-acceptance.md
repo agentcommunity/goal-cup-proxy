@@ -2447,3 +2447,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
   `watchdog::recover` (PRD-02) are still not on integration after a 90-minute poll. Phase 3 close needs them;
   the integrator should check that their lanes are scheduled, since PRD-10 slice 11 cannot start without them.
   No seam change. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-17 slice 6 (merge c9b87ac5)
+
+- **Size report, PRD-17** (`wc -l` on integration): the eight `lessons_*.rs` files total 4,345 lines (http1 978, ws 1,109, decode 547, connect 510, launch 504, tls 412, hosts 181, pipeline 104) against the 3,000 lines PRD-00 gives lessons plus PRD-14 support (+45%; over the 10% line, decision recorded in PRD-17: accepted, no cut known, no growth). Slice 6 was net minus 3 code lines. Carry to the end-of-build report with the PRD-03, PRD-10 and PRD-12 overages.
+- **Gate effect:** none on order. The deletion gate (PRD-13 phase 2) is not due; check 1 would today list seven rows with four unresolved guard names (PRD-02 `watchdog_restart.rs`, PRD-10 `cli_continue.rs` and `second_start_on_one_home_refuses`, PRD-17/PRD-12 `pipeline_stall.rs`). The integrator should schedule those before phase 2. No seam change. No locked ledger item is touched.
