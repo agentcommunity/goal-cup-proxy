@@ -176,6 +176,19 @@ fn send_with(
     rep: (&str, String),
     lose: u8,
 ) -> u64 {
+    send_full(e, path, thread, body, rep, (lose, None))
+}
+
+/// [`send_with`] and, as the recorder does while the request streams, a MASK record of `len`
+/// bytes at `off` in the request body.
+fn send_full(
+    e: &mut Entry,
+    path: &str,
+    thread: &str,
+    body: &Value,
+    rep: (&str, String),
+    (lose, mask): (u8, Option<(u64, u64)>),
+) -> u64 {
     let body = body.to_string();
     let head = json!({"method": "POST", "path": path, "ver": "1.1", "masked": [], "coding": null,
         "headers": [["content-type", "application/json"], ["thread-id", thread]]});
@@ -189,6 +202,14 @@ fn send_with(
         e.data(q, half as u64 + 10, 0, &body.as_bytes()[half + 10..]);
     } else {
         e.data(q, 0, 0, body.as_bytes());
+    }
+    if let Some((off, len)) = mask {
+        e.put(Record::Mask {
+            sid: q,
+            off,
+            len,
+            rule: 1,
+        });
     }
     e.end(q, done, body.len() as u64, Value::Null);
     let head = json!({"status": 200, "ver": "1.1", "headers": [["content-type", rep.0]],
@@ -598,4 +619,84 @@ fn the_k11_records_give_their_four_results() {
             export(&d, &Path::new(&out).join(format!("k11-{x}-part")));
         }
     }
+}
+
+const HEAD: &str = "I ran the fake setup check script and it only prints a banner, so I looked at how it builds the address it uses: https://u:";
+const TAIL: &str = "@example.invalid/p is the address, and the rest of this fake answer goes on for a while so that the end of it is well clear.";
+
+/// A masked resend of a streamed answer: request 0 resends nothing, request 1 (when `made`) is
+/// answered with the long answer in deltas split inside the secret-shaped span, and the last
+/// request resends the answer with that span as 10 stars and a MASK record. With `tool` the
+/// answer also made a tool call; with `tail` the resent tail is not the streamed one.
+fn masked_resend(name: &str, made: bool, tool: bool, tail: Option<&str>) -> PathBuf {
+    rec(name, |e| {
+        call(e, Anthropic, T, &[], Text(0));
+        let (a, b) = (HEAD, "[redacted]");
+        let mut evs = vec![json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": a}})];
+        let rest = [b, TAIL];
+        evs.extend(rest.iter().map(|t| {
+            json!({"type": "content_block_delta", "index": 0,
+                "delta": {"type": "text_delta", "text": t}})
+        }));
+        if tool {
+            evs.push(json!({"type": "content_block_start", "index": 1,
+                "content_block": part(Anthropic, 9)}));
+        }
+        let sse: String = evs.iter().map(|v| format!("data: {v}\n\n")).collect();
+        let msgs = |extra: Vec<Value>| {
+            let mut m = turns(Anthropic, &[Text(0)]);
+            m.splice(2..2, extra);
+            json!({"model": "fake-model", "messages": m})
+        };
+        let path = "/v1/messages";
+        if made {
+            let body = msgs(vec![]);
+            send(e, path, T, &body, ("text/event-stream", sse));
+        }
+        let text = format!("{HEAD}**********{}", tail.unwrap_or(TAIL));
+        let content: Value = if tool {
+            json!([{"type": "text", "text": text}, part(Anthropic, 9)])
+        } else {
+            text.into()
+        };
+        let body = msgs(vec![
+            json!({"role": "assistant", "content": content}),
+            user(Anthropic),
+        ]);
+        let off = body.to_string().find("**********").unwrap() as u64;
+        let rep = reply(Anthropic, Text(7));
+        send_full(e, path, T, &body, rep, (0, Some((off, 10))));
+    })
+}
+
+#[test]
+fn a_masked_resend_of_a_streamed_answer_matches() {
+    let h = verdict(&masked_resend("h-mask", true, false, None), "pass", 0);
+    assert_eq!(missing(&h), (0, 0, 0));
+    assert_eq!(n(&h, "masked_by_ends"), 1);
+}
+
+#[test]
+fn a_masked_resend_whose_call_was_dropped_still_warns() {
+    let h = verdict(&masked_resend("h-mask-drop", false, false, None), "warn", 0);
+    assert_eq!(missing(&h), (0, 1, 0));
+}
+
+#[test]
+fn a_masked_resend_with_a_dropped_tool_call_still_fails() {
+    let h = verdict(&masked_resend("h-mask-tool", false, true, None), "fail", 2);
+    assert_eq!(missing(&h), (1, 0, 0));
+}
+
+#[test]
+fn a_masked_resend_with_a_rewritten_tail_warns() {
+    let tail = format!("{}, changed", &TAIL[..TAIL.len() - 10]);
+    let h = verdict(
+        &masked_resend("h-mask-tail", true, false, Some(&tail)),
+        "warn",
+        0,
+    );
+    assert_eq!(missing(&h), (0, 1, 0));
+    assert_eq!(n(&h, "masked_by_ends"), 0);
 }

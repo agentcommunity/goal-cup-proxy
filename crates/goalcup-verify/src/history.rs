@@ -29,6 +29,17 @@ fn hash(b: &[u8]) -> Key {
     k
 }
 
+/// Bytes kept at each end of an answer text for [`ends`].
+const END: usize = 64;
+
+/// Key of a text's first and last [`END`] bytes (`None` under twice that). The recorder masks a
+/// secret-shaped span in a resent request but not across the streamed deltas of the response, so a
+/// masked resend is matched by its ends, which the mask does not reach.
+fn ends(t: &str) -> Option<Key> {
+    let b = t.as_bytes();
+    (b.len() >= 2 * END).then(|| hash(&[b"ends\0", &b[..END], &b[b.len() - END..]].concat()))
+}
+
 /// A tool-call id's key: letters and digits only, lower case. A harness that sanitises or
 /// re-cases the id when it resends the turn (`call_00_AbC` to `call00AbC`) still matches, and the
 /// key stays one per call, so a dropped call is not covered by another call's response. An id
@@ -40,8 +51,10 @@ fn id_key(id: &str) -> Key {
 }
 
 /// The answer as one assistant turn: its tool-call ids, else (Gemini function calls, no id, and
-/// text) the hash of its whitespace-collapsed text. `None` when it has neither.
-fn turn(m: &Map<String, Value>) -> Option<Turn> {
+/// text) the hash of its whitespace-collapsed text. `None` when it has neither. A text's [`ends`]
+/// key goes to `alt`; when `masked` (the request carried a MASK), the text has stars, and no star
+/// lies in its ends, that key is the turn's key in place of the hash.
+fn turn(m: &Map<String, Value>, masked: bool, alt: &mut Vec<Key>) -> Option<Turn> {
     let s = |k: &str| m.get(k).and_then(Value::as_str);
     let id = |v: &Value, k: &str| v.get(k).and_then(Value::as_str).map(String::from);
     let mut ids: Vec<String> = Vec::new();
@@ -73,7 +86,15 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
         return Some(ids.iter().map(|i| (id_key(i), true)).collect());
     }
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let t = (!text.is_empty()).then(|| vec![(hash(text.as_bytes()), false)]);
+    let e = ends(&text);
+    alt.extend(e);
+    let b = text.as_bytes();
+    let star = |s: &[u8]| s.contains(&b'*');
+    let k = match e {
+        Some(e) if masked && star(b) && !star(&b[..END]) && !star(&b[b.len() - END..]) => e,
+        _ => hash(b),
+    };
+    let t = (!text.is_empty()).then(|| vec![(k, false)]);
     Some(fcs.into_iter().map(|k| (k, false)).collect::<Turn>())
         .filter(|f| !f.is_empty())
         .or(t)
@@ -83,7 +104,9 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
 fn keys_of(v: &Value, keys: &mut HashSet<Key>) {
     match v {
         Value::Object(m) => {
-            keys.extend(turn(m).into_iter().flatten().map(|k| k.0));
+            let mut alt = Vec::new();
+            keys.extend(turn(m, false, &mut alt).into_iter().flatten().map(|k| k.0));
+            keys.extend(alt);
             m.values().for_each(|c| keys_of(c, keys));
         }
         Value::Array(a) => a.iter().for_each(|c| keys_of(c, keys)),
@@ -105,6 +128,7 @@ fn texts(acc: &mut String, keys: &mut HashSet<Key>) {
     let t = t.split_whitespace().collect::<Vec<_>>().join(" ");
     if !t.is_empty() {
         keys.insert(hash(t.as_bytes()));
+        keys.extend(ends(&t));
     }
 }
 
@@ -127,6 +151,8 @@ struct St {
     pend: bool,
     msgs: u64,
     acc: String,
+    /// A MASK record was seen on this request or message.
+    masked: bool,
 }
 
 /// One model request: where it ended, its chain, and its turns new to that chain.
@@ -156,6 +182,8 @@ pub struct Hist {
     /// The anchored (empty) chains, in the order they began.
     zeros: Vec<usize>,
     answers: HashSet<Key>,
+    /// The ends keys that stood in for a masked request turn's hash.
+    ends: HashSet<Key>,
     /// Wall spans of GAPs on streams of model calls: POST requests, their responses, WebSockets.
     gaps: Vec<(u64, u64)>,
     /// Requests skipped: previous-response id only, and undecoded. The compacted turns are
@@ -226,6 +254,13 @@ impl Sink {
                 ..
             } => self.data(*sid, off, (*o, *flags), bytes),
             Record::End { sid, .. } => self.end(*sid, off),
+            Record::Mask { sid, .. } => {
+                if let Some(st) = self.open.get_mut(&(self.boot, *sid))
+                    && matches!(st.role, Role::Req | Role::Up)
+                {
+                    st.masked = true;
+                }
+            }
             Record::Gap {
                 sid,
                 start_wall: a,
@@ -288,6 +323,7 @@ impl Sink {
             pend,
             msgs: 0,
             acc: String::new(),
+            masked: false,
         };
         self.open.insert((b, sid), st);
     }
@@ -330,6 +366,7 @@ impl Sink {
             _ => {}
         }
         if flags & FLAG_FIN != 0 && matches!(st.role, Role::Up | Role::Down) {
+            let masked = std::mem::take(&mut st.masked);
             let (body, hole, n) = (std::mem::take(&mut st.buf), st.hole, st.msgs);
             (st.pend, st.msgs, st.hole) = (false, n + 1, false);
             let (role, op) = (st.role, flags >> 4);
@@ -337,7 +374,7 @@ impl Sink {
                 self.reply(&body);
             } else if role == Role::Up && op == 1 {
                 let id = (self.boot, sid, Some(n));
-                self.message(id, rec_off, (!hole).then_some(&body));
+                self.message(id, rec_off, (!hole).then_some(&body), masked);
             }
         }
     }
@@ -350,7 +387,7 @@ impl Sink {
         match st.role {
             Role::Req if st.pend => {
                 let body = (!st.hole).then_some(&st.buf);
-                if self.message((k.0, sid, None), off, body) {
+                if self.message((k.0, sid, None), off, body, st.masked) {
                     self.cand.insert(k);
                 }
             }
@@ -380,7 +417,7 @@ impl Sink {
     /// A finished request body (`None`: it has a hole). True when its reply is to be read: a
     /// model request, or a body that looks like JSON but could not be decoded (the call is real
     /// and its answer is still an answer).
-    fn message(&mut self, id: Id, off: u64, body: Option<&Vec<u8>>) -> bool {
+    fn message(&mut self, id: Id, off: u64, body: Option<&Vec<u8>>, masked: bool) -> bool {
         let parsed = body.and_then(|b| serde_json::from_slice::<Value>(b).ok());
         let Some(Value::Object(m)) = parsed else {
             let looks = body.is_none_or(|b| b.trim_ascii_start().first() == Some(&b'{'));
@@ -393,7 +430,14 @@ impl Sink {
         else {
             return false;
         };
-        let turns: Vec<Turn> = items.iter().filter_map(|t| turn(t.as_object()?)).collect();
+        let mut alt = Vec::new();
+        let turns: Vec<Turn> = (items.iter())
+            .filter_map(|t| turn(t.as_object()?, masked, &mut alt))
+            .collect();
+        if masked {
+            let used = turns.iter().flatten().filter(|k| alt.contains(&k.0));
+            self.h.ends.extend(used.map(|k| k.0));
+        }
         let ds: Vec<u64> = turns
             .iter()
             .map(|t| {
@@ -518,6 +562,7 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
     let mut chk = Check::new("history_complete", None, Res::Pass, "");
     let (mut checked, mut comp) = (0u64, 0u64);
     let (mut missing_call, mut missing_text, mut unanchored) = (0u64, 0u64, 0u64);
+    let mut by_ends = 0u64;
     let mut th: BTreeMap<&str, (Res, u64)> = BTreeMap::new();
     let mut last: HashMap<usize, u64> = HashMap::new();
     for r in &h.reqs {
@@ -539,6 +584,7 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
                 .map(|k| k.1)
                 .collect();
             if miss.is_empty() {
+                by_ends += u64::from(keys.iter().any(|k| h.ends.contains(&k.0)));
                 continue;
             }
             // The time between the chain's previous request and this one (this one's own time
@@ -625,7 +671,7 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
         chk.why += &tail;
     }
     let facts = json!({"checked": checked, "missing_call": missing_call,
-        "missing_text": missing_text, "unanchored": unanchored, "skipped": skipped,
+        "missing_text": missing_text, "masked_by_ends": by_ends, "unanchored": unanchored, "skipped": skipped,
         "threads": threads, "chains": home.iter().enumerate().filter(|(i, c)| i == *c).count()});
     chk.facts = facts.as_object().cloned().unwrap_or_default();
     chk
