@@ -413,8 +413,9 @@ class Run:
         if not (ready and wait(lambda: ready in self.pane(False), float(h.get("ready_wait", 30)), 2)):
             time.sleep(0 if ready else 30)
         self.seed()  # after the harness's ready text: the harness reads git state while it starts
-        if h.get("pre_keys"):
-            for k in ([h["pre_keys"]] if isinstance(h["pre_keys"], str) else h["pre_keys"]):  # one screen per item
+        keys = self.sec.get("pre_keys") or h.get("pre_keys")  # the case section first, then the harness top level
+        if keys:
+            for k in ([keys] if isinstance(keys, str) else keys):  # one screen per item
                 sh(["tmux", "send-keys", "-t", t, "-l", k.encode().decode("unicode_escape")])
                 time.sleep(3)
         first = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "first-message.txt"))
@@ -600,8 +601,9 @@ class Run:
         self.need("goalcup", started=True)
         self.at(m)
         # the recorder rewrites status.json every second (pipeline/status.rs), so a 0.5 s poll never trails the write
-        base = self.work() or 0
-        quiet = not wait(lambda: (self.work() or 0) > base, 60, 0.5)  # quiet if no new work within 60 s
+        # minute 0 (the smoke prompt): any request written so far counts, the task is still ahead; no wait for a second one
+        base = 0 if m == 0 else (self.work() or 0)
+        quiet = not wait(lambda: (self.work() or 0) > base, 60, 0.5)  # quiet if no work within 60 s
         pid, since = self.kill_rec(m, quiet)
         if not pid:
             raise Step("FAIL", "no live goalcup recorder pid in status.json")
