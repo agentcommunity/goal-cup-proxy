@@ -182,12 +182,14 @@ fn the_root_never_reaches_a_path() {
 }
 
 #[test]
-fn hermes_rows_take_the_state_database_and_no_request_dump() {
+fn hermes_rows_take_no_state_database_and_no_request_dump() {
     let t = tempfile::tempdir().unwrap();
     let home = t.path().join("home");
     fs::create_dir_all(home.join("sessions")).unwrap();
     fs::write(home.join("sessions/request_dump_x.json"), b"{}").unwrap();
-    fs::write(home.join("state.db"), b"SQLite format 3\0").unwrap();
+    for f in ["state.db", "state.db-wal", "state.db.fts_rebuild.lock"] {
+        fs::write(home.join(f), b"SQLite format 3\0").unwrap();
+    }
     let c = connector::load("hermes-cli", None).unwrap();
     let home_s = home.to_str().unwrap();
     let rows: Vec<Row> = c
@@ -207,12 +209,8 @@ fn hermes_rows_take_the_state_database_and_no_request_dump() {
         .iter()
         .map(|f| rows[f.row].root.join(&f.rel))
         .collect();
-    assert!(names.contains(&home.join("state.db")), "{names:?}");
-    assert!(
-        !names
-            .iter()
-            .any(|p| p.to_string_lossy().contains("request_dump"))
-    );
+    // Owner decision 1 Nov: the search index lives in state.db, so none of it is copied.
+    assert!(names.is_empty(), "{names:?}");
 }
 
 #[test]
