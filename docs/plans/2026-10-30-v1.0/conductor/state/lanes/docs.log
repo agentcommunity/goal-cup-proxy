@@ -1,0 +1,200 @@
+08:05Z | docs planner PRD-15 | decision | slice 12 planned: guide, README, RULES+OPERATING usage, SECURITY+CONTRIBUTING+HARNESS-ONBOARDING; four disjoint tasks
+08:06Z | docs readme PRD-15 | start | README rewrite slice 12
+08:06Z | docs guide PRD-15 | start | guide rewrite begun
+08:10Z | docs readme PRD-15 | stop | README done and pushed; guide anchors pending from guide task
+08:11Z | docs guide PRD-15 | seam | guide written 479 lines, committed; box proof next
+08:12Z | docs guide PRD-15 | stop | guide pushed v1.0/prd-15-docs-guide; box greps clean, help/status match; 479 lines vs 450 ceiling
+08:12Z | docs security-contrib PRD-15 | start | branch v1.0/prd-15-docs-security-contrib from prd-15-docs
+08:13Z | docs rules-operating PRD-15 | stop | RULES 458 lines, OPERATING 269; box checks green; pushed v1.0/prd-15-docs-rules-operating
+08:23Z | docs reviewer-A PRD-15 | decision | slice 12 review done: no blocker; fixes for broken links after the moves, pages describing not-built commands, RULES contract mismatches
+08:23Z | docs fixer PRD-15 | start | fixer started on prd-15-docs
+08:26Z | docs fixer PRD-15 | fix | pushed link, contract and trim fixes; linkcheck clean for owned files
+08:26Z | docs reviewerA PRD-15 | start | re-review of prd-15-docs slice 12 after fixes
+08:28Z | docs reviewerA PRD-15 | stop | re-review done: 2 fix, 2 nit open; link check run in box on 34d28567
+08:30Z | docs fixer PRD-15 | fix | N1-N4,B9 fixed, pushed
+08:31Z | docs merge-requester PRD-15 | stop | slice 12 queued as 083109-prd-15-docs, all paths owned
+08:41Z | docs replan PRD-15 | amendment | slice 12 notes added to PRD-15 and PRD-16: HARNESS-SETUP archive waits on sheet repoint, stale guide anchor, docs sizes
+08:44Z | docs builder PRD-15 | stop | AGENTS.md rewritten, pushed v1.0/prd-15-docs-agents-rewrite
+08:44Z | docs architecture-rewrite PRD-15 | stop | rewrote ARCHITECTURE.md, box check run
+08:44Z | docs record-format-wording PRD-15 | start | worktree ready
+08:45Z | docs architecture-rewrite PRD-15 | stop | pushed v1.0/prd-15-docs-architecture-rewrite
+08:45Z | docs record-format-wording PRD-15 | fix | RECORD-FORMAT rewrapped, pushed
+08:47Z | docs merger PRD-15 | stop | merged integration plus 3 task branches, box build/clippy/link tests ok, pushed
+08:51Z | docs fixer PRD-15 | fix | A1-A7 applied, pushed
+08:52Z | docs merge-requester PRD-15 | seam | queued 085213-prd-15-docs
+09:03Z | docs replan PRD-15 | amendment | notes added to PRD-02, PRD-15, PRD-16 after slice 13: docs size, section 5/7 target-shape markers, CI wording
+09:04Z | docs planner PRD-15 | decision | slice 14: RECORD-FORMAT history catch-up, ARCHITECTURE writer marks, AGENTS CI wording, LOCAL-RESEARCH-HANDOFF anchor; prd-15-docs merged with integration
+09:04Z | docs builder PRD-15 | start | record-format-checks-catchup
+09:05Z | docs architecture-agents-marks PRD-15 | stop | pushed v1.0/prd-15-docs-architecture-agents-marks; watchdog run/recover still unmerged
+09:06Z | docs builder PRD-15 | stop | record-format catchup pushed
+09:06Z | docs builder PRD-15 | fix | handoff anchor repointed to guide section 6; anchors checked
+09:06Z | docs merger PRD-15 | start | merging lane
+09:08Z | docs reviewer-A PRD-15 | decision | slice 14 review: no blockers, 3 fixes (safe-token width, threads history null, dropped facts keys)
+09:08Z | docs fixer PRD-15 | fix | A1-A4,B1,B2 fixed, pushed; docs-only, no box run
+09:09Z | docs merge-requester PRD-15 | seam | queued v1.0/prd-15-docs slice 14 as 090944-prd-15-docs
+09:19Z | docs replan PRD-15 | amendment | notes added to PRD-15 and PRD-16 after slice 14: size, remaining nits, open markers
+09:20Z | docs planner PRD-17 | decision | slice: lessons_hosts (N1-N6), lessons_decode (D1-D4,D6), lessons_tls (T1,T2,T4,T5), LESSONS.md upkeep; prd-17-lessons merged with integration
+09:21Z | docs builder PRD-17 | start | lessons_decode worktree created
+09:24Z | docs builder PRD-17 | seam | lessons_hosts.rs N1-N6 green in box, pushed v1.0/prd-17-lessons-lessons-hosts
+09:25Z | docs builder PRD-17 | stop | lessons_decode pushed ff8c9c24, 6 tests green
+09:26Z | docs lessons-md-upkeep PRD-17 | start | edited LESSONS.md, running proof box
+09:27Z | docs builder PRD-17 | seam | lessons_tls.rs T1 T2 T4 T5 pushed on v1.0/prd-17-lessons-lessons-tls, 7 tests pass in box
+09:28Z | docs lessons-md-upkeep PRD-17 | stop | pushed v1.0/prd-17-lessons-lessons-md-upkeep; 79 tests passed at f5a200ae; 15 rows green; HF4 guard cli_commands::second_start_on_one_home_refuses not on integration
+09:38Z | docs merger PRD-17 | stop | lane merged, build/clippy/19 lessons tests pass, pushed
+09:41Z | docs reviewer-A PRD-17 | stop | review of prd-17-lessons slice 1: 19 lessons tests and 16 newly-green guards pass in box at c2c7baa2; no blockers, fixes on L-VR2, L-FW3, T4 key half, D6 record half
+09:42Z | docs fixer PRD-17 | start | fixing review findings A1-A7 B1-B6
+09:44Z | docs fixer PRD-17 | fix | review A1-A4,A6,A7,B1-B3 fixed, B5 trimmed, A5 note: legend no longer names recovery.rs or the Rust/Worker test file homes, so bare file-level names (recovery.rs (PRD-01)) have no stated home; checker author resolve by crates/*/tests/ and server/worker/test/. L-VR2 reopened, L-FW3 second guard added; 20 tests green in box
+09:45Z | docs fixer PRD-17 | fix | A8 L-T5 guard names repointed, pushed
+09:47Z | docs fixer PRD-17 | fix | OWN-1: decode encoders private to lessons_decode.rs; diff touches only lessons tests and LESSONS.md; 20 tests green in box; pushed
+09:48Z | docs merge-requester PRD-17 | seam | queued 094828-prd-17-lessons
+10:00Z | docs replan PRD-17 | amendment | notes added to PRD-17 and PRD-16 after core slice 1: 843 test lines of 3,000 shared, pending items, nits
+10:01Z | docs planner PRD-17 | decision | slice 2: lessons_http1 + lessons_ws at parser layer (serve not on integration), lessons_launch P3-P5 at Shield/harness layer, LESSONS.md upkeep for PRD-02 rows and test nits; connect/serve-halves wait
+10:02Z | docs lessons-http1 PRD-17 | start | begin lessons_http1.rs
+10:02Z | docs lessons-ws PRD-17 | start | lessons_ws.rs slice 2 begun
+10:08Z | docs lessons-ws PRD-17 | stop | lessons_ws.rs pushed; W2-W7,W12,W13 green; K15 left
+10:09Z | docs lessons-http1 PRD-17 | stop | lessons_http1.rs pushed, 9 tests green in box (nextest, clippy, fmt)
+10:10Z | docs lessons-md-upkeep-2 PRD-17 | start | upkeep branch created
+10:10Z | docs lessons-launch PRD-17 | owner question | PRD-14: please add lessons_launch to the heavy binary filter in .config/nextest.toml (lessons_launch.rs on v1.0/prd-17-lessons-lessons-launch)
+10:15Z | docs lessons-md-upkeep-2 PRD-17 | decision | renamed guards repointed: L-R1 to pipeline_guard::a_thousand_guard_episodes_never_latch, L-H7 to proxy_tunnel::bytes_reach_the_peer_before_the_parser_and_sse_before_eof
+10:15Z | docs lessons-md-upkeep-2 PRD-17 | seam | left open on purpose: FW1 (guard test never opens a stream under a full guard), C11 (2000-connection case absent), R6 (needs serve), P14 and HF4 (named tests absent in cli_commands.rs), VR1 (allocation bound unshown), D7 (lessons_decode bomb test not written)
+10:17Z | docs lessons-md-upkeep-2 PRD-17 | stop | pushed v1.0/prd-17-lessons-lessons-md-upkeep-2, 38 rows green at 7e620577, box run 141 tests pass, fmt and clippy clean
+10:19Z | docs lessons-launch PRD-17 | stop | lessons_launch P3-P5 green x5 in box, pushed; SC3 waits for watchdog loop
+10:21Z | docs merger PRD-17 | stop | lane merged, 38 lessons tests pass, build and clippy clean, pushed
+10:35Z | docs fixer PRD-17 | start | fixing review findings A1-A4 B1-B3
+10:43Z | docs fixer PRD-17 | owner question | box runs show a late tty SIGINT can reach the watchdog after Shield::harness_exited gave INT back (helper died of SIGINT in 2 of ~9 loaded runs); PRD-02 owns shield.rs; the P3 test now waits for a line from the pty before giving INT back
+10:44Z | docs fixer PRD-17 | stop | A1-A4, B1-B3 fixed, 12 of 12 box runs green, fmt and clippy clean, pushed; owner question: nextest heavy group for lessons_launch (PRD-14 owns .config/nextest.toml)
+10:45Z | docs fixer PRD-17 | owner question | PRD-14 lane: please add common/encode (gzip, zlib, raw_deflate) and recorder helpers sid_of, end_reason, gap_reasons to tests/common/; PRD-17 keeps private copies until phase 3
+10:48Z | docs fixer PRD-17 | fix | C1 reverted tests/common changes, helpers private; B6/B7 noted; pushed
+10:52Z | docs reviewer-A PRD-17 | owner question | P3 ctrl_c case fails about 1 in 9 box runs at d0719c1f: helper prints 'watchdog alive' after Shield::harness_exited then dies of SIGINT; likely a process-directed ^C still pending on another thread is delivered after SIGINT goes back to default; shield.rs is PRD-02's
+10:53Z | docs fixer PRD-17 | owner question | PRD-02 lane: shield.rs race (pending process-directed SIGINT delivered after harness_exited restores SIG_DFL kills the watchdog in wrap-up, 2 failures in about 18 box runs, helper line 'watchdog alive' then SIGINT). Suggest keep INT/QUIT/TSTP caught until wrap-up ends like HUP, or sigpending/drain before giving back. PRD-17 holds L-P3 back with ignore; remove it after the fix
+10:53Z | docs fixer PRD-17 | stop | A5 held back (ignore, L-P3 open, handed to PRD-02), B6/B7 declined; lessons_launch 3 pass 1 skipped in box; pushed
+10:54Z | docs merge-requester PRD-17 | decision | queued v1.0/prd-17-lessons slice 2 as 105402-prd-17-lessons
+11:05Z | docs replan PRD-17 | amendment | notes added to PRD-17, PRD-16, PRD-02, PRD-14 after slice 2: 2,610 of 3,000 shared test lines used, L-P3 shield race handed to PRD-02, lessons_launch heavy filter to PRD-14
+11:06Z | docs planner PRD-17 | decision | slice 3: FW1 lessons_pipeline, upkeep + gate check 1 dry run, helper dedupe against common; serve, connect, T4 key half still wait (no serve, no run-ca.key writer on integration)
+11:07Z | docs lessons-md-gate PRD-17 | start | gate check 1 dry run box running on c6b0ab56
+11:07Z | docs lessons-md-gate PRD-17 | owner question | PRD-02: who writes rec/run-ca.key? nothing in crates/goalcup/src writes it; proxy/ca.rs only has a comment, so L-T4 key half is blocked
+11:12Z | docs builder PRD-17 | fix | lessons-pipeline-fw1 pushed: lessons_pipeline::open_and_end_survive_a_full_guard (FW1, R2); green 5 of 5 in box; stall hook held the writer for streams opened after the guard filled, nothing unshown
+11:12Z | docs lessons-dedupe-common PRD-17 | decision | no private helper in the four lessons files duplicates tests/common (http1 and ws already call common::recorder; the rest are test-specific wrappers, encoders or pty code); no change; L-P3 stays ignored, shield fix not on integration
+11:18Z | docs lessons-md-gate PRD-17 | stop | check 1 dry run: 37 failing rows, all pending cases or absent files (lessons_connect, serve halves, watchdog_*, pipeline_seal/stall, proxy_restart, cli_continue, HF4 test, L-P3 ignored, SC3); 15 rows flipped green at 0fa43715; branch v1.0/prd-17-lessons-lessons-md-gate pushed
+11:18Z | docs merger PRD-17 | start | merging integration and task branches into prd-17-lessons
+11:20Z | docs merger PRD-17 | stop | pushed daf72b879761d404b34199cacb5f90d2d9e1afba, build clippy and 38 lessons tests pass
+11:22Z | docs reviewer-A PRD-17 | start | review of prd-17-lessons slice 3 at daf72b87, box run of lessons_pipeline
+11:25Z | docs fixer PRD-17 | fix | W2/W7 reopened (relay half pending serve), FW1/R2 name lessons_pipeline guard; FW1 copy of PRD-02 promise: agreement with PRD-02 not recorded, owner may move it into pipeline_guard.rs; box run 16/16 green
+11:26Z | docs merge-requester PRD-17 | seam | queued v1.0/prd-17-lessons slice 3 as 112601-prd-17-lessons
+11:36Z | docs replan PRD-17 | amendment | notes on PRD-17 and PRD-16 after slice 3 (merge 2ad2ed16), lessons tests 2711 of 3000
+11:37Z | docs readme-agents-sync PRD-15 | start | readme and agents sync
+11:38Z | docs readme-agents-sync PRD-15 | stop | pushed v1.0/prd-15-docs-readme-agents-sync
+11:38Z | docs builder PRD-15 | start | final-pass-audit-rest
+11:40Z | docs builder PRD-15 | stop | final-pass-audit-rest pushed
+11:41Z | docs guide-schema-arch-sync PRD-15 | stop | build-state sync pushed on v1.0/prd-15-docs-guide-schema-arch-sync
+11:43Z | docs merger PRD-15 | stop | merged 3 task branches, pushed
+11:44Z | docs fixer PRD-15 | fix | A-1..A-3,B2,B3 fixed, pushed
+11:45Z | docs fixer PRD-15 | fix | A-1..A-3,B2,B3 fixed, pushed
+11:45Z | docs merge-requester PRD-15 | seam | queued v1.0/prd-15-docs as 114547-prd-15-docs (7 owned docs paths, no Cargo.toml)
+14:35Z seam from integrator: PRD-02 slice A adds common::recorder::entry_dir() (kept temp folder) and uses it in lessons_pipeline.rs; ruling OWN-2. Adopt it for any test that runs the real pipeline.
+14:43Z | docs lessons-connect PRD-17 | start | slice 4 lessons_connect.rs
+14:49Z | docs builder PRD-17 | fix | tls-key-d6 pushed, 12 tests green in box
+14:58Z | docs builder PRD-17 | stop | lessons-md-upkeep pushed; gate check 1: 90 names, 15 missing (ignored tests, serve halves pending, files not yet on integration); lessons_connect.rs does not compile (E0716 line 225)
+15:03Z | docs lessons-connect PRD-17 | seam | lessons_connect.rs pushed (11 fast tests + C7 full tier green in box); 411 lines after rustfmt vs ~200 budget, owner question for planner; T3 lives in lessons_connect so L-T3 should point there; C4 OpenSSL hex fixtures absent from tree, rustls hellos used
+15:04Z | docs merger PRD-17 | start | merging prd-17 task branches
+15:14Z | docs merger PRD-17 | stop | pushed d61fdfbc, build/clippy/51 lessons tests pass
+15:17Z | docs reviewer-A PRD-17 | start | review of prd-17-lessons slice 4 against integration, box run of lessons_connect/decode/tls with ignored tests
+15:28Z | docs reviewer-A PRD-17 | stop | slice 4 review done: 25/25 pass in box incl. 120 s C7; C5 test vacuous (probe: upstream gets 2 conns and the partial hello, GAP protocol_other recorded)
+15:30Z | docs fixer PRD-17 | start | fixing review findings A1-A9, B1-B6 on v1.0/prd-17-lessons
+15:32Z | docs fixer PRD-17 | owner question | L-C5: proxy dials upstream before 200 and records a GAP for a partial hello; PRD-03 to change Hello::Closed or owner to amend C5. Test held back with ignore.
+15:37Z | docs fixer PRD-17 | fix | pushed 2f1c44cf, lessons_connect 12 pass in box
+15:39Z | docs merge-requester PRD-17 | seam | queued 153950-prd-17-lessons (all paths owned, no Cargo.toml change)
+15:44Z | docs merge-requester PRD-17 | fix | rustfmt on lessons_connect C5 loop pushed cd4fbeee; requeued 154430-prd-17-lessons
+17:00Z | docs replan PRD-17 | amendment | notes on PRD-17, PRD-16, PRD-14 after slice 4 (merge 2f771304); lessons tests 3462 of 3000 (+15%), decision line accepted
+17:03Z | docs builder PRD-17 | start | http1-serve
+17:03Z | docs builder PRD-17 | start | ws-serve worktree ready
+17:08Z | docs builder PRD-17 | stop | ws-serve pushed v1.0/prd-17-lessons-ws-serve, 14 tests green, lessons_ws +431 lines
+17:13Z | docs builder PRD-17 | stop | decode bomb D7 and SC3 added, green in box, pushed v1.0/prd-17-lessons-decode-bomb-and-sc3
+17:14Z | docs builder PRD-17 | start | lessons-md-upkeep waiting for http1-serve branch; ws-serve and decode-bomb-and-sc3 merged locally
+17:20Z | docs builder PRD-17 | stop | http1-serve pushed, 13 tests green
+17:26Z | docs builder PRD-17 | stop | lessons-md-upkeep pushed; lessons_ total 4314 (cap 3000), box 63 passed 2 skipped; rows stay open until integration-head run
+17:26Z | docs merger PRD-17 | start | lane merge begins
+17:28Z | docs merger PRD-17 | stop | merged 4 branches, box green, pushed
+17:30Z | docs reviewerA PRD-17 | start | review of prd-17-lessons slice 5 serve halves
+17:31Z | docs reviewerA PRD-17 | stop | slice 5 review done: no blockers; D7 guard half not exercised, H2 relay covers 5 of 9 heads, H11 no Host mismatch, K15 rule unchecked, H10 skips Event records
+17:32Z | docs fixer PRD-17 | start | fixing review findings A1-A7,B1-B2
+17:41Z | docs fixer PRD-17 | fix | A1-A7,B1-B3,B7 fixed, 65 lessons tests green in box, pushed
+17:43Z | docs fixer PRD-17 | start | fixing A10 A11 A12 B8
+17:49Z | docs fixer PRD-17 | fix | A10 A11 A12 B8 done, 37 lessons tests green in box, pushed
+17:52Z | docs merge-requester PRD-17 | stop | not queued: branch edits crates/goalcup/tests/proxy_fixtures/mod.rs (PRD-03 owned), no approved seam change in the log
+17:53Z | docs planner PRD-15 | decision | slice 16 planned: start/recorder build-state marks out, recheck RECORD-FORMAT/OPERATING/CONNECTOR-SCHEMA, acceptance greps
+17:53Z | docs builder PRD-15 | start | slice 16 start-marks
+17:53Z | docs format-operating-schema-recheck PRD-15 | start | begin recheck
+17:56Z | docs builder PRD-15 | stop | slice 16 pushed
+17:56Z | docs format-operating-schema-recheck PRD-15 | stop | pushed; RECORD-FORMAT 540, continue marks kept
+17:56Z | docs builder PRD-15 | start | acceptance-greps-rest
+17:59Z | docs builder PRD-15 | stop | acceptance-greps-rest pushed
+17:59Z | docs merger PRD-15 | start | merging integration and task branches
+18:00Z | docs merger PRD-15 | stop | merged 3 task branches, pushed; link, em dash, stale-term checks clean
+18:01Z | docs reviewerA PRD-15 | start | review slice 16 of prd-15-docs
+18:04Z | docs reviewerA PRD-15 | stop | slice 16 review done: 2 fix, 4 nit, no blocker; link check skipped (no new links)
+18:05Z | docs fixer PRD-15 | fix | A1-A6,B1-B3 fixed, pushed
+18:07Z | docs merge-requester PRD-15 | decision | queued merge request 180749-prd-15-docs for v1.0/prd-15-docs
+18:47Z | docs replan PRD-15 | amendment | slice 16 replan: notes in PRD-15 and PRD-16, two prose lines re-wrapped, no seam change
+18:53Z | docs builder PRD-17 | start | lessons-p3-unignore
+18:53Z | docs builder PRD-17 | start | prd02 upkeep worktree ready
+18:55Z | docs builder PRD-17 | fix | L-P3 un-ignored, box 40/40 under load, pushed
+19:14Z | docs builder PRD-17 | stop | prd02 upkeep pushed; 27 rows green at 633a4226, 7 names still missing
+19:16Z | docs merger PRD-17 | stop | merged integration + 2 task branches, box green, pushed
+19:30Z | docs fixer PRD-17 | fix | A1 A2 A3 A4 B1 B2 done; box 184 passed 1 skipped on c39737d9; HF3 reopened
+19:31Z | docs fixer PRD-17 | fix | A5-A8,B2 fixed in LESSONS.md, pushed
+19:32Z | docs merge-requester PRD-17 | decision | queued 193240-prd-17-lessons
+02:06Z | docs replan PRD-17 | amendment | notes on PRD-17, PRD-02, PRD-16, PRD-14 after slice 6 (merge c9b87ac5); lessons tests 4345 of 3000; four guard names still missing
+02:23Z | docs lessons-md-upkeep-3 PRD-17 | stop | head 8dc99969: nextest list 594, run 590/590 pass 4 skipped, Worker 90 pass; 12 rows green (110 green, 50 open); unresolved: watchdog_restart.rs, pipeline_stall.rs, cli_continue.rs, cli_commands::second_start_on_one_home_refuses; green-row grep 150 entries 0 missing; pushed v1.0/prd-17-lessons-lessons-md-upkeep-3
+02:33Z | docs merger PRD-17 | stop | merged integration + md-upkeep-3, box green, pushed
+02:46Z | docs fixer PRD-17 | fix | LESSONS.md review fixes pushed (docs only, no box run)
+02:48Z | docs fixer PRD-17 | fix | A6 A7 A8 B3 applied to LESSONS.md, pushed
+02:49Z | docs merge-requester PRD-17 | stop | queued 024900-prd-17-lessons
+02:57Z | docs replan PRD-17 | amendment | slice 7 replan: notes in PRD-17, PRD-16, PRD-02, PRD-10; lessons tests 4345 of 3000 unchanged; seven rows still wait on four PRD-02/PRD-10 guard names
+02:58Z | docs planner PRD-15 | decision | slice 17: build-state notes and Not built yet marks against merged null mode and deadline end (PRD-02 d8cbed35)
+02:59Z | docs builder PRD-15 | start | operating-upload-recheck
+02:59Z | docs builder PRD-15 | start | build-state-and-arch
+03:00Z | docs builder PRD-15 | stop | pushed v1.0/prd-15-docs-build-state-null-mode; AGENTS.md unchanged (CI sentence already within 100 cols)
+03:00Z | docs builder PRD-15 | stop | operating-upload-recheck pushed
+03:02Z | docs merger PRD-15 | stop | merged integration plus two task branches, box build/clippy/link check pass, pushed
+03:04Z | docs fixer PRD-15 | fix | restored UPLOAD-API.md to integration text, dropped OPERATING upload paragraph, tidied ARCHITECTURE not-built lines
+03:05Z | docs merge-requester PRD-15 | seam | queued 030509-prd-15-docs (slice 17, 3 docs files, no Cargo change)
+03:18Z | docs replan PRD-15 | amendment | slice 17 recheck: README point 3 cell and ARCHITECTURE re-wrap fixed, notes added to PRD-15 and PRD-16, no ledger change
+03:19Z | docs planner PRD-15 | decision | slice 18: RECORD-FORMAT END tail keys and HTTP/2 notes against merged PRD-03 h2.rs; ARCHITECTURE/guide HTTP/2 line
+03:19Z | docs builder PRD-15 | start | slice 18 record-format end tails
+03:19Z | docs builder PRD-15 | fix | slice 18 h2 line added to ARCHITECTURE and PARTICIPANT-GUIDE
+03:19Z | docs builder PRD-15 | fix | slice 18 pushed, link check clean
+03:20Z | docs merger PRD-15 | start | merging lane
+03:20Z | docs merger PRD-15 | stop | pushed 31d9d3ef, box checks clean
+03:22Z | docs fixer PRD-15 | fix | A1-A4 fixed in 3 docs, pushed; docs only, no box run
+03:23Z | docs merge-requester PRD-15 | seam | queued 032334-prd-15-docs (slice 18, docs only)
+03:29Z | docs replan PRD-15 | amendment | slice 18 notes added to PRD-15 and PRD-16: size 2,406 lines (no row), four doc nits queued, no gate effect
+06:55Z | docs planner PRD-17 | start | planning next PRD-17 slice
+06:56Z | docs planner PRD-17 | decision | slice 8: repoint 4 guards (3 exist now, pipeline_stall still missing, PRD-02), run four-check gate in box, record
+06:57Z | docs gate-repoint PRD-17 | decision | repointed L-C12 L-P1 L-P2 L-HF4 L-HF6 L-SC4 to tests read on integration 6fb5db63; pipeline_stall.rs still missing (PRD-02)
+06:58Z | docs gate-repoint PRD-17 | start | gate box job on c4a873cf (list, nextest, worker, 4 checks)
+06:58Z | docs gate-repoint PRD-17 | start | gate box job on c4a873cf (list, nextest, worker, 4 checks)
+07:09Z | docs gate-repoint PRD-17 | stop | gate run on 6fb5db63 code: check1 fails only on pipeline_stall.rs (PRD-02); 620 pass, worker 258 pass; 6 rows green; pushed v1.0/prd-17-lessons-gate-repoint-and-run b1ca1e4f
+07:12Z | docs merger PRD-17 | stop | lane merged, head b1ca1e4f, box green
+07:13Z | docs fixer PRD-17 | fix | A1 A2 A3 B1 B2 applied, pushed v1.0/prd-17-lessons; docs only, no box job
+07:14Z | docs merge-requester PRD-17 | seam | queued 071456-prd-17-lessons
+07:31Z | docs replan PRD-17 | amendment | slice 8 merge: PRD-17/16/02 notes; only gate blocker pipeline_stall.rs (PRD-02), lessons files 4,345 lines vs 3,000 row, nits A4 A5 B2 queued, no ledger change
+07:32Z | docs lessons-nits PRD-17 | stop | nits A4 A5 B2 applied; pipeline_stall.rs still absent, no box job
+07:35Z | docs merge-requester PRD-17 | seam | queued 073517-prd-17-lessons (docs only, paths owned)
+07:47Z | docs replan PRD-16 | amendment | after PRD-17 slice 9 (132a35db): nits A-1/A-2/B2/B3 queued in PRD-17 note, size report 4,345 vs 3,000 in PRD-16 note; no plan change
+07:48Z | docs planner PRD-15 | decision | slice: drop continue/recover not-built notes, describe from PRD-10, four nits; HARNESS-SETUP move stays blocked by hermes sheet link (PRD-11 file)
+07:48Z | docs builder PRD-15 | start | slice 19 guide-readme-operating
+07:50Z | docs builder PRD-15 | stop | slice 19 guide-readme-operating pushed
+07:50Z | docs builder PRD-15 | stop | slice 19 arch-schema-format pushed
+07:52Z | docs merger PRD-15 | stop | merged both task branches, build+clippy ok, pushed 26e25927
+07:54Z | docs fixer PRD-15 | fix | A1-A5 applied, pushed
+07:55Z | docs merge-requester PRD-15 | decision | queued merge request 075519-prd-15-docs for slice 19, all paths owned
+08:08Z | docs replan PRD-15 | amendment | slice 19 merge: PRD-15/16 size notes (2,424 lines docs, no budget row), nits A6 A7 R1 fixed, no plan change
+08:09Z | docs planner PRD-15 | decision | done: acceptance greps, D cites and guide anchors clean on integration; left items wait on PRD-11 sheet repoint (HARNESS-SETUP move), phase 5 pad tiers, newcomer run (PRD-16)
+08:29Z | docs gate-rerun PRD-17 | start | L-R2 repointed to pipeline_stall::a_stalled_writer_exits_75_and_the_next_boot_names_it, gate rerun box job next
+08:43Z | docs gate-rerun PRD-17 | fix | L-R2 renamed to pipeline_stall::a_stalled_writer_exits_75_and_the_next_boot_names_it, green at 18fde505; L-C7 green after gate full pass
+08:43Z | docs gate-rerun PRD-17 | decision | box run: list 626, fast 622/622 pass 4 skipped, full idle_tunnel 1/1 pass, Worker 258 pass, checks 1,2,4 pass, check 3 holds with L-D2 exception; PRD-13 may delete
+08:43Z | docs gate-rerun PRD-17 | stop | pushed v1.0/prd-17-lessons-gate-rerun-pipeline-stall; box --out path was relative and copied nothing, numbers taken from printed output
+08:46Z | docs merger PRD-17 | stop | merged integration + gate-rerun-pipeline-stall, box build/clippy/tests green, pushed; note: first merge attempt hit primary checkout detached HEAD by mistake (cd failed), reset was denied
+08:58Z | docs fixer PRD-17 | fix | LESSONS.md tightened, L-D2 now X: PRD-17 Risks, pushed eb25da86 (docs only, no box job)
+08:59Z | docs requester PRD-17 | stop | queued 085932-prd-17-lessons

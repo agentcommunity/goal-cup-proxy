@@ -1,0 +1,97 @@
+Hermes subagent parent links without state.db: investigation report (2026-11-01)
+Read-only. No repo file changed, nothing committed. Code refs are origin/v1.0/integration @ a31a45e4.
+
+ANSWER: NO. No Hermes file other than state.db carries parent or child SESSION ids. If state.db stops
+being captured, today's subagent check for Hermes (subagents_present, from sessions.parent_session_id)
+skips. Point 2 can still be met at the level of "every delegated task is recorded", using the files
+listed below. That is a weaker proof, and the per-thread split of calls and tokens is lost.
+
+1. What the other native files hold (decoded from the full3 and full4 records in a build box with
+   `goalcup-verify dump --text`. A filter printed only the structure and id-shaped values, so no
+   free text or key was printed. Output: /root/gc-night/hermes-parent/job/filtered.txt)
+
+   connectors/hermes-cli.toml native rows: state (state.db*, final), delegation-manifest
+   (cache/delegation/live/**/manifest.json, snapshot), delegation (cache/delegation/live/**/task-*.log).
+
+   manifest.json (Hermes tools/delegation_live_log.py:272-311 at tag v0.22.5) has these fields:
+     delegation_id ("deleg_<8 hex>"), started, task_count, model, provider, completed,
+     tasks[i].{index, goal (<=500 chars of text), log (absolute path), status, exit_reason, model}
+   It has no session_id, no parent_session_id and no child session id.
+
+   task-<n>.log header (delegation_live_log.py:108-114):
+     "=== Hermes subagent live transcript ===" / "delegation: <id>   task: <n>" / "goal: ..." /
+     "started: <second resolution>". After that comes free-text transcript lines.
+   No line in any task log matches YYYYMMDD_HHMMSS_<6hex> or local-<hex>. The only ids found are
+   the deleg_ ids.
+
+   Hermes's own source agrees: the parent and child session ids exist only in state.db sessions
+   rows and in the in-process `subagent_start`/`subagent_stop` lifecycle hooks
+   (tools/delegate_tool.py:289, :353-358). No file Goal Cup captures writes them. agent.log tags each
+   line with the current session id but logs no parent link, and the connector does not capture it.
+   The wire carries no session id for DeepSeek: prompt_cache_key is sent only to api.openai.com
+   (agent/transports/chat_completions.py:77-116, :257).
+
+2. Present for all 5 subagents in full3 and full4?
+   full3 (entry ef5cf2f48e08998c6), delegation deleg_5fbc8cc6:
+     - manifest snapshots: boot 0 shows task_count 5, all "running"; boot 2 shows all 5 "completed"
+       with exit_reason "completed".
+     - task-0..4.log: native streams in boots 0, 1 and 2 (the recorder was killed twice).
+     - state.db (set 2.2): 5 children, 20261101_131524_{319285,474057,52b126,8b0cfa,f048a4},
+       parent local-3d1c349d...0ed3. This parent id is the main session.
+   full4 (entry e767fe9c3a8f2539b), delegation deleg_b4fdca29: the same pattern, 5/5 completed.
+     state.db children are 20261101_144204_{038d18,593e05,618ce0,791ee4,92278a}, parent
+     local-934731de...9c18.
+   So all 5 subagents appear in both runs: as task index plus delegation id in the manifest and
+   logs, and as session id plus parent only in state.db. The manifest and logs cannot be mapped to
+   session ids. All 5 children start within the same ~130 ms, and the log "started" time has
+   one-second resolution.
+
+3. What dropping state.db costs besides parent links (usage/sqlite.rs is the whole Hermes native leg):
+   - the native call rows (assistant messages.timestamp) used for the time join,
+   - the per-thread split of the wire calls (matched 274/293 and 349/366 today),
+   - sessions token totals and api_call_count.
+   Effects in the checks: threads_match and wire_keeps_up skip ("no native", reason NoNative);
+   history_complete still runs on the wire; usage reports one entry-level bucket instead of 6 threads.
+   PRD-08 R5 ("subagents_present finds the child from parent_session_id") and the PRD-09 section 5
+   Hermes row would need rewording.
+
+4. Smallest reader change if state.db is dropped. This is a path-only parentage reader, the same
+   way Gemini's works.
+   - hints.rs:10-17 and :27: add a Reader::HermesTask variant and the match arm
+       ("hermes-cli", "delegation", _) if file.starts_with("task-") && file.ends_with(".log")
+     That is about 3 lines. Keep or remove the HermesDb arm (:27) depending on whether old records
+     still need reading.
+   - native.rs:106-131 (Open arm): for (StreamKind::Native, Some(Reader::HermesTask)), add the path
+     to a new `hermes_tasks: BTreeSet<String>` field and return without parsing the lines (they are
+     plain text, not JSONL). About 6 lines.
+   - native.rs:198-265 (finish): for each task path "delegation:<deleg>/task-<n>.log", insert
+     thread id "<deleg>/task-<n>" (readable, so it counts as "seen" in legs.rs:446-453) with
+     parent = "<deleg>". The other choice is a fixed "main" parent, because the root session id is
+     unknown. Then add kids[<deleg>] += id. A hermes_task(path) helper sits next to
+     claude_thread/gemini_thread (:471-500). About 15 lines.
+   - native.rs:299-301: children is already Some when owner or kids is non-empty. Check that the
+     Hermes task threads populate kids even when owner is empty. About 1-2 lines.
+   Total about 25 lines of Rust plus a fixture test (one manifest and two task-log streams).
+   legs.rs is unchanged. Result: subagents_present reads children = 5 per run and passes when every
+   task log has a native stream. The manifest part (--harness-files) already checks the log sizes.
+   Caveat: this check is close to tautological. The log stream is the "leg", and no wire call
+   attaches to a subagent.
+   Optional (+~10 lines): read manifest task_count and status. A task the manifest names whose
+   log stream is missing then counts as a missing child, which catches a lost log.
+
+5. Other ways to keep real session-id parent links without state.db (both mean writing more code):
+   a. A Hermes shell hook on `subagent_start` in config.yaml `hooks:` that writes only
+      parent_session_id and child_session_id to a JSONL file in {home}, plus a native row and a
+      reader. Costs: a new config list type in the connector writer, `hooks_auto_accept: true`
+      (otherwise Hermes shows a first-use prompt), and a filter that drops child_goal (participant
+      text). It also changes how the participant's harness behaves.
+   b. A wire-side link: the parent's delegate_task tool-call arguments matched against the
+      children's first user turn. This gives no session ids and needs heuristic text matching.
+   c. Keep state.db but fix the leak at source (for example, read sessions and messages metadata in
+      the recorder and upload only a derived table, or exclude the FTS shadow tables). This keeps
+      the time join and the tokens. It is the change that matters most for PRD-09, but it is not a
+      reader-only change.
+
+Recommendation: if the Friday scope is "cut", drop state.db and add the path-only HermesTask
+reader (section 4, about 25 lines). Accept that Hermes subagents are proven by their delegation
+logs, not by session parentage. Reword PRD-08 R5 and the PRD-09 Hermes row to match.

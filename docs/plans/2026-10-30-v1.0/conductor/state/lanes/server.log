@@ -1,0 +1,7 @@
+02:26Z | server planner PRD-07 | decision | next slice: open accepts repo_url null (or absent) for mode test only, stored as empty string (runs.repo_url is NOT NULL in the website db); GitHub checks skipped for that run; UPLOAD-API test-runs paragraph; branch v1.0/prd-07-worker merged with integration and pushed
+02:27Z | server builder PRD-07 | start | slice 5 test run null repo
+02:28Z | server builder PRD-07 | stop | slice 5 pushed v1.0/prd-07-worker-test-run-null-repo, box npm test 258/258 pass
+02:30Z | server merger PRD-07 | stop | merged test-run-null-repo (ff), box typecheck+258 tests pass, pushed
+02:31Z | server reviewer-A PRD-07 | decision | slice 5 (test-mode null repo_url) reviewed: no blockers, worker tests 258/258 pass in box at ac2b5a7d
+02:33Z | server merge-requester PRD-07 | seam | queued 023350-prd-07-worker (repo_url optional for test mode)
+02:39Z | server replan PRD-07 | amendment | notes after slice 5 on PRD-07, PRD-10 (CLI sends null repo for start --test), PRD-16 (size src 3566/3440, tests 5380/4950, under 10%)

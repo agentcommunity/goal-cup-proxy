@@ -1,0 +1,58 @@
+C4 (server copy equals local copy) refetch, 12 goalcup 1.0 staging runs. 2026-11-01.
+Worktree /root/gc-wt/c4 at origin/v1.0/integration cee85bdc (detached, clean, nothing committed).
+Fetch: here, sh scripts/fetch-run.sh --bucket goalcup-traces-staging --index dbfetch/idx/<run>.json <run> c4/<run>
+  (CLOUDFLARE_* read from env by fetch-run; no DATABASE_URL used). Logs logs/fetch-*.{out,err}: all exit 0, stderr empty.
+Verify: build box purple-many-landfowl-rPCfV9 (no key, no token), goalcup-verify release built from cee85bdc
+  (sha256 994858d5...4284; the rungs/build binary is 611d7a7d and differs in report.rs counts.hosts/tunnel_hosts, so rebuilt).
+  Per run in the box: check --json --server fetched/<entry> -> verify/check-server.json; usage fetched/<entry> --json
+  --out verify/usage; then integration scripts/pad/check.py on the run folder (pad-out copy + fetched/<entry>/).
+  Outputs: out/runs/<run>/ (row.json, report.txt, verify/*; row.before.json = the earlier row), out/alt/<run>/ (variant below).
+  keyscan (9 keys) of stage/, jobs/, out/: 0 hits.
+
+BLOCKER FOR C4, ALL 12 ROWS: the local part files no longer exist. The pad boxes (pad-f63b6a ... pad-33dc73, pad-f8e194) were
+  removed at cleanup; pad-out holds only reports, not rec/. sbx list shows none of them alive. So server_equals_local (PRD-08
+  line 277: SHA-256 of rec.gcr.zst vs the concatenated local part files) cannot run: it is skip "no --local entry with this
+  entry id", and check.py (PRD-12 line 635: a skip on server_equals_local is FAIL) gives C4 FAIL on every row.
+  OWNER PRD-12 rig: scripts/pad/pad runs fetch -> check -> cleanup in one pass and cleanup (pad:677-689) removes the box even
+  when fetch failed, so a later refetch can never complete C4. Fix: keep the entry's rec/ (pull it out with the copy-out, or
+  keep the box) when fetch fails, or make a refetch rerun before rm.
+SUBSTITUTE EVIDENCE (not the C4 check, but what it would prove), every row holds all of:
+  - fetch-run: every chunk's SHA-256 matches its object and the index; chain unbroken; complete true, missing null, final set.
+  - server_chunks_whole pass (every chunk head = the head the verifier recomputes from the fetched bytes at its last_seq).
+  - server_counts_match pass (server row and last heartbeat = the seal totals).
+  - fetched final head = the local uploader's confirmed head (watch/upload.jsonl confirmed.hash, chunk.rs:100 = local pos.head)
+    at the same seq and raw offset. The LINK chain (format link.rs) hashes every raw byte, so the server copy holds the same raw
+    record as the local part files up to the final LINK.
+  - rec.gcr.zst size = local check bytes.compressed exactly; upload_offset = local bytes.raw; fetched next_seq = local links;
+    uploader sent chunks/bytes = index chunks/bytes; pruned 0; keep true (start event and upload.json).
+  - goalcup-verify check on the fetched copy gives the same result as the local check on every check id (secrets not run in
+    the box: no known file) and identical counts and seal reason.
+  So: raw-equal by hash chain and compressed length equal; compressed byte-equality not provable without the local parts.
+
+TABLE (fetch: chunks / bytes / sha | C1 C2 C3 C4 C5 C6 official | usage facts for C2/C5)
+rung run               harness entry              fetch            C1  C2  C3  C4   C5  C6  faults  usage (threads/with parent, models, unattributed)
+R2b  r8a5e602df2c805eb claude  ef3df084cb241e263  3 / 287532 / ok  PASS INC PASS FAIL PASS PASS  -    1/0, haiku+opus, 0     C2 INC "no thread with a parent" (smoke, no subagent asked)
+R2b  refe68476af825198 codex   e7c192344387fe275  3 / 217489 / ok  PASS INC PASS FAIL PASS PASS  -    2/0, gpt-6.1-sol, 0    C2 INC same
+R3   rba2255ed466ac959 claude  efe9511816cfb3346  2 / 303745 / ok  PASS PASS PASS FAIL PASS PASS -    2/1, haiku+opus, 0
+R3   r13453cd1eafd5d33 codex   ed02431489912b3bb  3 / 252051 / ok  PASS PASS PASS FAIL PASS PASS -    3/1, gpt-6.1-sol, 0
+R4   rc304eced1052086d claude  ec591edc3664615f3  4 / 311783 / ok  PASS PASS PASS FAIL PASS PASS FAIL 2/1, haiku+opus, 0     faults: gap 3101 ms not under 2 s (F1)
+R4   re3adf2446df774e2 codex   ef82b5272e212c670  5 / 304289 / ok  PASS PASS PASS FAIL PASS PASS FAIL 3/1, gpt-6.1-sol, 0    faults: gap 31748 ms, no work after kill, wait-recovery (F1)
+R6   r8ee90dc54d9093e5 claude  e144062c7e531920b  3 / 312475 / ok  PASS PASS PASS FAIL PASS PASS -    2/1, haiku+opus, 0
+R6   rd372c18ff56b476d codex   eb1bca6687e52bc10  3 / 358654 / ok  PASS PASS PASS FAIL PASS PASS -    3/1, gpt-6.1-sol, 0
+R8   rbafb0924d10ae04e claude  efe4c9f3122614859  3 /  45499 / ok  INC  PASS PASS FAIL INC  PASS -    2/1, opus (native only), 0
+R8   r62029c33e4810e3f codex   eb82fc323351a6e36  3 / 201765 / ok  INC  PASS PASS FAIL INC  PASS -    2/1, gpt-6.1-sol (native only), 0
+R9   r3b75beb473458986 claude  eaf242ea701cdd79f  2 / 306782 / ok  PASS PASS PASS FAIL PASS PASS -    2/1, haiku+opus, 0
+R9   rf20e6da8af05bf19 codex   e7d3ebb52f98c345e  3 / 253747 / ok  PASS PASS PASS FAIL PASS PASS -    3/1, gpt-6.1-sol, 0
+C4 evidence on every row: server_chunks_whole pass, server_counts_match pass, server_equals_local skip "no --local entry with
+  this entry id" -> check.py "C4 FAIL: server_equals_local skip". No differing offset or seq anywhere (fetch and chain clean).
+C2/C5 moved from INCONCLUSIVE to PASS on 8 rows (R3/R4/R6/R9) from the usage summary of the fetched copy.
+
+R8 (dodger) C1 and C5 INC: check-local.json was made by the 611d7a7d verifier, which leaves counts.hosts/tunnel_hosts out
+  (old F3, OWNER PRD-08, fixed on integration in report.rs). check.py: "counts.tunnel_hosts not in the report",
+  "fewer than 2 model calls and pinned tunnels". VARIANT out/alt/: the fetched copy's report (integration verifier, same raw
+  record by the chain head) as the local report: R8 C1 PASS, C5 PASS on both. Every other row's C1-C6 is the same in the variant.
+Other carried items, unchanged: F1 (R4, PRD-12 rig), F2 (R8 wait_calls, PRD-12 rig), F4 (R8 end-screen wording, PRD-10).
+Observations (no failure): Claude rows history_complete warn "resends answer N (text): text not found in any response"
+  (PRD-08/PRD-09); Codex rows listed_hosts_decrypted warn, long tunnel to unlisted ab.chatgpt.com; Codex rows have
+  calls_without_usage (unknown status) on the wire with tokens from native; usage unattributed 0 everywhere.
+No owner failure found in PRD-07 Worker, PRD-06 uploader, PRD-01 format or fetch-run: all server copies are whole and match.
