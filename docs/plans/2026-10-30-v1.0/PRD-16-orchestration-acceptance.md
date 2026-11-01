@@ -2573,3 +2573,9 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** none on order or seams. The `gsk_`/`sgamp_` owner question stays open and only removes rows if
   answered no. Open PRD-05 nits (`;` ending, AQ. name starred, 16 KiB fail-closed cases) are recorded in the PRD-05
   note. PRD-08 and PRD-12 notes added. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-08 Gemini native parent reader (merge 27341339)
+
+- **Size report, PRD-08** (`wc -l` on integration): `crates/goalcup-verify/src` 7,136 lines (of which `src/usage/` 2,944, owned by PRD-09 apart from the Gemini hunks) against the PRD-00 "Size budget" row 1,400; tests `crates/goalcup-verify/tests` 5,207 against 1,100. This slice added about 82 source and 192 test lines; the overage comes from earlier slices. Reported, not cut; carry to the end-of-build report.
+- **Review:** one nit (N1), the unique-match filter in the `hit` closure of `usage/native.rs` could be a plain `find`. Taste only, not a defect, left as is.
+- **Gate effect:** none on order or seams. Gemini thread links now come from the chat file path layout, with the wire-thread fallback when the file carries no id. No locked ledger item is touched.
