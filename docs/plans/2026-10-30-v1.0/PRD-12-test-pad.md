@@ -1946,3 +1946,9 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 - `scripts/fetch-run.sh` itself is not changed (PRD-07's file); the pad extracts its SQL block at run time.
 - Left for code slices, no PRD text change: the SecretCheck docstring remark, and A12 (the kimi header comment).
 - The files list ("Files it owns") already covers everything this slice touches.
+
+### 2026-11-01, replan after slice 14 (merge 40a32e51)
+
+- **Slice 14 is in** (P0a fetch through a short-lived DATABASE_URL-only box, P0b rec kept on failed fetch only when the wipe finished, G1 per-case pre_keys, G3 rung 4 kill@0). Review rounds fixed A1 to A9 and B1 to B11. No PRD text change needed.
+- **Open nits for any later pad slice, none a blocker.** A10: test_rec_is_not_kept_when_the_wipe_did_not_finish in test_pad_fetch.py asserts the cleanup wording; drop that assertIn and assert that no rec-kept folder exists (ledger B10: no wording asserts). B12: in step_cleanup the condition result == "ok" is spelled twice in the first try block; tidy only. Earlier open nits still stand: A12 (kimi header comment) and the SecretCheck docstring remark.
+- No locked ledger item is touched.
