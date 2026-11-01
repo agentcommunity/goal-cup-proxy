@@ -46,6 +46,7 @@ class Fetch(unittest.TestCase):
             with open(argv[argv.index("--file") + 1]) as f:
                 self.sent_sql = f.read()
         if verb == "get" and argv[4].startswith("~/idx/"):
+            os.makedirs(os.path.dirname(argv[-1]), exist_ok=True)  # as sbx get does
             with open(argv[-1], "w") as f:
                 f.write("[]")
         if verb == "get" and "rec-kept" in argv[4]:
