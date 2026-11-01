@@ -1511,12 +1511,12 @@ is left is data and docs only. Four items, in order:
 
 ### 2026-11-01, owner answer: Hermes keeps state.db capture
 
-The owner answered on 1 November that Hermes keeps the `state` native row (point 2). The leak risk from bare keys in `state.db` is covered by PRD-05 exact-value masking (sources 1 to 3).
+The owner answered on 1 November that Hermes keeps the `state` native row (point 2). `state.db` is masked by the pattern rules (M1) before disk. Exact-value masking of harness or environment keys is not in the default build (owner question 3), so a key with no known shape inside `state.db` is not masked. This residual risk is raised to the owner, not called covered.
 
 The earlier plan to drop the row is abandoned, not merged: branch `v1.0/prd-11-connectors` with its drop commits, and the 1 November note about the search index. Nothing from that branch is reused.
 
 The `state.db` drop is parked until a separate Hermes subagent reader exists (the PRD-09 delegation manifest reader replacing the `HermesDb` read of parents and children in goalcup-verify). Only then can the row be revisited, and only by a new owner decision.
 
-On integration, `connectors/hermes-cli.toml` and the native row are unchanged. The comment above `secret_files` and the section 5 statement of `docs/harnesses/hermes-cli.md` are the only changes of this slice. The open items A1 and R1 from the drop review are void because the drop is not made.
+On integration, `connectors/hermes-cli.toml` and the native row are unchanged. The comment above `secret_files` and the section 4 and 5 statements of `docs/harnesses/hermes-cli.md` are the only changes of this slice. The open items A1 and R1 from the drop review are void because the drop is not made.
 
-No locked ledger item is touched and no owner question comes from this slice.
+No locked ledger item is touched. One owner question is raised: the residual risk of unmasked keys in `state.db`.
