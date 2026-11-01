@@ -21,16 +21,8 @@
 //! `GH_TOKEN` (1), the credential-named variables of the harness environment goalcup builds
 //! (2, [`env_values`]) and the other credential-named values of the project's key files (3).
 //! Sources 2 and 3 pass the one name gate ([`gated`]). A harness key-file value (source 4) is
-//! not built: it is left out and counted in `skipped`.
-//!
-//! Order and the cut: the readers ([`workspace_values`], [`launch_values`]) take `GH_TOKEN`
-//! first, then the other key-file values, then the environment values, so the values the
-//! participant keeps in `.env` win the cut on a busy shell. In the reader, before anything
-//! reaches the first control line, a value equal to an earlier one is dropped uncounted, the
-//! first [`MAX_VALUES`] distinct values are kept, and the number left out travels as one
-//! count-only entry ([`SecretValue::left_out`]) that [`RunSecrets::new`] adds to `skipped`.
-//! So the first control line holds at most 33 entries of at most 256 bytes each, far below
-//! `watchdog::MAX_LINE`, whatever the size of the key files.
+//! not built: it is left out and counted in `skipped`. The readers order, dedupe and cut the
+//! values before the first control line ([`finish`]).
 
 use super::{SecretValue, ValueCounts, ValueSource};
 use regex::bytes::Regex;
@@ -249,27 +241,24 @@ impl std::fmt::Debug for RunSecrets {
 
 impl RunSecrets {
     /// The forms of `values`, compiled, and the counts for the start event. A count-only entry
-    /// ([`SecretValue::left_out`], the readers' cut) adds its count to `skipped` and is otherwise
-    /// ignored. A value equal to an earlier one is dropped and counted nowhere. A harness value (source 4, not built), an
-    /// unusable value, one of whose forms does not compile, and every value past [`MAX_VALUES`]
-    /// used values is left out and counted in `skipped`.
+    /// ([`SecretValue::left_out`], the readers' cut) adds its count to `skipped`. A value whose
+    /// bytes equal one already compiled adds nothing and is counted nowhere. A harness value
+    /// (source 4, not built), an unusable value, a value with a form that does not compile, and
+    /// every value once [`MAX_VALUES`] are in use are counted in `skipped`.
     pub(crate) fn new(values: &[SecretValue]) -> (RunSecrets, ValueCounts) {
         let mut counts = ValueCounts::default();
         let mut forms: Vec<(Vec<u8>, Regex)> = Vec::new();
-        for (i, value) in values.iter().enumerate() {
+        let mut used: HashSet<&[u8]> = HashSet::new();
+        for value in values {
             if value.left_out > 0 {
                 counts.skipped = counts.skipped.saturating_add(value.left_out);
                 continue;
             }
-            if values[..i]
-                .iter()
-                .any(|earlier| earlier.bytes() == value.bytes())
-            {
+            if used.contains(value.bytes()) {
                 continue;
             }
-            let used = counts.workspace.saturating_add(counts.env);
             let compiled = (value.source() != ValueSource::Harness
-                && used < MAX_VALUES as u32
+                && used.len() < MAX_VALUES
                 && is_usable(value.bytes()))
             .then(|| compile(value.bytes(), &forms))
             .flatten();
@@ -277,6 +266,7 @@ impl RunSecrets {
                 counts.skipped = counts.skipped.saturating_add(1);
                 continue;
             };
+            used.insert(value.bytes());
             forms.append(&mut new);
             match value.source() {
                 ValueSource::Env => counts.env += 1,
@@ -318,9 +308,8 @@ const TOKEN_VARIABLE: &str = "GH_TOKEN";
 /// The key file the guide tells the participant to keep it in.
 const TOKEN_FILE: &str = ".env.local";
 
-/// The exact values of the project at `project`: the `GH_TOKEN` value first (source 1), then
-/// every other credential-named value of its key files (source 3), all `workspace`. Deduped and
-/// cut at [`MAX_VALUES`] here, before the first control line ([`finish`]).
+/// The exact values of the project at `project`: the `GH_TOKEN` value (source 1), then every
+/// other credential-named value of its key files (source 3), all `workspace`, through [`finish`].
 pub fn workspace_values(project: &Path) -> Vec<SecretValue> {
     let (token, others) = key_file_values(project);
     finish(token.into_iter().chain(others))
@@ -335,19 +324,21 @@ pub fn env_values(env: &BTreeMap<String, String>) -> Vec<SecretValue> {
         .collect()
 }
 
-/// Every exact value of a launch: `GH_TOKEN` (source 1), then the other key-file values
-/// (source 3), then the environment values (source 2), so a `.env` value is kept ahead of an
-/// environment value at the cut. Deduped and cut at [`MAX_VALUES`] here, before the first
-/// control line ([`finish`]): a value in both the environment and `.env` counts once, as
-/// `workspace`.
+/// Every exact value of a launch: [`workspace_values`] then the environment values (source 2),
+/// through [`finish`].
 pub fn launch_values(project: &Path, env: &BTreeMap<String, String>) -> Vec<SecretValue> {
     let (token, others) = key_file_values(project);
     finish(token.into_iter().chain(others).chain(env_values(env)))
 }
 
-/// What a reader sends: `values` in order, a value whose bytes equal an earlier one dropped
-/// uncounted, the first [`MAX_VALUES`] distinct values kept, and when any were left out one
-/// count-only entry ([`SecretValue::left_out`]) with their number, so `skipped` stays right.
+/// What a reader sends on the first control line. The order is `GH_TOKEN`, the other key-file
+/// values, then the environment values, so the values the participant keeps in `.env` win the
+/// cut on a busy shell. A value whose bytes equal an earlier one is dropped uncounted (a value in
+/// both the environment and `.env` counts once, as `workspace`), the first [`MAX_VALUES`]
+/// distinct values are kept, and when any were left out one count-only entry
+/// ([`SecretValue::left_out`]) carries their number into `skipped`. So the line holds at most 33
+/// entries, each at most 256 value bytes (twice that when every byte is a JSON-escaped `"` or
+/// `\`), well below `watchdog::MAX_LINE` whatever the size of the key files.
 fn finish(values: impl IntoIterator<Item = SecretValue>) -> Vec<SecretValue> {
     let mut kept: Vec<SecretValue> = Vec::new();
     let mut seen: HashSet<Vec<u8>> = HashSet::new();
@@ -368,34 +359,48 @@ fn finish(values: impl IntoIterator<Item = SecretValue>) -> Vec<SecretValue> {
     kept
 }
 
-/// The key files (`.env`, and `.env.` and anything) are read by name, `.env.local` first. The
-/// first that holds a `GH_TOKEN=` line gives its last such line's value when it is usable
-/// ([`is_usable`]). Every other line of every key file whose name and value pass [`gated`]
-/// gives one more value. Nothing is ever printed.
+/// The key files (`.env`, and `.env.` and anything) that are regular files, symlinks followed,
+/// so a FIFO or a device never blocks start. They are read in order: `.env.local` first, example
+/// and sample files last, the rest by name. The first that holds a non-empty `GH_TOKEN=` line
+/// gives its last such line's value when it is usable ([`is_usable`]). Every line of every key
+/// file whose name and value pass [`gated`] gives one more value, an older `GH_TOKEN` included.
+/// Nothing is ever printed.
 fn key_file_values(project: &Path) -> (Option<SecretValue>, Vec<SecretValue>) {
     let Ok(entries) = std::fs::read_dir(project) else {
         return (None, Vec::new());
     };
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|t| t.is_file()))
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .filter(|name| is_key_file(name))
+        .filter(|name| std::fs::metadata(project.join(name)).is_ok_and(|m| m.is_file()))
         .collect();
-    names.sort_by_key(|name| (name != TOKEN_FILE, name.clone()));
+    names.sort_by_key(|name| {
+        let example = name.contains("example") || name.contains("sample");
+        (name != TOKEN_FILE, example, name.clone())
+    });
     let texts: Vec<String> = names
         .iter()
         .filter_map(|name| std::fs::read_to_string(project.join(name)).ok())
         .collect();
-    let token = texts
+    let files: Vec<Vec<(&str, &str)>> = texts
         .iter()
-        .find_map(|text| token_in(text))
-        .filter(|value| is_usable(value.as_bytes()))
-        .map(|value| SecretValue::new(ValueSource::Workspace, value.into_bytes()));
-    let others = texts
+        .map(|text| text.lines().filter_map(pair_in).collect())
+        .collect();
+    let token = files
         .iter()
-        .flat_map(|text| text.lines().filter_map(pair_in))
-        .filter(|(name, value)| *name != TOKEN_VARIABLE && gated(name, value))
+        .find_map(|pairs| {
+            pairs
+                .iter()
+                .rev()
+                .find(|(name, value)| *name == TOKEN_VARIABLE && !value.is_empty())
+        })
+        .filter(|(_, value)| is_usable(value.as_bytes()))
+        .map(|(_, value)| SecretValue::new(ValueSource::Workspace, value.as_bytes().to_vec()));
+    let others = files
+        .iter()
+        .flatten()
+        .filter(|(name, value)| gated(name, value))
         .map(|(_, value)| SecretValue::new(ValueSource::Workspace, value.as_bytes().to_vec()))
         .collect();
     (token, others)
@@ -406,17 +411,9 @@ fn is_key_file(name: &str) -> bool {
     name == ".env" || name.starts_with(".env.")
 }
 
-/// The value of the last `GH_TOKEN=` line of a key file.
-fn token_in(text: &str) -> Option<String> {
-    text.lines()
-        .rev()
-        .filter_map(pair_in)
-        .find(|(name, value)| *name == TOKEN_VARIABLE && !value.is_empty())
-        .map(|(_, value)| value.to_string())
-}
-
-/// The name and value of one `NAME=value` line of a key file: `export ` before it and one pair
-/// of quotes around the value are allowed. A `#` comment line has no pair.
+/// The name and value of one `NAME=value` line of a key file: `export ` before it, one pair of
+/// quotes around the value and a ` #` comment after it are allowed (a usable value holds no
+/// space, so the cut never shortens one). A `#` comment line has no pair.
 fn pair_in(line: &str) -> Option<(&str, &str)> {
     let line = line.trim();
     let line = line.strip_prefix("export ").unwrap_or(line).trim_start();
@@ -426,7 +423,7 @@ fn pair_in(line: &str) -> Option<(&str, &str)> {
     if name.is_empty() || !name.bytes().all(is_name) {
         return None;
     }
-    let value = value.trim();
+    let value = value.split_once(" #").map_or(value, |(value, _)| value).trim();
     let unquoted = ['"', '\'']
         .iter()
         .find_map(|q| value.strip_prefix(*q)?.strip_suffix(*q))

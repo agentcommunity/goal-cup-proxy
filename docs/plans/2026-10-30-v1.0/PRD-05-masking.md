@@ -402,7 +402,8 @@ candidates.
   segment at most 15 bytes and one segment holding a letter `g` to `z`, is refused. A model id such as
   a dated model name, or a host name, under a credential-named key would otherwise be starred in every
   request and break PRD-09's usage reader. This is a stated over-skip: a real secret of that form is
-  not masked by value.
+  not masked by value, for example a lowercase passphrase with dashes under `PASSWORD`, or a
+  lowercase key such as `abcd-efgh-ijkl`.
 
 Why the name gate also covers `secret_files` (new in revision 2): PRD-11 collects "every string value of
 16 bytes or more" from those files. Harness settings files hold model names, base URLs and paths
@@ -638,7 +639,8 @@ Automated tests that guard them (few, each named for its promise):
   URL or a path; the synthetic settings file gives its keys and not its model name or base URL; order
   and dedupe across the four sources; past 32 the rest are `skipped`; a model id or host-like value
   is refused and not counted; 200 gated values and a 64 KiB `.env` both start, with the serialized
-  values at most 16 KiB.
+  values below `MAX_LINE` (at most 33 entries of 256 value bytes, twice that when every byte is a
+  JSON-escaped `"` or `\`).
 - `mask_corpus.rs`: over the copied fixtures, new spans only where listed (today's known-catches rule,
   `redaction.rs:615-720`), and the Codex rollout with `encrypted_content` passes byte for byte except
   guarded spans right after a `-`, which are listed as known catches while the class lacks `-`.
@@ -1053,5 +1055,27 @@ A1 reports it as a stated loss instead of failing on it.
   broken by a model id such as a dated model name under a credential-named key. Refused values are
   not counted in `skipped`.
 - **Acceptance.** Two new tests in `mask_values.rs`: 200 gated values and a 64 KiB `.env` both start,
-  with the serialized values at most 16 KiB, so the first control line stays under `MAX_LINE`.
+  with the serialized values below `MAX_LINE` (at most 33 entries of 256 value bytes, twice that
+  when every byte is a JSON-escaped `"` or `\`).
 - No locked ledger item is touched.
+
+### 2026-11-01, review fixes of the cut slice
+
+- **Every `GH_TOKEN` line is a value.** The first key file with a non-empty `GH_TOKEN` gives the
+  first value; every other usable `GH_TOKEN` line (an older one in `.env`, an earlier one in the same
+  file) passes the gate as any other credential-named line and is masked too.
+- **Key files are regular files.** Only names whose metadata, symlinks followed, is a regular file
+  are read, so a FIFO or a device named `.env.*` never blocks `start`; a symlinked `.env` is read.
+  Example and sample files come last in the order, so their placeholders never take a slot ahead of
+  `.env.production` or the environment.
+- **Inline comments.** A ` #` comment after a value is cut off. A usable value holds no space, so
+  the cut never shortens one.
+- **The masker's dedupe** skips only a value whose bytes are already in use, so a value sent after an
+  unused twin (a harness value, one that failed to compile) is still used.
+- **Line bound.** The serialized values stay below `MAX_LINE`; the earlier "at most 16 KiB" held only
+  for values without `"` or `\`.
+- **Left open for the conductor.** `start`, `continue` and `recover` still call `workspace_values`;
+  source 2 reaches the masker only when the PRD-12 C3 change switches them to `launch_values`. The
+  count-only entry stays inside `Vec<SecretValue>` because S17 owns the wire shape; carrying the
+  count beside the list is a seam question. PRD-10's participant text should name the name-gate
+  over-skip.

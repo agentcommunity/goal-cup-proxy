@@ -76,10 +76,11 @@ pub enum ValueSource {
 /// One exact secret value. It crosses the first control line (S17) and is never written,
 /// hashed or logged. `Debug` prints the source and `left_out` only.
 ///
-/// On the wire `bytes` is a JSON string: a used value is printable ASCII
-/// (`values::is_usable`), so it round-trips exactly, and a value that is not UTF-8 was never
-/// usable and stays unusable in its lossy form. One count-only entry ([`SecretValue::left_out`]) carries the number of
-/// values a reader left out past the guard of 32, so the start event's `skipped` stays right.
+/// On the wire `bytes` is a JSON string. A used value is printable ASCII (`values::is_usable`),
+/// so it round-trips exactly; a value that is not UTF-8 becomes U+FFFD in its lossy form, which
+/// is not printable ASCII, so it stays unusable. One count-only entry
+/// ([`SecretValue::left_out`]) carries the number of values a reader left out past the guard of
+/// 32, so the start event's `skipped` stays right.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SecretValue {
     source: ValueSource,
@@ -163,12 +164,10 @@ impl Masker {
     /// `run_secret` or `fail_closed`, is `MaskError::Rule`. A value that cannot be used is
     /// skipped and counted in `skipped`, never an error. `workspace` and `env` values are used
     /// (the readers apply the section 9 name gate, so a model name or a base URL never arrives);
-    /// a `harness` value (source 4, not built) is counted in `skipped`. The readers
-    /// ([`launch_values`], [`workspace_values`]) already drop duplicates and cut at 32 before the
-    /// first control line, and send the cut as one count-only entry, which adds its count to
-    /// `skipped`. The same dedupe and guard run here again for any other caller: a value equal
-    /// to an earlier one is dropped and counted nowhere; past 32 used values the rest are
-    /// `skipped`.
+    /// a `harness` value (source 4, not built) is counted in `skipped`. The readers order, dedupe
+    /// and cut the values before the first control line; a count-only entry adds its count to
+    /// `skipped`. Here a value equal to one already used is counted nowhere, and past 32 used
+    /// values the rest are `skipped`.
     pub fn new(rules: &[MaskRule], values: Vec<SecretValue>) -> Result<Masker, MaskError> {
         let policy = stream::Policy::new(rules, &values)?;
         let mut names = meta::Names::default();

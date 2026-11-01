@@ -108,38 +108,90 @@ fn the_gh_token_is_masked_in_every_form_whole_and_streamed() -> Res {
     Ok(())
 }
 
+/// Whether every byte of `value` is starred by `m`.
+fn masks(m: &Masker, value: &str) -> bool {
+    m.mask_whole(value.as_bytes()).bytes.iter().all(|&b| b == b'*')
+}
+
+/// The `GH_TOKEN` of `.env.local` comes first, and every other usable `GH_TOKEN` line (an older
+/// one in `.env`, an earlier one in the same file) is masked too. A value with a ` #` comment
+/// after it is used; a file that is not a key file is not read.
 #[test]
-fn workspace_values_reads_the_last_gh_token_of_the_first_key_file() -> Res {
+fn workspace_values_mask_every_gh_token_of_the_key_files() -> Res {
     let dir = tempfile::tempdir()?;
-    let a = ["Aa1", &"b".repeat(30)].concat();
-    let c = ["Cc3", &"d".repeat(30)].concat();
-    std::fs::write(dir.path().join(".env"), format!("GH_TOKEN={a}\n"))?;
+    let (a, c, e) = (
+        ["Aa1", &"b".repeat(30)].concat(),
+        ["Cc3", &"d".repeat(30)].concat(),
+        ["Ee5", &"f".repeat(30)].concat(),
+    );
+    let (k, n) = (["Kk7", &"m".repeat(30)].concat(), ["Nn9", &"p".repeat(30)].concat());
+    std::fs::write(
+        dir.path().join(".env"),
+        format!("GH_TOKEN={a}\nSERVICE_KEY={k} # prod\n"),
+    )?;
     std::fs::write(
         dir.path().join(".env.local"),
-        format!(
-            "export GH_TOKEN=\"{}\"\nOTHER=1\n  GH_TOKEN = '{c}'\n",
-            "e".repeat(25)
-        ),
+        format!("export GH_TOKEN=\"{e}\"\nOTHER=1\n  GH_TOKEN = '{c}'\n"),
     )?;
-    std::fs::write(dir.path().join("notes.txt"), format!("GH_TOKEN={a}\n"))?;
+    std::fs::write(dir.path().join("notes.txt"), format!("GH_TOKEN={n}\n"))?;
     let values = workspace_values(dir.path());
-    assert_eq!(values.len(), 1);
-    assert_eq!(values[0].source(), ValueSource::Workspace);
+    assert_eq!(values.len(), 4);
+    assert!(values.iter().all(|v| v.source() == ValueSource::Workspace));
+    let first = Masker::new(&[], values[..1].to_vec())?;
+    assert!(masks(&first, &c));
     let m = Masker::new(&[], values)?;
-    assert!(m.mask_whole(c.as_bytes()).bytes.iter().all(|&b| b == b'*'));
-    assert_eq!(m.mask_whole(a.as_bytes()).bytes, a.as_bytes());
-
-    std::fs::remove_file(dir.path().join(".env.local"))?;
-    let only_env = workspace_values(dir.path());
-    let m = Masker::new(&[], only_env)?;
-    assert!(m.mask_whole(a.as_bytes()).bytes.iter().all(|&b| b == b'*'));
+    for value in [&a, &c, &e, &k] {
+        assert!(masks(&m, value));
+    }
+    assert_eq!(m.mask_whole(n.as_bytes()).bytes, n.as_bytes());
 
     std::fs::write(dir.path().join(".env.local"), "GH_TOKEN=short_value_19c\n")?;
-    assert!(
-        workspace_values(dir.path()).is_empty(),
-        "a value under 20 bytes is not used"
-    );
+    let m = Masker::new(&[], workspace_values(dir.path()))?;
+    assert_eq!(m.value_counts().workspace, 2, "a value under 20 bytes is not used");
+    assert!(masks(&m, &a));
     assert!(workspace_values(&dir.path().join("missing")).is_empty());
+    Ok(())
+}
+
+/// A FIFO named like a key file is never opened, so start never blocks; a symlinked key file
+/// (a worktree's `.env`) is read.
+#[cfg(unix)]
+#[test]
+fn a_fifo_key_file_is_skipped_and_a_symlinked_one_is_read() -> Res {
+    let dir = tempfile::tempdir()?;
+    let outside = tempfile::tempdir()?;
+    let v = ["Ln4", &"q".repeat(30)].concat();
+    std::fs::write(outside.path().join("env"), format!("SERVICE_TOKEN={v}\n"))?;
+    std::os::unix::fs::symlink(outside.path().join("env"), dir.path().join(".env"))?;
+    let made = std::process::Command::new("mkfifo")
+        .arg(dir.path().join(".env.pipe"))
+        .status()?;
+    assert!(made.success());
+    let m = Masker::new(&[], workspace_values(dir.path()))?;
+    assert_eq!(m.value_counts().workspace, 1);
+    assert!(masks(&m, &v));
+    Ok(())
+}
+
+/// A value already in use and sent again (here first as a harness value, which is not used) is
+/// still masked and counted once.
+#[test]
+fn a_value_after_its_unused_twin_is_still_used() -> Res {
+    let v = ["Hh2", &"r".repeat(30)].concat();
+    let m = Masker::new(
+        &[],
+        vec![
+            SecretValue::new(ValueSource::Harness, v.clone().into_bytes()),
+            SecretValue::new(ValueSource::Workspace, v.clone().into_bytes()),
+            SecretValue::new(ValueSource::Env, v.clone().into_bytes()),
+        ],
+    )?;
+    let counts = m.value_counts();
+    assert_eq!(
+        (counts.workspace, counts.env, counts.harness, counts.skipped),
+        (1, 0, 0, 1)
+    );
+    assert!(masks(&m, &v));
     Ok(())
 }
 
@@ -263,10 +315,10 @@ fn ordinary_values_do_not_pass_the_name_gate() -> Res {
     Ok(())
 }
 
-/// Source 2: credential-named environment variables are used, after `GH_TOKEN` and the other
-/// key-file values; a value in both the environment and `.env` counts once, as `workspace`.
+/// Source 2: credential-named environment variables are used; a value in both the environment
+/// and `.env` counts once, as `workspace`.
 #[test]
-fn environment_values_are_used_once_in_section_nine_order() -> Res {
+fn environment_values_are_used_and_a_shared_value_counts_once() -> Res {
     let mut rng = Rng(0x5EC2);
     let (gh, provider, gateway, own) = (
         rng.chars(ALNUM, 36),
@@ -286,46 +338,15 @@ fn environment_values_are_used_once_in_section_nine_order() -> Res {
             "PATH".to_string(),
             "/usr/local/bin:/usr/bin:/bin:/opt/tool/bin".to_string(),
         ),
-        (
-            "HOME".to_string(),
-            "/home/participant/isolated-home".to_string(),
-        ),
     ]);
-    assert_eq!(env_values(&env).len(), 2);
-    let values = launch_values(dir.path(), &env);
-    let sources: Vec<ValueSource> = values.iter().map(SecretValue::source).collect();
-    assert_eq!(
-        sources,
-        [
-            ValueSource::Workspace,
-            ValueSource::Workspace,
-            ValueSource::Workspace,
-            ValueSource::Env,
-        ]
-    );
-    let order = [
-        gh.as_bytes(),
-        own.as_bytes(),
-        gateway.as_bytes(),
-        provider.as_bytes(),
-    ];
-    let m = Masker::new(&[], values.clone())?;
-    for (value, want) in values.iter().zip(order) {
-        let one = Masker::new(&[], vec![value.clone()])?;
-        assert!(one.mask_whole(want).bytes.iter().all(|&b| b == b'*'));
-    }
+    let m = Masker::new(&[], launch_values(dir.path(), &env))?;
     let counts = m.value_counts();
     assert_eq!(
         (counts.workspace, counts.env, counts.harness, counts.skipped),
         (3, 1, 0, 0)
     );
     for value in [&gh, &provider, &gateway, &own] {
-        assert!(
-            m.mask_whole(value.as_bytes())
-                .bytes
-                .iter()
-                .all(|&b| b == b'*')
-        );
+        assert!(masks(&m, value));
     }
     Ok(())
 }
@@ -389,11 +410,11 @@ fn model_ids_and_hosts_do_not_pass_the_name_gate() -> Res {
         .join("-");
     let mixed = ["Mx", &rng.chars(ALNUM, 30)].concat();
     let names = [
-        ("X_AUTH_MODEL", "claude-sonnet-4-5-20250929"),
-        ("API_KEY_BASE", "openrouter.ai/api/v1"),
+        ("X_AUTH_MODEL", "vendor-model-4-5-20990101"),
+        ("API_KEY_BASE", "gateway.example.test/api/v1"),
         (
             "DEFAULT_TOKEN_MODEL",
-            "accounts/fireworks/models/llama-v3p1-8b-instruct",
+            "accounts/vendor/models/model-v3p1-8b-instruct",
         ),
     ];
     let mut text: String = names.iter().map(|(n, v)| format!("{n}={v}\n")).collect();
@@ -426,61 +447,23 @@ fn model_ids_and_hosts_do_not_pass_the_name_gate() -> Res {
     Ok(())
 }
 
-/// Point 3: 200 gated `.env` lines of 256-byte values and 30 gated environment values. The
-/// reader keeps 32 (all from `.env`, which wins the cut) plus one count-only entry, so the
-/// values ride the first control line in a few KiB, below `watchdog::MAX_LINE`.
-#[test]
-fn two_hundred_gated_lines_fit_the_first_control_line() -> Res {
-    let mut rng = Rng(0x200C);
-    let file: Vec<String> = (0..200).map(|_| rng.chars(ALNUM, 256)).collect();
-    let env: BTreeMap<String, String> = (0..30)
-        .map(|i| (format!("TOOL_{i:02}_API_KEY"), rng.chars(ALNUM, 64)))
-        .collect();
-    let text: String = file
-        .iter()
-        .enumerate()
-        .map(|(i, v)| format!("SERVICE_{i}_SECRET={v}\n"))
-        .collect();
-    let dir = tempfile::tempdir()?;
-    std::fs::write(dir.path().join(".env"), text)?;
-    let values = launch_values(dir.path(), &env);
-    assert!(values.len() <= 33);
-    assert!(values.iter().all(|v| v.source() == ValueSource::Workspace));
-    let json = serde_json::to_vec(&values)?;
-    assert!(json.len() <= 16 * 1024, "{}", json.len());
-    assert!(json.len() < goalcup::watchdog::MAX_LINE);
-    let m = Masker::new(&[], values)?;
-    let counts = m.value_counts();
-    assert_eq!(
-        (counts.workspace, counts.env, counts.harness, counts.skipped),
-        (32, 0, 0, 198)
-    );
-    for value in &file[..32] {
-        assert!(
-            m.mask_whole(value.as_bytes())
-                .bytes
-                .iter()
-                .all(|&b| b == b'*')
-        );
-    }
-    Ok(())
-}
-
-/// Point 3: a `.env` of more than 64 KiB, with duplicates and ordinary lines, still starts. Both
-/// readers send a few KiB, the masker builds, every distinct value past 32 is in `skipped`, and
-/// the values cross the control line unchanged, a quote and a backslash included.
+/// Point 3: a `.env` of more than 64 KiB, 200 distinct gated values of 256 bytes (one with a
+/// quote and a backslash) among duplicates and ordinary lines, and 30 gated environment values,
+/// still starts. Each reader keeps the first 32 file values plus one count-only entry, the line
+/// stays below `watchdog::MAX_LINE`, the values cross it unchanged and the masker builds with
+/// every distinct value past 32 in `skipped`.
 #[test]
 fn a_64_kib_env_file_starts() -> Res {
     let mut rng = Rng(0x64E1);
-    let special = ["Qz\"7\\w", &rng.chars(ALNUM, 24)].concat();
+    let special = ["Qz\"7\\w", &rng.chars(ALNUM, 250)].concat();
     let mut distinct = vec![special];
-    distinct.extend((0..119).map(|_| rng.chars(ALNUM, 64)));
+    distinct.extend((0..199).map(|_| rng.chars(ALNUM, 256)));
     let mut text = String::new();
     for (i, v) in distinct.iter().enumerate() {
         text.push_str(&format!("SERVICE_{i}_KEY={v}\n"));
     }
     let mut line = 0;
-    while text.len() < 64 * 1024 {
+    while text.len() < 64 * 1024 + 4096 {
         let v = &distinct[rng.below(distinct.len())];
         text.push_str(&format!("COPY_{line}_TOKEN={v}\n"));
         text.push_str(&format!(
@@ -489,16 +472,18 @@ fn a_64_kib_env_file_starts() -> Res {
         ));
         line += 1;
     }
-    assert!(text.len() >= 64 * 1024);
     let dir = tempfile::tempdir()?;
     std::fs::write(dir.path().join(".env"), &text)?;
-    let skipped = (distinct.len() - 32) as u32;
-    for values in [
-        workspace_values(dir.path()),
-        launch_values(dir.path(), &BTreeMap::new()),
+    let env: BTreeMap<String, String> = (0..30)
+        .map(|i| (format!("TOOL_{i:02}_API_KEY"), rng.chars(ALNUM, 64)))
+        .collect();
+    let file_skipped = (distinct.len() - 32) as u32;
+    for (values, skipped) in [
+        (workspace_values(dir.path()), file_skipped),
+        (launch_values(dir.path(), &env), file_skipped + 30),
     ] {
         let json = serde_json::to_string(&values)?;
-        assert!(json.len() <= 16 * 1024, "{}", json.len());
+        assert!(json.len() < goalcup::watchdog::MAX_LINE);
         let back: Vec<SecretValue> = serde_json::from_str(&json)?;
         assert_eq!(back, values);
         let m = Masker::new(&[], back)?;
@@ -507,12 +492,9 @@ fn a_64_kib_env_file_starts() -> Res {
             (counts.workspace, counts.env, counts.skipped),
             (32, 0, skipped)
         );
-        assert!(
-            m.mask_whole(distinct[1].as_bytes())
-                .bytes
-                .iter()
-                .all(|&b| b == b'*')
-        );
+        for value in &distinct[..32] {
+            assert!(masks(&m, value));
+        }
     }
     Ok(())
 }
