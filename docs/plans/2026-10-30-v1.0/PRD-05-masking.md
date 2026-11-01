@@ -367,11 +367,15 @@ loosened. The owner confirms; if not answered before H+0, PRD-16's `MORNING.md` 
 
 ### 9. Exact values: the run's own secrets, the workspace `.env` and the harness's key files
 
-**Only with the owner's yes.** Not yet in the ledger (PRD-00 owner question 3, old 12), default no. The
-default build masks the `GH_TOKEN` exact value only, as today (source 1 below); sources 2 to 4, the gate
-for them and `mask_values.rs`'s four-source cases are built in the second slice only after the ledger
-records the owner's yes (as M1a). Until then builder step 6 waits. The rest of this section is the
-design for that yes.
+**Built in every build (amendment of 2026-11-01, owner's answer to question 3).** Sources 1 to 3 are
+built in every build: the project's `GH_TOKEN` (1), the credential-named variables of the harness
+environment (2) and the other credential-named values of the project's key files (3), all through the
+one name gate. There is no source 4: a harness key-file value is not built and is counted in `skipped`.
+Values are also read at `goalcup recover` from the live harness's own environment. The `env` count is
+therefore above 0 in a real run. The OWNER-DECISIONS.md entry (M1a) is still to be added by the owner.
+This supersedes the earlier lines of this section that said "Only with the owner's yes", "default no",
+"sources 2 to 4" and "builder step 6 waits", and the default-build statements below that `env` and
+`harness` are 0; those lines stay as history in the amendments. The rest of this section is the design.
 
 The `run_secret` rule masks known values by exact bytes in 11 encodings (raw, percent upper and lower,
 `\u` lower and upper, base64 standard and URL-safe at three alignments), with a line break allowed
@@ -432,12 +436,14 @@ key-file values come before the environment values because `cat .env` is the big
 (Appendix G finding G.4): on a busy shell with many credential-named variables, those `.env` values
 are the ones that must not be cut.
 
-**Never written.** Values are read once, at `goalcup start` and `continue`, in memory only, and reach
+**Never written.** Values are read once, at `goalcup start`, `continue` and `recover`, in memory only, and reach
 the recorder on PRD-02's first control line. They are never written, never hashed, never logged.
 `Debug` prints a count (`redact.rs:407-411`). The start event carries counts only:
 `{"mask_values": {"workspace": n, "env": n, "harness": n, "skipped": n}}` (PRD-01 section 8). No value
 is added during a run, so the `note` `mask_values` that PRD-01 allows is never written by 1.0. In the
-default build `env`, `harness` and `skipped` are 0.
+default build `env`, `harness` and `skipped` are 0. (Amendment of 2026-11-01: `env` is above 0 in every
+build, since source 2 is built, and `harness` stays 0 because there is no source 4. This supersedes the
+sentence before it. Values are also read at `goalcup recover`, from the live harness's own environment.)
 
 **Errors.** A `MaskError` from a built-in shape fails `start` (exit 78; PRD-02 section 8 passes it to
 PRD-10, which shows fixed text). A `MaskError` from a participant value (for example a compile limit)
@@ -493,7 +499,7 @@ messages and session files, JSON-escaped up to three levels (the rules take up t
 Today, per decoded unit, every rule's spawn check runs (`stream.rs:2025-2036`), then each live candidate
 steps. Every released byte is then scanned by every literal's regex (`stream.rs:2209`). With 1.0's
 rules that is 20 shared literals (21 with the owner's yes to question 3), up to 5 connector rules and
-11 exact-value forms for `GH_TOKEN` (up to 480, 32 values times 15, only with that yes). What keeps it cheap, in build order (review B finding B2: measure before adding):
+11 exact-value forms for `GH_TOKEN` (up to 480, 32 values times 15, since sources 2 and 3 are built in every build; amendment of 2026-11-01). What keeps it cheap, in build order (review B finding B2: measure before adding):
 
 1. **Off the relay.** PRD-02's one mask worker runs at low priority; the relay never waits. Built.
 2. **Exact-value regexes only after a hit.** The exact-value forms run their regex only on a hold in
@@ -599,7 +605,7 @@ credit rows and its comment says headers are recorded),
 | PRD-04 | Native and snapshot streams use the same S2 path. Resume at the written offset (not the read offset), so held bytes are read again. An idle `StreamMasker` costs under 256 bytes (section 6) | Used here |
 | PRD-08 | **S12.** Includes `src/mask/shapes.tsv` with `include_str!` and compiles it **without** the guard, plus the pad's planted and real values, joined across DATA records per stream. Invariant 5 (every MASK covers bytes that are all `*`) holds because quotes are kept outside rule spans and a `fail_closed` span stars everything. Only `fail_closed` spans may exceed 16 KiB: PRD-08 reports their bytes and does not fail on their length; any other span over 16 KiB is a fail | Used there |
 | PRD-09 | Masks never touch a byte no rule matched; usage fields stay readable. Codex `rate_limits` bodies are no longer masked; rate-limit headers whose name matches the name rule stay masked (section 7). With the owner's yes to question 3, the exact-value gate skips model names and base URLs in harness files (section 9) | Used there |
-| PRD-10 | Calls `mask::workspace_values(project)` (the `GH_TOKEN` value only in the default build) at `start` and `continue` and hands it to the watchdog (PRD-02 sends it on the first control line; the recorder calls `Masker::new`). Only with the owner's yes to question 3, also `mask::env_values(&plan.env)` and `mask::harness_values(&plan.secret_values)`; `Masker::new` then orders, dedupes and applies the 32-value guard, and the start screen says "N key values were not added to masking." when `skipped` is above 0. A `MaskError` from a built-in shape fails `start` before the harness launches (exit 78, fixed text); one from a participant value skips that value (section 9). Shows the section 12 text. Shows `mask_failclosed_bytes` in status when it is not zero | Used there |
+| PRD-10 | Calls `mask::launch_values(project, &plan.env)` at `start` and `continue`, and `mask::launch_values(workspace, &mask::process_env(pid) or plan.env)` at `recover`, and hands the result to the watchdog (PRD-02 sends it on the first control line; the recorder calls `Masker::new`). The reader (`finish()` in `launch_values`) orders, dedupes and cuts at 32; `Masker::new` only backs this up. This supersedes the earlier row that named `workspace_values`, `env_values` and `harness_values` and made the env and harness calls depend on the owner's yes (amendment of 2026-11-01). The start screen says "N key values were not added to masking." when `skipped` is above 0. A `MaskError` from a built-in shape fails `start` before the harness launches (exit 78, fixed text); one from a participant value skips that value (section 9). Shows the section 12 text. Shows `mask_failclosed_bytes` in status when it is not zero | Used there |
 | PRD-11 | Owns the `MaskRule` type in S3: `{kind, JsonField {field, value: String or Scalar} or HeaderPrefix(prefix)}`, same grammar as `schema.rs:995-1040`; `value = "object"` is refused. Its new Codex connector file has no rate-limit, plan or credit rows (`connectors/codex-cli/harness.toml:110-113` today) and its comment says headers are recorded (today's `:102-107` says "no header is ever recorded"). Only with the owner's yes to question 3: exposes `LaunchPlan.env` and `secret_values` as candidates with their key path (`Vec<(String, Vec<u8>)>`), and the 16-byte floor in PRD-11's defaults is replaced by PRD-05's gate. In the default build `secret_files` is not read (its data rows may stay) | Both |
 | PRD-12 | The pad plants a fake `.env` (one value per shape in section 10, plus a 40-byte AWS-style secret with no shape) and a prompt that has the agent print it, run `git remote -v` on a URL with a password, and run `env`. The gateway case keeps its key in `.env` (`AI_GATEWAY_API_KEY`). Real keys stay in 0600 files and are scanned for by value. Only with the owner's yes to question 3: also a `sk_test_` and a `whsec_` value, and the optional canary (review A finding 12: a fresh `sk_test_` written to `.env` at minute 5, expecting no hit; it tests the shape rule, not a mid-run reader). In the default build the no-shape value is a stated loss (A1) | Used there |
 | PRD-13 | Deletes the old code and `spikes/` only after `tests/mask_corpus/` holds the copied fixtures and `mask_*` tests pass | Used there |
@@ -773,9 +779,12 @@ below are ruled (PRD-00 R3-11, accepted) and kept here only so the conditions ar
 1. **PRD-11.** Only with the owner's yes to question 3: pass `secret_values` with their key paths
    (`Vec<(String, Vec<u8>)>`) and drop the 16-byte floor from its defaults table; PRD-05's gate decides
    (section 9). Default build: `secret_files` is not read.
-2. **PRD-10.** Show `mask_failclosed_bytes` in status when it is not zero. Only with the owner's yes to
-   question 3: add `mask::env_values` and `mask::harness_values(&plan.secret_values)` beside
-   `mask::workspace_values`, and the "N key values were not added to masking." line.
+2. **PRD-10.** Show `mask_failclosed_bytes` in status when it is not zero. Call
+   `mask::launch_values(project, &plan.env)` at `start` and `continue`, and
+   `mask::launch_values(workspace, &mask::process_env(pid) or plan.env)` at `recover`; the reader
+   (`finish()` in `launch_values`) orders, dedupes and cuts at 32, and `Masker::new` only backs this up.
+   Add the "N key values were not added to masking." line. This supersedes the earlier ask that named
+   `workspace_values`, `env_values` and `harness_values` (amendment of 2026-11-01).
 3. **PRD-02.** The writer adds `fail_closed` span lengths to COUNT `mask_failclosed_bytes`; `status.json`
    carries the number.
 4. **PRD-08.** Read `shapes.tsv` (S12); `fail_closed` spans are reported, not failed on length.
