@@ -187,3 +187,18 @@ fn missing_key_and_taken_port_refuse_and_start_nothing() {
     refused(&w.goalcup(false), 1);
     w.untouched();
 }
+
+#[test]
+fn recover_screen_points_at_status_and_calls_the_span_approximate() {
+    let on = goalcup::cli::text::recover_on_again("Tool", 2, "40 seconds", "10:00", "10:01");
+    assert!(on.contains("goalcup status"), "{on}");
+    assert!(
+        on.contains("about 10:00") && on.contains("(about 40 seconds)"),
+        "{on}"
+    );
+    assert!(
+        !on.contains("from 10:00") && !on.contains("(40 seconds)"),
+        "{on}"
+    );
+    assert!(goalcup::cli::text::recover_late("Tool", 2).contains("goalcup status"));
+}
