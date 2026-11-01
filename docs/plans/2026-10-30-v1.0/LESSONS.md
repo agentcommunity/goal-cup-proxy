@@ -145,7 +145,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-S9 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
 | L-S10 | 2.10 | A: device.test.ts (PRD-07); A: lifecycle.test.ts (PRD-07) | PRD-07 | green | b474329d |
 | L-R1 | 2.11 | A: pipeline_guard::a_thousand_guard_episodes_never_latch (PRD-02) | PRD-02 | green | 7e620577 |
-| L-R2 | 2.11 | A: pipeline_guard::two_hundred_streams_with_the_writer_held (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall.rs (PRD-02, file not on tree, PRD-02 section on R2 names it and no PRD-02 branch has landed it; proposed, not decided: PRD-02 lands it, or its replan drops it and this row rests on the two pipeline_guard cases and lessons_pipeline) | PRD-02 | open | - |
+| L-R2 | 2.11 | A: pipeline_guard::two_hundred_streams_with_the_writer_held (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall.rs (PRD-02, file not on tree) | PRD-02 | open | - |
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | green | 8dc99969 |
 | L-R4 | 2.11 | R: PRD-02 R3; R: PRD-10 acceptance 1 | PRD-02, PRD-10 | open | - |
 | L-R5 | 2.11 | A: golden.rs (PRD-01); A: proxy_ws.rs (PRD-03); R: RR1 | PRD-01, PRD-03 | green | 8dc99969 |
@@ -155,7 +155,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-HF1 | 2.12 | R: PRD-11 acceptance 5; R: RR3 | PRD-11 | open | - |
 | L-HF2 | 2.12 | R: RR6 | PRD-11 | open | - |
 | L-HF3 | 2.12 | D: connectors/hermes-cli.toml before, after; A: watchdog_end::watchdog_end_stub_helpers_run_in_order (PRD-02) | PRD-11, PRD-02 | open | - |
-| L-HF4 | 2.12 | A: cli_commands::second_start_on_one_home_refuses (PRD-10, exit 1 with the held home named, no server call, nothing written) | PRD-10 | green | 6fb5db63 |
+| L-HF4 | 2.12 | A: cli_commands::second_start_on_one_home_refuses (PRD-10, exit 1, one error line naming the held home, no runs dir) | PRD-10 | green | 6fb5db63 |
 | L-HF5 | 2.12 | A: connector_launch::codex_gets_no_dash_c_override (PRD-11); D: connectors/codex-cli.toml args | PRD-11 | green | f5a200ae |
 | L-HF6 | 2.12 | A: cli_continue::the_resume_rule_follows_written_counts_alone (PRD-10, session files with nothing counted are no conversation); A: cli_continue::a_resume_that_failed_at_once_opens_a_new_session (PRD-10); D: docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md section 3.1 step 3 | PRD-10 | green | 6fb5db63 |
 | L-HF7 | 2.12 | R: PRD-12 pass rule | PRD-12 | open | - |
@@ -229,15 +229,8 @@ What blocks the gate (PRD-13 may not delete yet), by row and owner:
 - **Check 1:** L-R2, PRD-02 (`pipeline_stall.rs`). PRD-02 either lands it, or its replan drops it and L-R2 rests on
   `pipeline_guard::two_hundred_streams_with_the_writer_held`, `forty_streams_with_the_writer_held` and
   `lessons_pipeline`. This is a proposal; the decision is PRD-02's.
-- **Open rows whose guard case is thin or not in an existing test, each needs its owner:** L-P14 (PRD-10, no
-  `no timer under 15 min` case in `cli_commands.rs`), L-P15 (PRD-02, no test by name for the 60 s drain and 180 s native bound), L-S7
-  (PRD-10, no case that sets the clock back 24 h in `cli_start.rs`), L-R6 (PRD-03, no case shows the `conn` record at open), L-SC2
-  (PRD-10, the cases beyond the folder half wait on `approve.rs`), L-VR1 (PRD-08, the torn-tail case claims 32 body bytes and holds 1: it shows exit 2, not that a hostile
-  length allocates nothing), L-VR2 (PRD-08, PRD-09; no test reaches the panic hook), L-HF3
-  (PRD-11, PRD-02; `connectors/hermes-cli.toml` holds `before` and `after`, and the `watchdog_end` case runs a helper that succeeds; no case shows
-  a failing helper logged with the run going on),
-  L-T9 (PRD-03, PRD-15; `docs/PARTICIPANT-GUIDE.md` has no known-limits entry for an egress that re-signs TLS).
-  These are not check 1 failures (each has an entry); they stay `open` until their cases exist or the lane reads them as met.
+- **Open rows with a thin guard:** the nine rows marked `open` in the table whose Guard cell says the case is thin or waits on a file
+  (L-P14, L-P15, L-S7, L-R6, L-SC2, L-VR1, L-VR2, L-HF3, L-T9). Not check 1 failures; each stays `open` until its owner's case exists.
 - **`gate full`:** L-C7 (PRD-17), `idle_tunnel_survives_120s`.
 - **`X:`-only, flipped when the gate passes:** L-H12 (PRD-03), L-K13, L-N9 (no owner PRD), L-SC7 (PRD-10).
 - **`R:`-only or `R:` pending a pad run (PRD-12 and the named owners), not blocking deletion:** L-W14, L-P13, L-F7, L-F8,
