@@ -369,3 +369,5 @@ Lane script: `docs/plans/2026-10-30-v1.0/conductor/gc-lane.js`. One lane, the ex
 | 4 (deferred) | `LiteralTrack`, `stream.rs` wiring, its two reviewers | default (most capable) |
 | 4 (deferred) | Tests run, PRD-05 amendment | sonnet |
 | whole lane | Final whole-branch review before the train | default (most capable) |
+
+Boxes: 1 release box (2 with its fix round), no gate or build of its own. The trie reaches the waves through H1, the code-wave train head the mini-test plan builds once.

@@ -409,26 +409,31 @@ git -C /root/gc-wt/prd12-mini commit -m "pad: Crush permission answers as a crus
 - Create: `/root/gc-night/mini/row.sh`, `/root/gc-night/mini/wave.sh`, `/root/gc-night/mini/runs/<row>.toml`, `/root/gc-night/mini/logs/`
 
 **Interfaces:**
-- Consumes: H1 = the code-wave train head, built ONCE by the conductor at `/root/gc-night/builds/<H1>/` (`goalcup`, `goalcup-verify`; if absent, stop: this plan builds nothing); `/root/gc-tools/node_modules`; `/root/gc-night/rung1/proxy-preload.cjs` (the sandbox proxy patch; if absent, the one `handoff-head.md` names); `/root/gc-night/sweep2/keyscan.py` and `scrub.py` (11 key names, DeepSeek and Gemini included; the gw3 copies lack them); `/root/gc-night/gw3/rowinfo.py`.
-- Produces: `row.sh <settings>` (one row, log `logs/<tag>.log` ending `PAD_EXIT=<n>`), `wave.sh [--canary <a> <b>] <settings>...`, the row files below.
+- Consumes: H1 = the code-wave train head; the handover plan's tools installed in `/root/gc-tools` (its Task 10 Step 8): `padrun.sh SETTINGS OUTDIR`, `keyscan.py [--scrub]` (14 keys), `proxy-preload.cjs`, `node_modules`; `/root/gc-night/gw3/rowinfo.py`.
+- Produces: `/root/gc-night/builds/<H1 8>/` and `/root/gc-night/trust/selftest-<H1 8>.json` (Step 0; Task 11 Step 4 makes the H2 pair the long-runs plan's Task 6 reads), `row.sh <settings>` (one row, log `logs/<tag>.log` ending `PAD_EXIT=<n>`), `wave.sh [--canary <a> <b>] <settings>...`, the row files below.
+
+- [ ] **Step 0: Build H1 once (one build box).** Job `/root/gc-night/jobs/build.sh`:
+```bash
+set -e
+command -v python3.11 >/dev/null || sudo -n dnf install -y -q python3.11 >/dev/null 2>&1
+cargo build --release --locked -p goalcup -p goalcup-verify
+git rev-parse HEAD > target/release/commit
+python3.11 scripts/pad/selftest --bin target/release || echo "selftest exit $?"
+```
+Run: `B=/root/gc-night/builds/<H1 8>; node /root/gc-tools/box.mjs run --repo /home/user/goal-cup-proxy --ref <H1> --script /root/gc-night/jobs/build.sh --minutes 30 --out target/release/goalcup:$B/goalcup --out target/release/goalcup-verify:$B/goalcup-verify --out target/release/commit:$B/commit --out pad-out/selftest.json:/root/gc-night/trust/selftest-<H1 8>.json`. Expected: `[box] exit 0`, three files in `$B`, `selftest: all controls ran as wanted`; ledger `build` line. A selftest failure does not stop the wave: rows run untrusted and are re-stamped later (long-runs plan Task 6).
 
 - [ ] **Step 1: Worktree.** `git -C /home/user/goal-cup-proxy worktree add --detach /root/gc-wt/mini <H1>`; `git -C /root/gc-wt/mini merge-base --is-ancestor <M_rig> HEAD` exits 0 (else stop: the rig is not in H1). Write `/root/gc-night/mini/runs/` from the row table below.
 - [ ] **Step 2: Scripts.** `row.sh`:
 ```bash
 #!/usr/bin/env bash
-# One mini-test row: the pad's conductor half in the run worktree. GH_TOKEN dropped; DATABASE_URL reaches only the index box.
-set -uo pipefail
-settings=$1; tag=$(basename "$settings" .toml); out=/root/gc-night/mini
-export PAD_NODE_MODULES=/root/gc-tools/node_modules
-export NODE_OPTIONS="--use-openssl-ca --no-warnings --require /root/gc-night/rung1/proxy-preload.cjs"
-cd /root/gc-wt/mini
-{ echo "== $tag $(date -u +%FT%TZ) head $(git rev-parse --short HEAD)"; env -u GH_TOKEN -u PYTHONPATH python3.11 scripts/pad/pad "$settings"; echo "PAD_EXIT=$?"; echo "== end $(date -u +%FT%TZ)"; } > "$out/logs/$tag.log" 2>&1
+# One mini-test row through the handover plan's padrun.sh (GH_TOKEN and PYTHONPATH unset, proxy preload, logs/<tag>.log).
+GC_PAD_WT=/root/gc-wt/mini exec bash /root/gc-tools/padrun.sh "$1" /root/gc-night/mini
 ```
 `wave.sh`: with `--canary a b`, start `row.sh a` and `row.sh b` in the background, wait 120 s, and if either log holds a `setup`, `start` or `wait-calls` line that is not `ok`, or a non-zero `PAD_EXIT=`, touch `/root/gc-night/mini/STOP` and start nothing more. Then feed the other files, in the order given, to a pool of at most 8 `row.sh` processes in all (canary included; the next file starts when one ends), checking `STOP` before each start. At the end wait for every row. The pool bounds row boxes at 8 even when a pad process sits in its per-key queue (`queue_slot`, `pad:175-205`: `per_key_deepseek = 6`, `per_key = 2` for the gateway key), since a queued row has no box yet; each row adds its own index box (`pad-dbf-*`) at fetch, so 16 boxes at most.
 - [ ] **Step 3: Dry check.** `./wave.sh runs/amp.toml runs/droid.toml` (no box: the pad prints the reason and exits 3). Expected: both logs end `PAD_EXIT=3`, each holds `<id>: not verified: no key`, and `node scripts/pad/sbx.mjs list --prefix pad-` (from `/root/gc-wt/mini`) shows no box. This is the Amp and Droid row.
 - [ ] **Step 4: Commit nothing.** These files live outside the repo.
 
-**Row files.** Each is `scripts/pad/runs/mini.toml` with these lines changed, plus `build = "/root/gc-night/builds/<build commit>"` and `box_vcpus = 4`.
+**Row files.** Each is `scripts/pad/runs/mini.toml` with these lines changed, plus `build = "/root/gc-night/builds/<H1 8>"` and `box_vcpus = 4`.
 
 | Row file | harness | key | case | prompt | pinned model (`facts.pinned_model`) |
 |---|---|---|---|---|---|
@@ -467,13 +472,13 @@ cleanup           ok      0:13   nothing key-like left, box removed, list shows 
 result            PASS           pad-out/<harness>/<case>/<stamp>-pad-<6 hex>/
 PAD_EXIT=0
 ```
-2. Evidence, in order: `python3 /root/gc-night/sweep2/keyscan.py /root/gc-wt/mini/pad-out/<harness>` prints `0 hit(s)` (else S2); then `python3 /root/gc-night/gw3/rowinfo.py <run folder>` for checks, why, models, spend, subagents, hosts; `report.txt` for `facts.pinned_model` and any `recorded model ..., pinned ...` why line; `pad-out/spend.jsonl` lines for this run (`run` field) for `usd` and `box_minutes`.
+2. Evidence, in order: `python3 /root/gc-tools/keyscan.py /root/gc-wt/mini/pad-out/<harness>` prints `0 hit(s), 14 keys checked` (else S2); then `python3 /root/gc-night/gw3/rowinfo.py <run folder>` for checks, why, models, spend, subagents, hosts; `report.txt` for `facts.pinned_model` and any `recorded model ..., pinned ...` why line; `pad-out/spend.jsonl` lines for this run (`run` field) for `usd` and `box_minutes`.
 3. Record: one line in `/root/gc-night/mini/results.md` (columns of Task 12) and one ledger line `HH:MMZ pad mini <harness> <case> on <H1 or H2>: <result> C1..C6 <values>, <usd> USD est, <box_minutes> box min, <run folder>`.
 4. tiers cell: a micro row never gives a tier (`table:tier_row` takes `mode == "full"` only), so `connectors/tiers.toml` from `python3.11 scripts/pad/table` (Task 12) reads `tier = "not verified"`, `version = ""`, `reason = "no full direct row"` for every harness that ran; a harness file with `not_verified` keeps that reason; Amp and Droid read `reason = "no key"`. The mini verdict goes to `results.md` and decides which Wave 2 full rows run.
 
 **Stop rules** (the conductor checks every 2 minutes during the wave and after every row; to stop, `touch /root/gc-night/mini/STOP`, and for a running row `kill -INT <pad pid>`: the pad's STOP handler still runs cleanup):
 - S1 canary: before minute 2, `wave.sh` itself starts nothing more on a canary failure. Later, either canary row not `PAD_EXIT=0` (result PASS), or a pinned-model mismatch on the Claude Code row: STOP and `kill -INT` every running row ("stop everything"); go to Task 11 with the records made so far.
-- S2 secrets: keyscan finds a real key fragment, or `facts.secret_hits` names a known hit whose sha12 equals a real key's: STOP and kill every row, keep the folder unread, scrub (`/root/gc-night/sweep2/scrub.py`) before anything else, tell the owner (point 4).
+- S2 secrets: keyscan finds a real key fragment, or `facts.secret_hits` names a known hit whose sha12 equals a real key's: STOP and kill every row, keep the folder unread, scrub (`python3 /root/gc-tools/keyscan.py --scrub <folder>`) before anything else, tell the owner (point 4).
 - S3 rig: two rows with `setup FAIL`, a box not created, or a cleanup line starting `left:`: STOP starting rows, remove any named box (`node scripts/pad/sbx.mjs rm <name>`); the rig fix goes in Task 11.
 - S4 boxes: `sbx.mjs list --prefix pad-` shows more than 8 row boxes (`pad-<6 hex>`) or more than 16 in all: STOP starting rows until back in bounds.
 - S5 spend: the wave's estimates (sum of `usd`, or `usd_live` when `usd` is null) pass 5 USD, or wave plus fix round pass 8 USD: stop and ask the owner.
@@ -513,8 +518,8 @@ PAD_EXIT=0
 - [ ] **Step 1: Fix list.** Every non-PASS row whose cause is not an open owned item (S7 list). Ledger: `HH:MMZ pad mini fix list: <row: cause, owner file:line>...`. Empty list: go to Task 12.
 - [ ] **Step 2: Fix in one batch.** Pad code and data on `v1.0/prd-12-mini-fix` (a worktree from `origin/v1.0/integration`, Task 8's commit and trailer rules); a goalcup cause in its PRD lane. No box per fix; one read-only review per branch; each branch gets its one end box (pad: Task 8 Step 1 with this branch).
 - [ ] **Step 3: One fix train.** All fix branches queued together (`.req` as Task 8 Step 4); ONE gate on the combined head; on FAIL bisect. Expected: every `.res` `"exit": 0`. The head is H2.
-- [ ] **Step 4: One build.** The conductor builds H2 once into `/root/gc-night/builds/<H2>/`, unless `git diff --quiet <H1> <H2> -- crates/ server/ connectors/ Cargo.toml Cargo.lock rust-toolchain.toml` (pad-only fixes): then the rows keep `build = "/root/gc-night/builds/<H1>"`.
-- [ ] **Step 5: Rerun the failed rows only.** `git -C /root/gc-wt/mini checkout --detach <H2>`; in each failed row file set `build` per Step 4 and `box_vcpus = 2` if every wave row's wall time was under 15 minutes (back to 4 if a setup or start times out at 2). `./wave.sh [--canary <Claude Code and Codex files, when failed>] <failed row files>`. Row procedure for each; `results.md` marks the line `r2`. A rerun non-PASS is recorded with its owner and Wave 2 action; there is no second round.
+- [ ] **Step 4: One build.** The conductor builds H2 once with Task 9 Step 0's job and command (`<H2>` for `<H1>`), into `/root/gc-night/builds/<H2 8>/` plus `/root/gc-night/trust/selftest-<H2 8>.json`, whenever the fix train merged anything (pad-only fixes too: the selftest must run on H2's pad tree). An empty fix list means H2 = H1 and no build.
+- [ ] **Step 5: Rerun the failed rows only.** `git -C /root/gc-wt/mini checkout --detach <H2>`; in each failed row file set `build = "/root/gc-night/builds/<H2 8>"` and `box_vcpus = 2` if every wave row's wall time was under 15 minutes (back to 4 if a setup or start times out at 2). `./wave.sh [--canary <Claude Code and Codex files, when failed>] <failed row files>`. Row procedure for each; `results.md` marks the line `r2`. A rerun non-PASS is recorded with its owner and Wave 2 action; there is no second round.
 
 ### Task 12: Results table, tiers cell and cleanup
 
@@ -532,19 +537,18 @@ PAD_EXIT=0
 
 ## Budget
 
-| Part | Boxes | Builds | Gates | Model USD (likely / cap) |
-|---|---|---|---|---|
-| A | 1 slice box (plus at most 1 fix-round box) | 0 | share of the code-wave train | 0 |
-| Wave (Task 10) | 13 or 14 rows, each a pad box and an index box; none for Amp, Droid | 1 (H1, conductor) | 0 | about 3.5 / 5 |
-| Fix round (Task 11) | failed rows only (up to 14) and their index boxes, one end box per fix branch | 1 (H2, or reuse H1) | 1 (fix train) | about 2 / 3 |
-| Total | about 30 to 60 | about 2 | about 2 | about 5.5 / 8 |
-
-Rows: about 16 to 30 (13 or 14 in the wave plus the reruns).
+| Part | Boxes | Builds | Gates | Rows | Model USD (likely / cap) |
+|---|---|---|---|---|---|
+| A | 1 slice box (2 with its fix round) | 0 | share of the code-wave train | 0 | 0 |
+| H1 build (Task 9 Step 0) | 1 | 1 | 0 | 0 | 0 |
+| Wave (Task 10) | 26 to 28 (13 or 14 rows, each a pad box and an index box; none for Amp, Droid) | 0 | 0 | 13 or 14 | about 3.5 / 5 |
+| Fix round (Task 11) | 1 or 2 end boxes, 1 gate, 1 build, about 5 failed rows (10 boxes; up to 14 rows) | 1 (H2) | 1 (fix train) | about 5 | about 2 / 3 |
+| Total | about 44 | 2 | 1 of its own | about 19 | about 5.5 / 8 |
 
 ## Self-review
 
-1. Spec coverage: rig fixes of FINISH-PLAN Wave 0 (Codex exit key: Task 5; OpenClaw workspace: Task 4; crushrc: Task 6; prompt variant: Task 2; D3 already done; optional per-row cap: Task 1); Kimi approvals: Task 3; Cline search: Task 7; Codex gateway pin: Task 5; the owner's execution shape: one slice box and the code-wave train (Task 8), one shared build H1 (Task 9), all harnesses at once as composite rows with a 2-minute canary, up to 8 row boxes plus index boxes (Tasks 9, 10), one fix round with one gate, one build and failed rows only (Task 11); results table and Wave 2 list: Task 12; Amp and Droid: Task 9 Step 3.
-2. Step scan: code steps name function, file and values; run steps give command, expected evidence and stop rules; bodies only for the prompt text, the crushrc header and `row.sh`.
+1. Spec coverage: rig fixes of FINISH-PLAN Wave 0 (Codex exit key: Task 5; OpenClaw workspace: Task 4; crushrc: Task 6; prompt variant: Task 2; D3 already done; optional per-row cap: Task 1); Kimi approvals: Task 3; Cline search: Task 7; Codex gateway pin: Task 5; the owner's execution shape: one slice box and the code-wave train (Task 8), one shared build H1 (Task 9 Step 0, selftest included, so the long-runs plan's trust needs no extra box), all harnesses at once as composite rows with a 2-minute canary, up to 8 row boxes plus index boxes (Tasks 9, 10), one fix round with one gate, one build and failed rows only (Task 11); results table and Wave 2 list: Task 12; Amp and Droid: Task 9 Step 3.
+2. Step scan: code steps name function, file and values; run steps give command, expected evidence and stop rules; bodies only for the prompt text, the crushrc header, the shared build job (Task 9 Step 0, reused for H2) and the one-line `row.sh` over the handover plan's `padrun.sh`.
 3. Type consistency: `row_pad(s, pad)`, `key_text(path, old, line)`, `fill(text, home, project)`, `exit_keys` string or list with `exit_pause`, `wave.sh [--canary a b] files...`, H1, H2, `M_rig` match across tasks.
 4. Review Focus: five items, each with its test or check in the owning task (Tasks 1, 3, 4, 5, 9).
 5. Proportion: code bodies omitted; Tasks 10 and 11 share one row procedure, one expectation table and one stop rule list.
@@ -567,12 +571,13 @@ Lane script: `docs/plans/2026-10-30-v1.0/conductor/gc-lane.js`, one lane per ind
 | slice box, diff check | 8 Steps 1, 2 | rig and cline done | sonnet |
 | rig slice review | 8 Step 3, whole branch, read only | after the slice box | default (most capable) |
 | train | 8 Steps 4, 5 (merge-train assembly) | after a clean review | sonnet |
-| run setup | 9 | H1 built | sonnet |
+| H1 build | 9 Step 0 (one build box) | code-wave train merged, handover tools installed | sonnet |
+| run setup | 9 Steps 1 to 4 | H1 built | sonnet |
 | wave: run and read rows | 10, Row procedure steps 1 to 4 | after Task 9 | sonnet |
-| fix round | 11 Steps 1, 3, 5 | after Task 10 | sonnet |
+| fix round | 11 Steps 1, 3, 4 (H2 build), 5 | after Task 10 | sonnet |
 | fixes | 11 Step 2: recorder, masker or proxy causes | after Step 1 | default (most capable) |
 | fixes | 11 Step 2: pad code and data, connector data | after Step 1 | sonnet |
 | results | 12 Steps 1, 2, 4 | after Task 11 | sonnet |
 | mechanical | `padtest.sh` and `row.sh` copies, every keyscan and scrub, 12 Step 3, the `results.md` copy | with its task | haiku |
 
-Order: Part A lanes with the code wave; one slice box, one review, the code-wave train (one gate); one build H1; the wave; one fix round (one gate, one build); results.
+Order: Part A lanes with the code wave; one slice box, one review, the code-wave train (one gate); one build H1; the wave; one fix round (one gate, one build H2); results. The long-runs plan's one-hour runs start on H2.

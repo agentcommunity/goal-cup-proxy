@@ -14,7 +14,7 @@
 
 - Target layout `docs/plans/2026-10-30-v1.0/conductor/` (below: `$C`). Work on branch `v1.0/conductor-handover` from `origin/v1.0/integration` (at `04044320` or later) in worktree `$WT=$GC_WT/conductor-handover`; never edit `/home/user/goal-cup-proxy`'s own checkout.
 - Push only `v1.0/*` branches, merge commits only, never force. No production, `main`, tags or website database writes.
-- The tool commits reach integration only through `merge.sh` (they are not docs-only), as ONE small train of their own (this branch only, one gate), not folded into the big train: the new session needs these tools first. `handoff.sh` keeps its direct docs push for the ledger and reports.
+- The tool commits reach integration only through `merge.sh` (they are not docs-only), as ONE small train of their own (this branch only, one gate), not folded into the code-wave train: the new session needs these tools first, and the mini-test wave runs them from `/root/gc-tools` (Task 10 Step 8). `handoff.sh` keeps its direct docs push for the ledger and reports.
 - No key on any command line, in any file, log or commit. Keys reach a box only through `sbx.mjs put-env` (0600). `GH_TOKEN`, `DATABASE_URL`, `CLOUDFLARE_*`, `GOALCUP_TEST_APPROVAL_KEY`, `GOALCUP_TEST_MEMBER_ID` are unset for every box call except the one `put-env` that needs that one value.
 - Never commit `pad-out/`, `runs/`, `dbfetch/idx/`, `.env*`, key files or `node_modules/`. Copy out only `REPORT.txt` files from pad folders.
 - Never edit `OWNER-DECISIONS.md`; draft lines go to `$C/owner-decisions-draft.md`.
@@ -433,7 +433,7 @@ Expected: both `keyscan: 0 hit(s), 14 keys checked, unset: none`. A hit stops th
 - [ ] **Step 6: Final whole-branch review (read-only, no box)**
 One review of `git diff origin/v1.0/integration...HEAD` against this plan's Global Constraints and Review Focus. Every finding is fixed in one batch (and rerun in the one fix-round box if it touches code) before Step 7.
 - [ ] **Step 7: Queue the merge as its own small train**
-Write `{"branch": "v1.0/conductor-handover", "message": "conductor handover: portable tools, proxy patch, keyscan, state docs", "refresh_lock": false}` to `$GC_NIGHT/mrq/$(date -u +%H%M%S)-conductor-handover.req` (via a `.tmp` name and `mv`). The conductor runs it at once as a train of this one branch (one gate on its head); it does not wait for, or join, the big train. Branches already queued for the big train stay queued and rebase on the result.
+Write `{"branch": "v1.0/conductor-handover", "message": "conductor handover: portable tools, proxy patch, keyscan, state docs", "refresh_lock": false}` to `$GC_NIGHT/mrq/$(date -u +%H%M%S)-conductor-handover.req` (via a `.tmp` name and `mv`). The conductor runs it at once as a train of this one branch (one gate on its head); it does not wait for, or join, the code-wave train. Branches already queued for the code-wave train stay queued and rebase on the result.
 Expected: `<id>.res` with `"exit": 0`; the ledger shows `merge ... v1.0/conductor-handover ...`.
 - [ ] **Step 8: Install the merged tools and push the first full handoff (conductor, no box)**
 Only when no merge is in flight (no `$GC_NIGHT/mrq/*.claimed`). Lanes started after this pass `session` and `paths` (Task 4).
@@ -455,7 +455,7 @@ Expected: `scribed <n> lines`, then `handoff pushed <sha>` (its keyscan 0 hits).
 2. Step scan: each code step names its file, signature and pinned values; test steps carry assertions.
 3. Type consistency: `gc_trailer`, `gc_need_repo`, `GC_*` names, `sessionMinutes`, `ledgerLine`, `keyscan.NAMES`, `scan`, `scrub`, `install.sh` options and `args.paths` keys match across tasks.
 4. Review Focus: all five have tests in their owning tasks (1, 4, 7, 7, 8, 3).
-5. Box use and merge shape (re-checked against the owner-approved execution shape): one slice box (Task 10 Step 4), at most one more for the single fix round, one gate for the small tool train (not the big train), no box per task. The Execution section names a lane, order and model for every task.
+5. Box use and merge shape (re-checked against the owner-approved execution shape): one slice box (Task 10 Step 4), at most one more for the single fix round, one gate for the small tool train (not the code-wave train), no box per task. The Execution section names a lane, order and model for every task.
 6. Proportion: bodies given only for exact copy (the patch line, the preload, trailer text, ledger line format) and for the test assertions.
 
 ---
@@ -476,4 +476,4 @@ Lane script: `docs/plans/2026-10-30-v1.0/conductor/gc-lane.js` (the current one 
 | final review | Task 10 Step 6, whole branch, read-only | after the slice box passes | default (most capable) |
 | small train | Task 10 Steps 7 and 8 | after a clean review | sonnet |
 
-Order: the three build lanes run together, then assembly, one slice box, final review, small train. No task here is core design, so the most capable model is used only for the final review (and for the owner-asked breaker, if one is requested).
+Order: the three build lanes run together (beside the other plans' code-wave lanes), then assembly, one slice box, final review, small train. The small train and the Task 10 Step 8 install come before the H1 build: the mini-test wave and the one-hour runs use `/root/gc-tools/padrun.sh`, `keyscan.py` and `proxy-preload.cjs`. Boxes: 1 slice box (2 with the fix round), 1 gate. No task here is core design, so the most capable model is used only for the final review (and for the owner-asked breaker, if one is requested).
