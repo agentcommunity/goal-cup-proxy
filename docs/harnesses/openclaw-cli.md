@@ -9,7 +9,7 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 ## 1. Run one prompt, in chat mode first
 
 - `openclaw chat` is `openclaw tui --local`: the embedded runtime, no Gateway ([docs](https://docs.openclaw.ai/cli/tui)). Plain `openclaw tui` connects to a Gateway instead and is not used. Exit: Escape, then `/exit` (measured). While a turn waits on retries, Ctrl-C and `/exit` are refused.
-- The agent works in the project folder: the connector sets `OPENCLAW_WORKSPACE_DIR` to the run's workspace ("Override the default agent workspace", [environment](https://docs.openclaw.ai/help/environment), [agent workspace](https://docs.openclaw.ai/concepts/agent-workspace)). Without it the default is `~/.openclaw/workspace` under `OPENCLAW_HOME` (where `AGENTS.md` and `SOUL.md` live), and a commit made by the agent landed there (rung 1, 2026.10.9). The value must be an absolute path; OpenClaw does not expand `~` or `${...}` in it. Not yet re-run with the variable set.
+- Known limit: the agent works in its own workspace, `~/.openclaw/workspace` under `OPENCLAW_HOME` (where `AGENTS.md` and `SOUL.md` live), not the project folder; a commit made by the agent landed there (rung 1, 2026.10.9). The harness has `OPENCLAW_WORKSPACE_DIR` ("Override the default agent workspace", [environment](https://docs.openclaw.ai/help/environment), [agent workspace](https://docs.openclaw.ai/concepts/agent-workspace)) and the config key `agents.defaults.workspace`; `openclaw chat` and `openclaw tui` have no workspace flag (2026.10.9 package). The connector cannot set either: the loader fills `{workspace}` only in `args` and in `home` values that start with `{home}`, and neither holds the project path. Starting `chat` inside an agent's workspace selects that agent, but does not move the workspace. The value must be an absolute path (no `~`, no `${...}`).
 - The connector has no `resume` form. Whether `chat` has a continue flag: unknown.
 - [RULES](../RULES.md) lists OpenClaw incognito threads, `agent exec`, `--profile`, `--dev` and `proxy` as modes that switch capture off. The connector runs `chat` and none of those.
 
@@ -25,7 +25,7 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 | Config dir | `~/.openclaw/openclaw.json` (docs) | `$HOME/.openclaw/openclaw.json`, JSON5 (measured) | unknown |
 | Session store | unknown | `agents/<agent>/agent/openclaw-agent.sqlite` and `state/openclaw.sqlite` under `.openclaw`; no JSONL (measured) | unknown |
 | Logs / cache | unknown | `/tmp/openclaw/openclaw-YYYY-MM-DD.log`, outside the home (measured) | unknown |
-| Env vars that move these | | `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_PROFILE`; `OPENCLAW_WORKSPACE_DIR` moves the agent workspace | |
+| Env vars that move these | | `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_PROFILE` | |
 
 `OPENCLAW_HOME` "replaces the system home directory" for OpenClaw's own path defaults, so state lands in `.openclaw/` under it ([docs](https://docs.openclaw.ai/help/environment)). The connector sets it and unsets the other three, which would move state out of the isolated home.
 
