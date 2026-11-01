@@ -38,6 +38,10 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
         return broke(&text::status_unreadable(&path));
     };
     if st.mode == Mode::Sealed {
+        // It may have ended in the participant's absence: show what it recorded.
+        if let Ok(screen) = super::finish::end_screen(&dir) {
+            print!("{screen}");
+        }
         return fail(&text::seal_already(&found.run));
     }
     // The watchdog takes SIGUSR1; with none, the recorder takes SIGTERM and seals as `signal`.

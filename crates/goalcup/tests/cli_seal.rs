@@ -195,6 +195,22 @@ fn nothing_is_signalled_inside_the_harness_or_without_a_terminal() {
 fn a_sealed_or_absent_part_is_refused() {
     let w = World::new(Mode::Sealed);
     one_error_line(&w.goalcup(&["seal", "--yes"], false));
+    // A part sealed in the participant's absence shows what it recorded, still with exit 1.
+    put(
+        &w.dir(),
+        "status.json",
+        &with(
+            Mode::Sealed,
+            json!({"written": {"model_requests": 905, "http_post": 905, "req_whole": 905,
+                    "hosts": {"api.example.com": 905}},
+                "seal": {"reason": "recovered"}}),
+        ),
+    );
+    let out = w.goalcup(&["seal", "--yes"], false);
+    let shown = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(shown.contains(goalcup::cli::text::PART_RECORDED) && shown.contains("905"));
+    assert!(!w.hit());
     one_error_line(&w.goalcup(&["seal", "--yes", "e0000000000000000"], false));
     let empty = World {
         home: TempHome::new(),
