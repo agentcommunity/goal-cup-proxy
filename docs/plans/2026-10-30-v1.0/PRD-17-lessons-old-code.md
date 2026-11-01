@@ -1102,3 +1102,10 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
 - **The only gate blocker left is `pipeline_stall.rs` (L-R2, check 1).** PRD-02 has started it (lane log, 07:26Z) and it is the last item in PRD-02's slice C part 2. When it is on integration, the next PRD-17 slice repoints L-R2, reruns the four checks and records the result; until then PRD-13 may not delete. The other gate blocker, the gate full row (L-C7), is unchanged.
 - **Doc nits queued for the next LESSONS.md upkeep (docs only, no box job):** A4, the check 1 bullet lists five `;` cells and names L-R2, but the diff changed four (L-C5, L-W4, L-R6, L-SC2), so say four cells and drop L-R2; A5, the "Open rows with a thin guard" bullet still lists nine ids and misdescribes L-VR1 and L-T9, so cut it to a pointer at the `open` rows in the table; B2, the "What blocks the gate" list may drop its two restating bullets. A4 and A5 are wording only; B2 is taste.
 - No locked ledger item is touched.
+
+### 2026-11-01, slice 9 (LESSONS.md nit upkeep and gate re-check)
+
+- **Changed:** `LESSONS.md` only. A4: the check 1 bullet now says four `;` cells and drops L-R2. A5: the thin-guard id list is a one-line pointer at the `open` rows. B2: the `X:`-only and `R:`-only bullets are one pointer line. The table counts were re-read from the table itself: 154 rows, 123 `green`, 31 `open`; the header numbers already agree.
+- **Gate state unchanged:** `pipeline_stall.rs` is still not on origin/v1.0/integration (f2f96f0e), so L-R2 is left as is and the four checks were not rerun. No box job ran, no Rust changed (the eight `lessons_*.rs` files stay at 4,345 lines).
+- **Blockers by owner:** check 1, L-R2 (PRD-02, `pipeline_stall.rs`); `gate full`, L-C7 (`idle_tunnel_survives_120s`, still open). PRD-13 may not delete yet. After PRD-02 lands the file, the next slice is one gate rerun.
+- No locked ledger item is touched.

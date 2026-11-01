@@ -214,8 +214,8 @@ tests); Worker `node --test` on all of `server/worker/test/*.test.ts`: 258 pass,
 - **Check 1 (a guard for every lesson): not passed, one name.** All 154 rows have an entry, 154 of 154 against PRD-17
   sections 2.1 to 2.16. Every `A: file::test` name is in the nextest list; every `D:` file exists; every `X:` names a
   decision or PRD. One bare-file `A:` names no file: `pipeline_stall.rs` (L-R2, owner PRD-02). The pipeline_stall file is on no
-  integration commit. No renamed guard was found. The script also flagged five cells with a `;` inside parentheses
-  (L-C5, L-W4, L-R2, L-R6, L-SC2), which the legend forbids; they are now commas, a wording fix with no guard change.
+  integration commit. No renamed guard was found. The script also flagged four cells with a `;` inside parentheses
+  (L-C5, L-W4, L-R6, L-SC2), which the legend forbids; they are now commas, a wording fix with no guard change.
 - **Check 2 (guards pass): passed for the 123 green rows, one row skipped.** Every `lessons_*.rs` test and every named
   `A:` guard ran and passed in `gate fast`, which skips `idle_tunnel_survives_120s`; L-C7 therefore stays open until a
   `gate full` run. The Worker file guards (`integration`, `device`, `lifecycle`) pass.
@@ -229,12 +229,9 @@ What blocks the gate (PRD-13 may not delete yet), by row and owner:
 - **Check 1:** L-R2, PRD-02 (`pipeline_stall.rs`). PRD-02 either lands it, or its replan drops it and L-R2 rests on
   `pipeline_guard::two_hundred_streams_with_the_writer_held`, `forty_streams_with_the_writer_held` and
   `lessons_pipeline`. This is a proposal; the decision is PRD-02's.
-- **Open rows with a thin guard:** the nine rows marked `open` in the table whose Guard cell says the case is thin or waits on a file
-  (L-P14, L-P15, L-S7, L-R6, L-SC2, L-VR1, L-VR2, L-HF3, L-T9). Not check 1 failures; each stays `open` until its owner's case exists.
+- **Open rows:** the rows marked `open` in the table; each stays `open` until its owner's case exists or its `R:`, `D:` or `X:` entry is shown. Not check 1 failures.
 - **`gate full`:** L-C7 (PRD-17), `idle_tunnel_survives_120s`.
-- **`X:`-only, flipped when the gate passes:** L-H12 (PRD-03), L-K13, L-N9 (no owner PRD), L-SC7 (PRD-10).
-- **`R:`-only or `R:` pending a pad run (PRD-12 and the named owners), not blocking deletion:** L-W14, L-P13, L-F7, L-F8,
-  L-S6, L-S8, L-S9, L-R4, L-R7, L-HF1, L-HF2, L-HF7, L-G2, L-G4, L-G5, L-SC5.
+The `X:`-only and `R:`-only rows are read from the table; they do not block deletion.
 
 Skipped and not run here: `idle_tunnel_survives_120s` (`gate full`), `mask_bench::by_hand_mask_bench`, the two
 `upload_worker` full-tier tests, the real-run rows (all RR rows), and `cargo clippy`. Nothing was deleted.
