@@ -26,6 +26,8 @@ hint_env = [
   "HF_BASE_URL", "XIAOMI_BASE_URL", "TOKENHUB_BASE_URL", "TOKENPLAN_BASE_URL", "OLLAMA_BASE_URL",
   "LM_BASE_URL", "COPILOT_API_BASE_URL", "COPILOT_ACP_BASE_URL",
 ]
+# Goal Cup never reads these files; the list only feeds the connector test that refuses a native row matching one.
+secret_files = ["{home}/.env", "{home}/auth.json", "{home}/.anthropic_oauth.json", "{home}/config.yaml"]
 native = [
   { name = "delegation-manifest", root = "{home}/cache/delegation/live", pattern = "**/manifest.json", form = "snapshot", warn_missing = false },
   { name = "delegation", root = "{home}/cache/delegation/live", pattern = "**/task-*.log", warn_missing = false },

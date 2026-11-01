@@ -1525,13 +1525,9 @@ is left is data and docs only. Four items, in order:
   Calls stay on the wire (every call, PRD-02); subagent attribution needs the PRD-09 manifest reader
   (follow-ups below). The session and message tables are not recorded.
 - **Point 6:** the `first_screen` line and `docs/harnesses/hermes-cli.md` say it plainly.
-- **Seam notes:** PRD-09 (`goalcup-verify` `usage/hints.rs` `HermesDb`, `usage/sqlite.rs`): the Hermes
-  database leg gets no input any more; the code is dead and can go (less code). Per-call matching
-  for Hermes is wire only. PRD-15: `docs/HARNESS-SETUP.md` Hermes item 1 and the PARTICIPANT-GUIDE
-  line on what is recorded should add "Hermes's session database is not copied". PRD-04's
-  `tests/native_safety.rs::hermes_rows_take_the_state_database_and_no_request_dump` asserts the old
-  row and fails once this merges: pending ruling (see below). The PRD-11 case for the new rows is
-  `tests/connector_hermes_rows.rs`.
+- **Seam notes:** PRD-15: `docs/HARNESS-SETUP.md` Hermes item 1 and the PARTICIPANT-GUIDE
+  line on what is recorded should add "Hermes's session database is not copied". The PRD-11 case for
+  the new rows is `tests/connector_hermes_rows.rs`. PRD-09 and PRD-04 notes are under follow-ups.
 - **Follow-ups (fixer, 1 Nov).**
   - **HOLD (integrator, 18:04Z) and point 2 risk, release blocker T8.** `goalcup-verify` took Hermes
     threads and parent links only from the `state` row (`usage/hints.rs` `HermesDb`,
@@ -1539,15 +1535,17 @@ is left is data and docs only. Four items, in order:
     usage cannot yet say which subagent made which call. This branch is not queued until a Hermes
     rung 3 row (`direct`, with subagents) on it shows C2 PASS, or the PRD-09 manifest reader lands
     first or in the same merge. No such row exists yet; nobody claims Hermes C2 PASS.
-  - **PRD-09 seam note (expanded).** Read parent and child links from the delegation `manifest.json`
-    snapshots, and delete `HermesDb` and `usage/sqlite.rs`.
+  - **PRD-09 seam note.** Read parent and child links from the delegation `manifest.json`
+    snapshots, and delete `HermesDb` and `usage/sqlite.rs` (dead once the row is gone; per-call
+    matching for Hermes is wire only).
   - **Acceptance 1, Hermes, reworded:** judged from the record; the local log check is `skip`.
   - **Notes for owners, not edited here:** PRD-12 P3 (line 1000, "where `state.db` is read") and its
     risk row (line 1057); PRD-16 X1, X2 and the Hermes `state.db` line (255); the open-items list.
   - **Ruling needed (integrator), pending:** `crates/goalcup/tests/native_safety.rs` belongs to PRD-04
-    and still asserts the old `state.db` row, so it fails after this merges. No ruling names that
-    file (OWN-6 does not). This branch leaves it untouched; PRD-04's lane or an integrator ruling
-    flips or removes that one case.
+    and still asserts the old `state.db` row
+    (`hermes_rows_take_the_state_database_and_no_request_dump`), so it fails after this merges. No
+    ruling names that file (OWN-6 does not). This branch leaves it untouched; PRD-04's lane or an
+    integrator ruling flips or removes that one case before this branch is queued.
   - **Ledger:** the 1 Nov owner answer (exact-value masking for all, and no Hermes search index) is in
     `integrator.log` 17:44Z only; the integrator should record it in `OWNER-DECISIONS.md`.
   - **Unmeasured, route after exact-value masking settles:** Codex (`*.sqlite*` final) and OpenClaw
