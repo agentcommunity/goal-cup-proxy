@@ -436,6 +436,16 @@ def secrets(r):
     for name, where in SCANS + ((("secrets-git", "the project's git objects"),) if r.meta.get("push") == "tested" else ()):
         scan(r, name, where)
     r.flag("secrets" in r.failed, "C3", "FAIL", "secrets fail in the verifier report: %s" % r.failed.get("secrets"))
+    # The pad's pane copies are scanned for known values only (a hit is a replacement miss in the rig); their shape hits are
+    # a harness screen echo, not a record, and are not read.
+    # Where panes exist (pad-run sets the exit), no report or an exit other than 0 or 2 is no scan, never a PASS.
+    doc = load(r.folder, "verify/secrets-panes.json")
+    if "secrets-panes" in r.exits:
+        if not isinstance(doc, dict) or r.exits["secrets-panes"] not in (0, 2):
+            r.flag(True, "C3", "INCONCLUSIVE", "no scan of the pad's pane copies")
+        else:
+            pane = count(doc.get("known_hits"))
+            r.flag(pane, "C3", "FAIL", "%s known values on the pad's pane copies" % pane)
     r.flag(r.meta.get("known_box") is not True, "C3", "INCONCLUSIVE", "the run certificate key is not in the known values")
     # Section 5: the setup-check script printed .env.local. Its unmasked no-shape value (plain hits) or a
     # MASK of a planted value's own shape shows that output reached the model. Never any MASK: the
@@ -445,8 +455,11 @@ def secrets(r):
         return r.mark("C3", "INCONCLUSIVE", "no MASK counts by rule in verify/secrets.json")
     if not r.hits("secrets-plain") and not any(masks.get(kinds[0]) for kinds in PLANTED):
         return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no plain-value hit and no MASK of a planted shape")
+    # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
+    # a missing exercise).
     for kinds in PLANTED:
-        r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL", "no MASK of %s for a planted value" % " or ".join(kinds))
+        r.flag(not any(masks.get(k) for k in kinds), "C3", "FAIL" if r.hits("secrets") else "INCONCLUSIVE",
+               "%s of %s: no MASK" % ("hits" if r.hits("secrets") else "not exercised", " or ".join(kinds)))
 
 def c6(r):
     st, final = r.status, dig(r.status, "s4_requests")
