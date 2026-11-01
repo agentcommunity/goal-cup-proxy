@@ -1240,3 +1240,7 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
 ### 2026-11-01, Gemini parent reader merged (27341339)
 
 - Merged: Gemini CLI native thread parentage from the chat file path layout, wire-thread fallback when the file carries no id. Nit N1 (simplify the unique-match filter for 8-hex prefix collisions) is optional and not a defect. Size: src 7,136 against the 1,400 row; reported in the PRD-16 note. No seam moves.
+
+### 2026-11-01, slice 10 merged (64ff365a)
+
+- Merged: history_complete no longer breaks a chain when a later request carries a MASK on earlier starred text (ends() key), a held WebSocket message is credited its MASK and released on the next non-MASK record, and a dropped tool call is no longer skipped as compacted. Four check_history fixtures added; box 108 tests green. Size: src 7,220 against the 1,400 row, reported in the PRD-16 note. No seam moves and no other PRD is affected.
