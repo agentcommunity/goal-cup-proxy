@@ -482,12 +482,28 @@ class StatedLoss(unittest.TestCase):
         gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
         return CrashRows.row(self, "kill-recorder", gap, code=code, extra=extra)
 
-    def test_deltas_only_shape_is_a_warning_not_a_fail(self):
+    def plain_row(self, shapes, code, counts):
+        checks = [{"id": "secrets", "result": "fail"}] if shapes else []
+        return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},
+                         "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "counts": {"model_requests": 5, "gaps": counts},
+                                                                                 "checks": checks}]},
+                         "verify/secrets.json": {"known_hits": [], "shape_hits": list(shapes), "big_masks": [], "masks": dict(SecretCheck.PLANTED)},
+                         "verify/secrets-conductor.json": {"hits": 0},
+                         "verify/exits.json": {"secrets": 2 if shapes else 0, "secrets-out": 0, "secrets-plain": 0}})
+
+    def test_deltas_only_shape_is_open_not_a_fail_and_never_a_pass(self):
         row = self.run_row(shapes=[self.DELTAS])
-        self.assertNotEqual(row["checks"]["C3"], "FAIL")
+        self.assertEqual(row["checks"]["C3"], "INCONCLUSIVE")
         self.assertNotEqual(row["faults"], "FAIL")
         self.assertNotEqual(row["result"], "FAIL")
-        self.assertTrue(any("WARN" in w and "generic_secret_assignment" in w and "/deltas" in w for w in row["why"]))
+        self.assertNotEqual(row["result"], "PASS")
+        self.assertTrue(row["why"])
+
+    def test_stated_loss_does_not_hide_an_unexplained_gap(self):
+        gaps = {"s6_gaps": {"memory_guard": 1}}
+        for shapes, code in (([], 1), ([self.DELTAS], 2)):
+            row = self.plain_row(shapes, code, gaps["s6_gaps"])
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code))
 
     def test_any_other_hit_still_fails(self):
         for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),

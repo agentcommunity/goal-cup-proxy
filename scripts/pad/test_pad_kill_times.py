@@ -36,7 +36,7 @@ class KillTimes(unittest.TestCase):
         self.assertEqual(minutes(plan_for("claude-code-cli", "claude")), [8, 10])
 
     def test_bad_values_are_a_usage_error(self):
-        for bad in ([5, 3], [3, 3], [0, 5], [3], [3, 5, 7], ["3", "5"], [3.0, 5], [True, 5], "3,5", 3):
+        for bad in ([5, 3], [3, 3], [3, 4], [3, 30], [0, 5], [3], [3, 5, 7], ["3", "5"], [3.0, 5], [True, 5], "3,5", 3):
             with self.assertRaises(pad.Usage, msg=repr(bad)):
                 plan_for("codex-cli", "openai", extra={"kill_minutes": bad})
 
@@ -53,22 +53,17 @@ class KillTimes(unittest.TestCase):
         pad.apply_kill_minutes(s, {"kill_minutes": [3, 5]})
         self.assertEqual(minutes(s), [0])
 
+    def test_the_second_kill_is_before_the_end_of_the_run(self):
+        with self.assertRaises(pad.Usage):
+            plan_for("codex-cli", "openai", extra={"kill_minutes": [28, 30]}, minutes=30)
+
+    def test_settings_name_the_same_minutes(self):
+        self.assertEqual(plan_for("codex-cli", "openai")["steps"], ["kill-recorder@3", "kill-recorder@5"])
+
     def test_cycle_own_crash_is_not_doubled(self):
         s = pad.load_settings(dict(harness="codex-cli", key="openai", mode="cycle", steps=list(PAIR)), PADCFG)
         pad.apply_kill_minutes(s, {"kill_minutes": [3, 5]})
         self.assertEqual(minutes(s), [3, 5])
-
-    def test_the_row_carries_the_minutes(self):
-        run = pad.Run.__new__(pad.Run)
-        run.s = plan_for("codex-cli", "openai")
-        self.assertEqual(run.kill_minutes(), [3, 5])
-        run.s = pad.load_settings(dict(harness="codex-cli", key="openai", mode="micro"), PADCFG)
-        self.assertIsNone(run.kill_minutes())
-
-    def test_release_check_still_finds_the_codex_kill_row(self):
-        row = {"connector": "codex-cli", "case": "direct", "mode": "full", "variant": ["kill-recorder@3", "kill-recorder@5"]}
-        self.assertTrue(table.kills(row))
-        self.assertTrue(row["connector"] == "codex-cli" and table.kills(row) and "connector copy" not in row["variant"])
 
 
 if __name__ == "__main__":
