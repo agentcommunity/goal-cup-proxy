@@ -365,7 +365,7 @@ fn killed(calls: u64) -> (FakeWorker, tempfile::TempDir, PathBuf, String) {
         h.data(rec.now(), Bytes::from_static(b"{\"model\":\"m\"}"));
         h.end(rec.now(), EndReason::Complete, None);
     }
-    wait_settled(&rec, |c| c.http_post >= calls);
+    wait_settled(&rec, move |c| c.http_post >= calls);
     let fake = FakeWorker::start();
     let dir = tempfile::tempdir().unwrap();
     let id = first_entry_id(&live.path().join("rec"));
