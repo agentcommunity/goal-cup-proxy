@@ -41,7 +41,7 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 
 ## 5. Auth
 
-- About 40 providers. A key goes in `$HERMES_HOME/.env` (mode 0600; secrets only); the provider and model go in `config.yaml` as `model.provider`, `model.default` and `model.base_url` (docs). OAuth providers keep tokens in `auth.json`; Hermes can also borrow credentials from `~/.codex/auth.json` and `~/.claude/.credentials.json` (source). The connector lists `.env`, `auth.json`, `.anthropic_oauth.json` and `config.yaml` as secret files.
+- About 40 providers. A key goes in `$HERMES_HOME/.env` (mode 0600; secrets only); the provider and model go in `config.yaml` as `model.provider`, `model.default` and `model.base_url` (docs). OAuth providers keep tokens in `auth.json`; Hermes can also borrow credentials from `~/.codex/auth.json` and `~/.claude/.credentials.json` (source). Goal Cup hands no key to Hermes and reads no key from these files; it reads only base-URL settings from `config.yaml` and `.env` to name hosts.
 - Does the harness have a variable that moves its config and login? Yes, `HERMES_HOME`; the connector sets it. The participant's setup wizard writes into that home once, in `goalcup setup`.
 - A credential-pool entry in `auth.json` keeps `secret_fingerprint`, the first 16 hex digits of the key's SHA-256, and not the key (source). After a failed request, a `request_dump_*.json` in `sessions/` carries the first 8 characters of the key (measured on 0.19.0).
 

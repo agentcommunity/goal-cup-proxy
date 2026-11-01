@@ -182,18 +182,12 @@ fn the_root_never_reaches_a_path() {
 }
 
 #[test]
-fn hermes_rows_take_no_state_database_and_no_request_dump() {
+fn hermes_rows_take_the_state_database_and_no_request_dump() {
     let t = tempfile::tempdir().unwrap();
     let home = t.path().join("home");
     fs::create_dir_all(home.join("sessions")).unwrap();
     fs::write(home.join("sessions/request_dump_x.json"), b"{}").unwrap();
-    let live = home.join("cache/delegation/live/run-1");
-    fs::create_dir_all(&live).unwrap();
-    fs::write(live.join("manifest.json"), b"{}").unwrap();
-    fs::write(live.join("task-1.log"), b"line\n").unwrap();
-    for f in ["state.db", "state.db-wal", "state.db.fts_rebuild.lock"] {
-        fs::write(home.join(f), b"SQLite format 3\0").unwrap();
-    }
+    fs::write(home.join("state.db"), b"SQLite format 3\0").unwrap();
     let c = connector::load("hermes-cli", None).unwrap();
     let home_s = home.to_str().unwrap();
     let rows: Vec<Row> = c
@@ -213,13 +207,12 @@ fn hermes_rows_take_no_state_database_and_no_request_dump() {
         .iter()
         .map(|f| rows[f.row].root.join(&f.rel))
         .collect();
-    // Owner decision 1 Nov: the search index lives in state.db, so none of it is copied; the
-    // delegation manifest and task log are the only matches.
-    let mut want = vec![live.join("manifest.json"), live.join("task-1.log")];
-    let mut got = names.clone();
-    want.sort();
-    got.sort();
-    assert_eq!(got, want, "{names:?}");
+    assert!(names.contains(&home.join("state.db")), "{names:?}");
+    assert!(
+        !names
+            .iter()
+            .any(|p| p.to_string_lossy().contains("request_dump"))
+    );
 }
 
 #[test]
