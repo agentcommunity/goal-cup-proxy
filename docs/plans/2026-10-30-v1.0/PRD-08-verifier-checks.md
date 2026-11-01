@@ -1236,3 +1236,7 @@ PRD-02's mask worker writes two record shapes PRD-01's text does not list yet; t
   parent reader"). PRD-09 owns that directory; this note records the one-time reassignment of those two
   Gemini hunks to PRD-08, and PRD-09 keeps ownership of everything else under `src/usage/`. Later
   edits there go to a `v1.0/prd-09-*` branch. No seam moves and no locked ledger item is touched.
+
+### 2026-11-01, Gemini parent reader merged (27341339)
+
+- Merged: Gemini CLI native thread parentage from the chat file path layout, wire-thread fallback when the file carries no id. Nit N1 (simplify the unique-match filter for 8-hex prefix collisions) is optional and not a defect. Size: src 7,136 against the 1,400 row; reported in the PRD-16 note. No seam moves.
