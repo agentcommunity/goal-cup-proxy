@@ -660,7 +660,10 @@ fn masked_resend(name: &str, made: bool, tool: bool, tail: Option<&str>) -> Path
         } else {
             text.into()
         };
-        let body = msgs(vec![json!({"role": "assistant", "content": content}), user(Anthropic)]);
+        let body = msgs(vec![
+            json!({"role": "assistant", "content": content}),
+            user(Anthropic),
+        ]);
         let off = body.to_string().find("**********").unwrap() as u64;
         let rep = reply(Anthropic, Text(7));
         send_full(e, path, T, &body, rep, (0, Some((off, 10))));
@@ -689,7 +692,11 @@ fn a_masked_resend_with_a_dropped_tool_call_still_fails() {
 #[test]
 fn a_masked_resend_with_a_rewritten_tail_warns() {
     let tail = format!("{}, changed", &TAIL[..TAIL.len() - 10]);
-    let h = verdict(&masked_resend("h-mask-tail", true, false, Some(&tail)), "warn", 0);
+    let h = verdict(
+        &masked_resend("h-mask-tail", true, false, Some(&tail)),
+        "warn",
+        0,
+    );
     assert_eq!(missing(&h), (0, 1, 0));
     assert_eq!(n(&h, "masked_by_ends"), 0);
 }
