@@ -418,8 +418,8 @@ candidate with its key path (ask, last section) and PRD-05 applies the gate.
 
 **Order, duplicates and the guard.** Values are taken in the "Order at the cut" column of the table:
 `GH_TOKEN`, then the other workspace key-file values, then the environment values. Duplicates are
-dropped (the same key in the environment and in `.env` counts once), up to 32 values. The readers
-(`workspace_values`, `launch_values`) dedupe, order and cut at 32 before anything is sent, so at most
+dropped (the same key in the environment and in `.env` counts once), up to 32 values. The reader
+(`launch_values`) dedupes, order and cut at 32 before anything is sent, so at most
 32 values ever reach the first control line (amendment of 2026-11-01). The number left out past 32
 crosses as one count-only entry, so `skipped` stays right; a value that fails to compile (below) is
 counted there too. Values the gate refused are not counted there (they are not secrets by the gate's
@@ -483,6 +483,7 @@ messages and session files, JSON-escaped up to three levels (the rules take up t
 | A token used as a URL user with no password (`https://<token>@host`) | masked only if the token has a shape (`ghp_…` after `//` is not glued) or is an exact value (`GH_TOKEN`; others only with the owner's yes to question 3). The dropped `email` rule used to catch it (PRD-17 K12) |
 | Code with a dotted value whose long segment holds a digit, right after `=`, ending at a line end, a space, a quote or `&` (`secret=os.environ.AWS_S3_SECRET_ACCESS_KEY` on its own line) | masked: a stated over-mask of the shell rule's dotted arm (2026-11-01 amendment). The same value in a call or keyword argument, ending at `(`, `)`, `,` or `;`, stays raw |
 | A value holding both a `"` or `\` and a `<`, `>` or `&`, JSON-escaped plainly once and then nested in an HTML-safe JSON string (or the reverse) | not masked by value: none of the 15 forms is that mixed text (a stated loss; no new form). A shape rule still catches it if it has a shape |
+| A credential-named value only in the environment the harness was started with, after `goalcup recover` | on Linux masked: `recover` reads the live harness's own start environment (`/proc/<pid>/environ`). Where the system does not show it (macOS, a `hidepid` mount) `recover` has only its own terminal's environment, so a value exported in the first terminal and not in this one has no exact value in the recovered part (a stated loss; values are never stored). A shape rule still catches it if it has a shape |
 | A key the agent adds to `.env` during the run | shape rules only (with the owner's yes to question 3, by exact value from the next `continue`; section 9) |
 | A key after hours of one WebSocket connection whose hold overflowed | the overflowing message is starred to its end (`fail_closed`, counted); the next message is masked normally |
 | Hermes `state.db` (binary) | best effort: a value split across an overflow page is missed; masking a WAL frame breaks its checksum (PRD-01 risks, PRD-04) |
@@ -497,7 +498,7 @@ rules that is 20 shared literals (21 with the owner's yes to question 3), up to 
 1. **Off the relay.** PRD-02's one mask worker runs at low priority; the relay never waits. Built.
 2. **Exact-value regexes only after a hit.** The exact-value forms run their regex only on a hold in
    which a `Literal` candidate completed. Their recognizer is exact, so this changes no result. Built
-   with the exact values (second slice, only with the owner's yes to question 3), since 352 forms on
+   with the exact values (second slice, only with the owner's yes to question 3), since 480 forms on
    every byte is the one cost known to be large.
 3. **First-byte dispatch, only if A5 is short.** `Policy` builds a 256-entry table from each rule's
    spawn set (its first byte, folded for the `(?i)` rules, plus `ſ` and the Kelvin sign for those), and
@@ -522,8 +523,20 @@ not the harness's speed.
 mask worker runs off the relay (item 1), so a slow mask costs memory-guard pressure, never the
 harness's speed. Without participant values the cost is that of the shared literals alone. The next
 steps stay those above (exact-value regexes only after a hit, then the dispatch table, then PRD-02's
-pool). Seam note for PRD-14: its by-hand load notes should carry these numbers beside A5's, and name
-the start-up time with 32 long values as the one cost the participant sees (a slower `start`).
+pool). A second box (release build, branch head b43e7154) measured `Masker::new` at 2.0 s with 32
+values of 256 bytes, so the 6.4 s above is the slower of two measures.
+
+**Memory of the compiled forms (measured, same release box).** The masker's peak resident memory was
+about 39 MB with 8 values of 100 bytes, 104 MB with 32 of 100 and 238 MB with 32 of 256. That memory
+is the compiled exact-value forms; it stays resident in the recorder for the whole run, and PRD-02's
+memory guard does not count it (the guard counts held bytes). It is a stated cost, not a cap: the
+32-value guard of section 9 is what bounds it. Without participant values it is that of the shared
+literals alone.
+
+Seam note for PRD-14: its by-hand load notes should carry these numbers beside A5's, name the
+start-up time with 32 long values as the one cost the participant sees (a slower `start`), and name
+the resident memory of the compiled forms (up to about 240 MB with 32 long values) beside the
+recorder's own figure.
 
 ### 12. Participant text (for PRD-10 and PRD-15)
 
@@ -1132,4 +1145,38 @@ A1 reports it as a stated loss instead of failing on it.
   nested in an HTML-safe string (or the reverse), matches no form. Named in section 10; no new form.
 - **Cost.** The measured start-up time and single-stream rate with 32 long values are in section 11,
   with a seam note for PRD-14's by-hand load notes.
+- This amendment supersedes two lines of the second review's amendment above: "Thirteen forms at
+  most" (now 15) and its "Left open for the conductor (unchanged)" note (the call sites now use
+  `launch_values`).
+- No locked ledger item is touched.
+
+### 2026-11-01, review fixes: recover's values, the readers' surface, the memory cost
+
+- **Fix (point 4).** `goalcup recover` read source 2 from the environment of the terminal that runs
+  it, so a value exported only where the harness was started had no exact value in the recovered
+  part. `mask::process_env(pid)` now reads the live harness's own start environment from
+  `/proc/<pid>/environ` (the harness is spawned with exactly `LaunchPlan.env`), and `recover` passes
+  it to `launch_values`. Where the system does not show it (macOS, a `hidepid` mount), `recover`
+  falls back to its own plan: a stated loss, named in section 10. A Linux test spawns a child with a
+  credential-named value only in its own environment and checks the value reaches the masker. The
+  `recover.rs` change is the one call site, as in the OWN-10 fix above; the reader lives here. Ask of
+  PRD-10: the recover text may say that on macOS the same terminal should be used.
+- **Readers' surface.** `workspace_values` is gone (the name the call sites used before OWN-10) and
+  `env_values` is private; callers and tests use `launch_values(project, env)`, with an empty `env`
+  for the key files alone.
+- **One count of the forms.** The `values.rs` header is the one place that counts the forms and
+  states the reader order; the `mask/mod.rs` module doc and `Masker::new` link to it.
+- **Cost.** Section 11 says 480 forms (32 values times 15) in item 2, adds the second measure of
+  `Masker::new` (2.0 s) and the resident memory of the compiled forms (about 39, 104 and 238 MB), and
+  the PRD-14 seam note names that memory.
+- **Size, reported (PRD-00 size budget, an owner estimate).** Masking source is about 5,190 lines
+  (mod 350, rules 1,029, stream 2,735, values 520, meta 514, shapes.tsv 44) against 3,530, and the
+  tests about 3,000 lines (corpus data excluded) against 2,000. The environment-values slice added
+  about 270 net lines to `values.rs` and 590 to `tests/mask_values.rs`. No behaviour-preserving cut is
+  proposed beyond the readers' surface above. PRD-00 is not this lane's file; the replan should carry
+  the figures.
+- **Not done here.** Dropping the masker check in `recover`'s `rebuild` (it builds a `Masker` the
+  recovered recorder builds again, about 2 s each with 32 long values) is left for the next slice of
+  PRD-10's `recover`. The second 32-value guard in `RunSecrets::new` stays as the bound for callers
+  that pass values to `Masker::new` directly.
 - No locked ledger item is touched.

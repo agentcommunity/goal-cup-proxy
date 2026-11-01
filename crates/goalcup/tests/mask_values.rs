@@ -10,9 +10,7 @@ mod common;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use common::{ALNUM, HEX, Rng, starred, stream_in};
-use goalcup::mask::{
-    Masker, SecretValue, ValueSource, env_values, launch_values, workspace_values,
-};
+use goalcup::mask::{Masker, SecretValue, ValueSource, launch_values, process_env};
 use goalcup_format::StreamKind;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -120,7 +118,7 @@ fn masks(m: &Masker, value: &str) -> bool {
 /// one in `.env`, an earlier one in the same file) is masked too. A value with a ` #` comment
 /// after it is used; a file that is not a key file is not read.
 #[test]
-fn workspace_values_mask_every_gh_token_of_the_key_files() -> Res {
+fn key_file_values_mask_every_gh_token_of_the_key_files() -> Res {
     let dir = tempfile::tempdir()?;
     let (a, c, e) = (
         ["Aa1", &"b".repeat(30)].concat(),
@@ -140,7 +138,7 @@ fn workspace_values_mask_every_gh_token_of_the_key_files() -> Res {
         format!("export GH_TOKEN=\"{e}\"\nOTHER=1\n  GH_TOKEN = '{c}'\n"),
     )?;
     std::fs::write(dir.path().join("notes.txt"), format!("GH_TOKEN={n}\n"))?;
-    let values = workspace_values(dir.path());
+    let values = launch_values(dir.path(), &BTreeMap::new());
     assert_eq!(values.len(), 4);
     assert!(values.iter().all(|v| v.source() == ValueSource::Workspace));
     let first = Masker::new(&[], values[..1].to_vec())?;
@@ -152,14 +150,14 @@ fn workspace_values_mask_every_gh_token_of_the_key_files() -> Res {
     assert_eq!(m.mask_whole(n.as_bytes()).bytes, n.as_bytes());
 
     std::fs::write(dir.path().join(".env.local"), "GH_TOKEN=short_value_19c\n")?;
-    let m = Masker::new(&[], workspace_values(dir.path()))?;
+    let m = Masker::new(&[], launch_values(dir.path(), &BTreeMap::new()))?;
     assert_eq!(
         m.value_counts().workspace,
         2,
         "a value under 20 bytes is not used"
     );
     assert!(masks(&m, &a));
-    assert!(workspace_values(&dir.path().join("missing")).is_empty());
+    assert!(launch_values(&dir.path().join("missing"), &BTreeMap::new()).is_empty());
     Ok(())
 }
 
@@ -177,7 +175,7 @@ fn a_fifo_key_file_is_skipped_and_a_symlinked_one_is_read() -> Res {
         .arg(dir.path().join(".env.pipe"))
         .status()?;
     assert!(made.success());
-    let m = Masker::new(&[], workspace_values(dir.path()))?;
+    let m = Masker::new(&[], launch_values(dir.path(), &BTreeMap::new()))?;
     assert_eq!(m.value_counts().workspace, 1);
     assert!(masks(&m, &v));
     Ok(())
@@ -314,8 +312,7 @@ fn ordinary_values_do_not_pass_the_name_gate() -> Res {
             "https://gateway.example.test/v1".to_string(),
         ),
     ]);
-    assert!(workspace_values(dir.path()).is_empty());
-    assert!(env_values(&env).is_empty());
+    assert!(launch_values(dir.path(), &env).is_empty());
     let m = Masker::new(&[], launch_values(dir.path(), &env))?;
     let counts = m.value_counts();
     assert_eq!(
@@ -435,7 +432,8 @@ fn model_ids_and_hosts_do_not_pass_the_name_gate() -> Res {
         .iter()
         .map(|(n, v)| (n.to_string(), v.to_string()))
         .collect();
-    assert!(env_values(&env).is_empty());
+    let empty = tempfile::tempdir()?;
+    assert!(launch_values(empty.path(), &env).is_empty());
     let values = launch_values(dir.path(), &env);
     let m = Masker::new(&[], values)?;
     let counts = m.value_counts();
@@ -489,7 +487,7 @@ fn a_64_kib_env_file_starts() -> Res {
         .collect();
     let file_skipped = (distinct.len() - 32) as u32;
     for (values, skipped) in [
-        (workspace_values(dir.path()), file_skipped),
+        (launch_values(dir.path(), &BTreeMap::new()), file_skipped),
         (launch_values(dir.path(), &env), file_skipped + 30),
     ] {
         let json = serde_json::to_string(&values)?;
@@ -573,7 +571,7 @@ fn a_key_file_with_a_bad_byte_or_a_bom_still_gives_its_values() -> Res {
         dir.path().join(".env"),
         format!("\u{feff}SERVICE_KEY={service}\n"),
     )?;
-    let m = Masker::new(&[], workspace_values(dir.path()))?;
+    let m = Masker::new(&[], launch_values(dir.path(), &BTreeMap::new()))?;
     assert_eq!(m.value_counts().workspace, 3);
     for value in [&gh, &service, &tabbed] {
         assert!(masks(&m, value));
@@ -710,5 +708,30 @@ fn the_start_line_with_32_long_values_fits() -> Res {
         longest = longest.max(line.len() + 1);
     }
     assert!(longest <= MAX_LINE, "{longest}");
+    Ok(())
+}
+
+/// `recover` reads the values the live harness was started with, not the recovering terminal's
+/// (point 4): a credential-named value only in the harness's own environment reaches the masker.
+#[cfg(target_os = "linux")]
+#[test]
+fn recover_reads_the_harness_values_from_its_own_environment() -> Res {
+    let v = ["Rc7", &"w".repeat(30)].concat();
+    assert!(std::env::var_os("SERVICE_TOKEN").is_none());
+    let mut child = std::process::Command::new("sleep")
+        .arg("30")
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("SERVICE_TOKEN", &v)
+        .spawn()?;
+    let env = process_env(child.id());
+    child.kill()?;
+    child.wait()?;
+    let env = env.ok_or("no environment")?;
+    let dir = tempfile::tempdir()?;
+    let m = Masker::new(&[], launch_values(dir.path(), &env))?;
+    assert_eq!(m.value_counts().env, 1);
+    assert!(masks(&m, &v));
+    assert!(process_env(u32::MAX).is_none());
     Ok(())
 }

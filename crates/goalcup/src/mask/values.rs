@@ -29,10 +29,11 @@
 //!
 //! Sources (section 9, owner answer of 2026-11-01 to question 3, sources 1 to 3): the project's
 //! `GH_TOKEN` (1), the credential-named variables of the harness environment goalcup builds
-//! (2, [`env_values`]) and the other credential-named values of the project's key files (3).
+//! (2) and the other credential-named values of the project's key files (3).
 //! Sources 2 and 3 pass the one name gate ([`gated`]). A harness key-file value (source 4) is
 //! not built: it is left out and counted in `skipped`. The readers order, dedupe and cut the
-//! values before the first control line ([`finish`]).
+//! values before the first control line ([`finish`]). This header is the one place that counts
+//! the forms and states the reader order; `mod.rs` and PRD-05 link here.
 
 use super::{SecretValue, ValueCounts, ValueSource};
 use regex::bytes::Regex;
@@ -346,26 +347,42 @@ const TOKEN_VARIABLE: &str = "GH_TOKEN";
 /// The key file the guide tells the participant to keep it in.
 const TOKEN_FILE: &str = ".env.local";
 
-/// The exact values of the project at `project`: the `GH_TOKEN` value (source 1), then every
-/// other credential-named value of its key files (source 3), all `workspace`, through [`finish`].
-pub fn workspace_values(project: &Path) -> Vec<SecretValue> {
-    launch_values(project, &BTreeMap::new())
-}
-
 /// The credential-named variables of `env`, the environment goalcup builds for the harness
 /// (source 2, `connector::LaunchPlan.env`), behind the name gate.
-pub fn env_values(env: &BTreeMap<String, String>) -> Vec<SecretValue> {
+fn env_values(env: &BTreeMap<String, String>) -> Vec<SecretValue> {
     env.iter()
         .filter(|(name, value)| gated(name, value))
         .map(|(_, value)| SecretValue::new(ValueSource::Env, value.clone().into_bytes()))
         .collect()
 }
 
-/// Every exact value of a launch: [`workspace_values`] then the environment values (source 2),
-/// through [`finish`].
+/// Every exact value of a launch, through [`finish`]: the project's `GH_TOKEN` value (source 1),
+/// every other credential-named value of its key files (source 3), all `workspace`, then the
+/// credential-named variables of `env` (source 2). Pass an empty `env` for the key files alone.
 pub fn launch_values(project: &Path, env: &BTreeMap<String, String>) -> Vec<SecretValue> {
     let (token, others) = key_file_values(project);
     finish(token.into_iter().chain(others).chain(env_values(env)))
+}
+
+/// The environment the running process `pid` was started with, the values that are valid text,
+/// read from `/proc/<pid>/environ`. `goalcup recover` passes it to [`launch_values`] so the
+/// recovered recorder masks the values the live harness holds, not those of the terminal that
+/// runs `recover`. None where the system has no such file or it cannot be read (macOS, a
+/// `hidepid` mount): the caller then has only its own environment (PRD-05 section 10, a stated
+/// loss). Nothing read is printed.
+pub fn process_env(pid: u32) -> Option<BTreeMap<String, String>> {
+    let bytes = std::fs::read(format!("/proc/{pid}/environ")).ok()?;
+    Some(
+        bytes
+            .split(|b| *b == 0)
+            .filter_map(|pair| {
+                let at = pair.iter().position(|b| *b == b'=')?;
+                let name = std::str::from_utf8(&pair[..at]).ok()?;
+                let value = std::str::from_utf8(&pair[at + 1..]).ok()?;
+                Some((name.to_owned(), value.to_owned()))
+            })
+            .collect(),
+    )
 }
 
 /// What a reader sends on the first control line. The order is `GH_TOKEN`, the other key-file

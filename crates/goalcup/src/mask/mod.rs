@@ -5,15 +5,14 @@
 //!   connector rules and the exact values, with the left guard, the quote cut and escape
 //!   alignment.
 //! - `stream`: the streaming hold, whose output equals the whole-record masker below the hold.
-//! - `values`: exact values in up to 15 forms (11, plus the JSON-escaped pair for a value with a
-//!   `"` or `\` and the HTML-safe JSON pair for one with a `"`, `\`, `<`, `>` or `&`; equal forms
-//!   count once; the longest is `MAX_FORM_BYTES`, 7 bytes per value byte), and their readers:
-//!   the project's key files and the harness environment goalcup builds, behind the section 9
-//!   name gate.
+//! - `values`: exact values in every form they take, and their readers (the project's key files
+//!   and the harness environment), behind the section 9 name gate. Its header counts the forms
+//!   and states the reader order.
 //! - `meta`: header, scheme, URL and query rules for metadata.
 //!
-//! The masker is pure: no I/O but the key-file reader, no threads, no clock, no panics by
-//! design. No error text here ever formats a byte, a value or the length of a value.
+//! The masker is pure: no I/O but the readers of the key files and of a harness environment
+//! (`values`), no threads, no clock, no panics by design. No error text here ever formats a
+//! byte, a value or the length of a value.
 
 mod meta;
 mod rules;
@@ -26,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
-pub use values::{env_values, launch_values, workspace_values};
+pub use values::{launch_values, process_env};
 
 /// The name of the rule that stars bytes the masker could not decide.
 pub const FAIL_CLOSED: &str = stream::FAIL_CLOSED_KIND;
@@ -162,10 +161,8 @@ impl Masker {
     /// `run_secret` or `fail_closed`, is `MaskError::Rule`. A value that cannot be used is
     /// skipped and counted in `skipped`, never an error. `workspace` and `env` values are used
     /// (the readers apply the section 9 name gate, so a model name or a base URL never arrives);
-    /// a `harness` value (source 4, not built) is counted in `skipped`. The readers order, dedupe
-    /// and cut the values before the first control line; a count-only entry adds its count to
-    /// `skipped`. Here a value equal to one already used is counted nowhere, and past 32 used
-    /// values the rest are `skipped`.
+    /// a `harness` value (source 4, not built) is counted in `skipped`. Ordering, dedupe and the
+    /// 32-value guard are stated once, in the `values` module header.
     pub fn new(rules: &[MaskRule], values: Vec<SecretValue>) -> Result<Masker, MaskError> {
         let policy = stream::Policy::new(rules, &values)?;
         let mut names = meta::Names::default();
