@@ -36,7 +36,9 @@ pub fn run(arg: Option<String>) -> ExitCode {
         return broke(&text::status_unreadable(&path));
     };
     let Some(server) = found.server.as_ref() else {
-        return broke(&text::status_unreadable(&super::server_json(&found.run_dir)));
+        return broke(&text::status_unreadable(&super::server_json(
+            &found.run_dir,
+        )));
     };
     let deadline = server.deadline.as_deref().or(st.deadline.as_deref());
     let deadline = deadline.and_then(unix_of);
@@ -64,9 +66,16 @@ pub fn run(arg: Option<String>) -> ExitCode {
         return fail(&gone(name, &run));
     };
     let Some(facts) = rebuild(&found, &st, harness.pid, harness.start_id, deadline) else {
-        return broke(&format!("goalcup could not read what it needs to restart recording. {}", support(&run, &dir)));
+        return broke(&format!(
+            "goalcup could not read what it needs to restart recording. {}",
+            support(&run, &dir)
+        ));
     };
-    let since = if st.off.since.is_some() { st.off.since.as_deref() } else { Some(st.updated.as_str()) };
+    let since = if st.off.since.is_some() {
+        st.off.since.as_deref()
+    } else {
+        Some(st.updated.as_str())
+    };
     let since = since.and_then(unix_of).unwrap_or(now);
     let port = st.port;
     let outcome = recover(&dir, facts);
@@ -78,14 +87,34 @@ pub fn run(arg: Option<String>) -> ExitCode {
         Err(_) => "not_started",
     };
     let at = UNIX_EPOCH + Duration::from_secs(since);
-    line(&dir, "recover", &[("off_since", Fact::Time(at)), ("port", Fact::N(u64::from(port))), ("outcome", Fact::Word(word))]);
+    line(
+        &dir,
+        "recover",
+        &[
+            ("off_since", Fact::Time(at)),
+            ("port", Fact::N(u64::from(port))),
+            ("outcome", Fact::Word(word)),
+        ],
+    );
     match outcome {
         Ok(r) => {
-            let part = found.entries.iter().position(|e| *e == found.entry).map_or(1, |i| i + 1);
+            let part = found
+                .entries
+                .iter()
+                .position(|e| *e == found.entry)
+                .map_or(1, |i| i + 1);
             let span = text::span_words(now.saturating_sub(since) * 1000);
-            println!("Recording is on again for part {part} of your run with {name}, on the same port.");
-            println!("It was off from {} to {} ({span}); this time is in the record as a gap.", text::local_time(since, true), text::local_time(now, true));
-            println!("{name} was not restarted. This part ends when {name} exits or at the deadline.");
+            println!(
+                "Recording is on again for part {part} of your run with {name}, on the same port."
+            );
+            println!(
+                "It was off from {} to {} ({span}); this time is in the record as a gap.",
+                text::local_time(since, true),
+                text::local_time(now, true)
+            );
+            println!(
+                "{name} was not restarted. This part ends when {name} exits or at the deadline."
+            );
             if r.late {
                 println!("The recorder is still starting.");
             }
@@ -93,10 +122,18 @@ pub fn run(arg: Option<String>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(NotRecovered::PortTaken | NotRecovered::KeyMissing) => {
-            let why = if word == "port_taken" { "the port is used by another program" } else { "the run certificate key is missing" };
-            fail(&format!("goalcup cannot reopen recording on port {port}: {why}. Your agent cannot reach the model service until this part ends. To go on, run: goalcup seal, then goalcup continue {run}"))
+            let why = if word == "port_taken" {
+                "the port is used by another program"
+            } else {
+                "the run certificate key is missing"
+            };
+            fail(&format!(
+                "goalcup cannot reopen recording on port {port}: {why}. Your agent cannot reach the model service until this part ends. To go on, run: goalcup seal, then goalcup continue {run}"
+            ))
         }
-        Err(NotRecovered::Sealed) => fail(&format!("This part has ended, so there is nothing to recover. To go on, run: goalcup continue {run}")),
+        Err(NotRecovered::Sealed) => fail(&format!(
+            "This part has ended, so there is nothing to recover. To go on, run: goalcup continue {run}"
+        )),
         Err(NotRecovered::WatchdogAlive) => fail(WATCHDOG_ALIVE),
         Err(NotRecovered::RecordingOn) => {
             println!("Recording is on; there is nothing to recover.");
@@ -115,11 +152,17 @@ const WATCHDOG_ALIVE: &str =
     "goalcup is still running for this part and restarts recording itself. See: goalcup status";
 
 fn gone(name: &str, run: &str) -> String {
-    format!("{name} is not running, so there is nothing to keep recording. To go on, run: goalcup continue {run}")
+    format!(
+        "{name} is not running, so there is nothing to keep recording. To go on, run: goalcup continue {run}"
+    )
 }
 
 fn support(run: &str, dir: &std::path::Path) -> String {
-    format!("Name run {run} to {}. {}.", text::SUPPORT_ADDRESS, text::details_at(&goalcup_log(dir)))
+    format!(
+        "Name run {run} to {}. {}.",
+        text::SUPPORT_ADDRESS,
+        text::details_at(&goalcup_log(dir))
+    )
 }
 
 fn broke(text: &str) -> ExitCode {
@@ -130,14 +173,26 @@ fn broke(text: &str) -> ExitCode {
 /// The start facts again, from the run's own files (as `start`'s `prepare` made them). The plan
 /// is made while this process holds the home lock itself: the plan then writes nothing in the
 /// running harness's home and does not run the harness, and still reads its config hosts.
-fn rebuild(found: &super::Found, st: &Status, pid: u32, start_id: u64, deadline: Option<u64>) -> Option<StartFacts> {
+fn rebuild(
+    found: &super::Found,
+    st: &Status,
+    pid: u32,
+    start_id: u64,
+    deadline: Option<u64>,
+) -> Option<StartFacts> {
     let server = found.server.as_ref()?;
     let home = home().ok()?;
     let source = &server.connector;
     let file = (source.source != "builtin").then_some(source.source.as_str());
     let loaded = connector::load(file.unwrap_or(&source.id), server.hosts_file.as_deref()).ok()?;
-    let started = st.harness.as_ref().and_then(|h| unix_of(&h.started)).unwrap_or(0);
-    let workspace = std::fs::read_link(format!("/proc/{pid}/cwd")).ok().or_else(|| std::env::current_dir().ok())?;
+    let started = st
+        .harness
+        .as_ref()
+        .and_then(|h| unix_of(&h.started))
+        .unwrap_or(0);
+    let workspace = std::fs::read_link(format!("/proc/{pid}/cwd"))
+        .ok()
+        .or_else(|| std::env::current_dir().ok())?;
     let env = Env {
         vars: super::env_vars(),
         workspace: workspace.clone(),
@@ -150,7 +205,9 @@ fn rebuild(found: &super::Found, st: &Status, pid: u32, start_id: u64, deadline:
     let _lock = HomeLock::take(&isolated).ok()?;
     let plan = connector::plan(&loaded, &env, &isolated);
     let values = workspace_values(&workspace);
-    let wall = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+    let wall = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
     Some(StartFacts {
         run: found.run.clone(),
         entry: found.entry.clone(),
@@ -161,7 +218,12 @@ fn rebuild(found: &super::Found, st: &Status, pid: u32, start_id: u64, deadline:
         local_wall: wall,
         workspace,
         connector: to_value(&plan.connector).ok()?,
-        harness_version: server.entries.iter().find(|e| e.id == found.entry)?.harness_version.clone(),
+        harness_version: server
+            .entries
+            .iter()
+            .find(|e| e.id == found.entry)?
+            .harness_version
+            .clone(),
         keep: env.vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
         build: None,
         hosts: to_value(&plan.hosts).ok()?,
@@ -169,11 +231,18 @@ fn rebuild(found: &super::Found, st: &Status, pid: u32, start_id: u64, deadline:
         native: to_value(&plan.native).ok()?,
         mask_rules: to_value(&plan.mask_rules).ok()?,
         values: to_value(&values).ok()?,
-        ca: CaPem { cert: String::new(), key: String::new() },
+        ca: CaPem {
+            cert: String::new(),
+            key: String::new(),
+        },
         prev: None,
-        harness: Some(HarnessFacts { pid, program: plan.program.display().to_string(), started: st.harness.as_ref()?.started.clone(), start_id }),
+        harness: Some(HarnessFacts {
+            pid,
+            program: plan.program.display().to_string(),
+            started: st.harness.as_ref()?.started.clone(),
+            start_id,
+        }),
         null_since: None,
         notes: Vec::new(),
     })
 }
-

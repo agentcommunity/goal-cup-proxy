@@ -144,7 +144,10 @@ fn sealed_run_over_and_live_watchdog_refuse() {
     w.untouched();
 
     let w = World::new();
-    let wd = stand_in(&w.scratch.path().join(".."), &w.scratch.path().join("wd-hit"));
+    let wd = stand_in(
+        &w.scratch.path().join(".."),
+        &w.scratch.path().join("wd-hit"),
+    );
     let rec = w.dir().join("rec");
     std::fs::create_dir_all(&rec).unwrap();
     let id = proc_start_id(wd.0.id()).unwrap();
@@ -168,7 +171,10 @@ fn a_live_recorder_needs_nothing() {
 #[test]
 fn a_gone_harness_refuses() {
     let w = World::new();
-    w.status(Mode::Recording, json!({"harness": {"pid": 0, "start_id": 1}}));
+    w.status(
+        Mode::Recording,
+        json!({"harness": {"pid": 0, "start_id": 1}}),
+    );
     refused(&w.goalcup(false), 1);
     w.untouched();
 }
