@@ -346,7 +346,8 @@ class Run:
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
             sh(["tmux"] + argv)
         if server == "off":  # no approval: paste now
-            if not wait(lambda: pc.dig(self.status(), "s4_mode") == "recording", self.left(), 2):  # Codex clears the screen and scrollback
+            wait(self.recording_or_dead, self.left(), 2)  # Codex clears the screen and scrollback; a dead pane ends the wait (RIG-6)
+            if pc.dig(self.status(), "s4_mode") != "recording":  # a dead pane: until() raises start-refused at once
                 self.until("Recording in chat mode", "no 'Recording in chat mode'")
             self.daemon_check()
             return self.type_prompt()
@@ -354,9 +355,30 @@ class Run:
         self.pane()
         return "ok", "device code shown"
 
+    def recording_or_dead(self):
+        return pc.dig(self.status(), "s4_mode") == "recording" or self.pane_exit()[0]
+
+    def pane_exit(self):
+        """The tmux pane's end as (dead, status text): goalcup start has exited and the pane is left (remain-on-exit)."""
+        f = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_dead} #{pane_dead_status}"]).stdout.split()
+        return f[:1] == ["1"], (f[1] if f[1:] else "")
+
     def until(self, pattern, why):
-        """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE."""
-        got = wait(lambda: re.search(pattern, self.capture(True)), self.left(), 3)  # scrollback
+        """The first match of `pattern` on the screen within the step's limit; else the step ends INCONCLUSIVE. A pane
+        that has died ends the wait at once (its screen is read after the exit check: a fast successful exit still matches)."""
+        def look():
+            dead, status = self.pane_exit()
+            got = re.search(pattern, self.capture(True))  # scrollback
+            if got or not dead:
+                return got
+            self.refusal()
+            screen = self.pane()
+            lines = [ln.strip() for ln in screen.splitlines() if ln.strip() and not ln.strip().startswith("Pane is dead")]  # tmux's own footer is not goalcup's
+            last = (lines or [""])[-1]
+            last = replace_known(last, self.known() or [])[0]
+            last = re.sub(r"[\x00-\x1f\x7f]", "", last)[:120]
+            raise Step("INCONCLUSIVE", "start-refused: " + ("(exit %s) " % status if status.isdigit() else "") + last)
+        got = wait(look, self.left(), 3)
         if not got:
             self.refusal()
             self.pane()
@@ -367,10 +389,10 @@ class Run:
         """A goalcup start that ended before recording began (the pane is dead): one faults.jsonl line with its exit,
         whether the screen named settings.json and proxy, and whether it printed the pad's proxy value (PRD-11 acceptance
         4 wants the first two and not the third). Booleans only."""
-        dead = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_dead} #{pane_dead_status}"]).stdout.split()
-        if dead[:1] == ["1"]:
+        dead, status = self.pane_exit()
+        if dead:
             text = self.pane(False)
-            self.fault("start-refused", exit=int(dead[1]) if dead[1:] and dead[1].isdigit() else None,
+            self.fault("start-refused", exit=int(status) if status.isdigit() else None,
                        named_file="settings.json" in text, named_key=bool(re.search(r"\bproxy\b", text)),
                        value_shown=bool(re.search(re.escape(PROXY_VALUE) + r"(?!\d)", text)))
 

@@ -33,6 +33,7 @@ STAGING_BUCKET = "goalcup-traces-staging"  # fetch-run's bucket for staging; no 
 # node process that talks to the sandbox, and the conductor's scan of its run folder looks for each value.
 APPROVAL = ("GOALCUP_TEST_APPROVAL_KEY", "GOALCUP_TEST_MEMBER_ID")  # the staging test approval's key, member id
 FETCH = ("DATABASE_URL", "CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN")  # fetch-run's read-only credentials
+UA = "goalcup-pad"  # sent on every HTTP call the pad makes; Python's default is blocked at the edge (error 1010)
 NEVER_IN_BOX = ("GH_TOKEN", *APPROVAL, *FETCH)
 KEY_VAR = re.compile(r"[A-Z0-9_]+_API_KEY")  # put-env copies model and gateway keys only
 NO_BUILD = "no goalcup build"
@@ -324,14 +325,27 @@ def approve(server, code):
         return "approval key or member id not set"
     req = urllib.request.Request(SERVERS[server] + "/v1/device/approve", method="POST", data=json.dumps(
         {"user_code": code, "member_id": member, "approve": True}).encode(),
-        headers={"authorization": "Bearer " + key, "content-type": "application/json"})
+        headers={"authorization": "Bearer " + key, "content-type": "application/json", "user-agent": UA})
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             status, body = r.status, b""
     except urllib.error.HTTPError as e:
         status, body = e.code, e.read()
-    err = re.search(rb'"error":\s*"([a-z_]{1,40})"', body or b"")  # the error code only, never the body
-    return "approved" if status == 200 else ("approval refused: HTTP %d %s" % (status, err[1].decode() if err else "")).strip()
+    except Exception as e:  # a network error: its class only, never the URL, query or headers
+        return "approval failed: " + type(e).__name__
+    if status == 200:
+        return "approved"
+    try:
+        doc = json.loads(body)
+    except ValueError:
+        doc = None
+    if isinstance(doc, dict):  # JSON: the error code only, never the rest of the body
+        err = doc.get("error")
+        tail = err if isinstance(err, str) and re.fullmatch(r"[a-z_]{1,40}", err) else ""
+    else:  # not JSON: its first line, plain
+        lines = body.decode("utf-8", "replace").strip().splitlines()
+        tail = re.sub(r"[\x00-\x1f\x7f]", "", lines[0])[:80] if lines else ""
+    return ("approval refused: HTTP %d %s" % (status, tail)).strip()
 
 
 def step_list(s, harness):
