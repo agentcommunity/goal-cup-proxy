@@ -10,11 +10,15 @@ mod common;
 use common::recorder::records;
 use goalcup::cli::{self, proc_start_id, watchdog_alive, watchdog_pid};
 use goalcup::connector::{ConnectorRef, HomeLock, HostList, LaunchPlan, NativeSources, builtin};
-use goalcup::watchdog::{self, CaPem, StartFacts};
+use goalcup::watchdog::{
+    self, CaPem, HarnessFacts, StartFacts, ToRecorder, ToWatchdog, read_line, send_line,
+};
 use goalcup_format::Record;
 use serde_json::to_value;
 use std::collections::BTreeMap;
+use std::io::BufReader;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -370,4 +374,68 @@ fn watchdog_end_real_deadline_ends_the_tree() {
     let status = f.sealed_status();
     assert_eq!(status["seal"]["reason"], "deadline");
     assert_eq!(status["boot"], 0);
+}
+
+/// The real recorder under a watchdog played by hand: `start` (deadline `deadline_in` ms ahead),
+/// `ready`, then `launch` for a `sleep 600` harness. Returns the recorder, the control socket and
+/// the harness; a stale `rec/run-ca.key` stands where the watchdog would write it.
+fn by_hand(
+    f: &Fixture,
+    deadline_in: Option<u64>,
+) -> (std::process::Child, UnixStream, std::process::Child) {
+    let plan = f.plan();
+    let mut facts = f.facts(&plan);
+    let ca = goalcup::proxy::ca::RunCa::mint(&plan.hosts.ca_subtrees()).unwrap();
+    facts.ca = ca.export();
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
+    facts.deadline = deadline_in.map(|ms| now.unwrap().as_millis() as u64 + ms);
+    let rec = f.entry_dir.join("rec");
+    std::fs::create_dir_all(&rec).unwrap();
+    std::fs::write(rec.join(watchdog::KEY_FILE), "x").unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let (ours, theirs) = UnixStream::pair().unwrap();
+    let recorder = watchdog::spawn::recorder(&real(), false, &listener, &theirs).unwrap();
+    drop(theirs);
+    assert!(send_line(&ours, &ToRecorder::Start(Box::new(facts))));
+    let mut lines = BufReader::new(ours.try_clone().unwrap());
+    let ready = common::within(WAIT, move || read_line::<ToWatchdog>(&mut lines));
+    assert_eq!(ready, Some(Some(ToWatchdog::Ready)));
+    let harness = std::process::Command::new("sleep").arg("600").spawn().unwrap();
+    let pid = harness.id();
+    let start_id = proc_start_id(pid).unwrap();
+    let (program, started) = ("sleep".into(), "2026-11-01T00:00:00Z".into());
+    let launch = HarnessFacts { pid, program, started, start_id };
+    assert!(send_line(&ours, &ToRecorder::Launch(launch)));
+    (recorder, ours, harness)
+}
+
+/// Point 3 and the never-stop rules (PRD-02 sections 9.1 and 11): with the watchdog gone, the
+/// recorder seals itself at its own deadline and never signals the harness.
+#[test]
+fn watchdog_end_real_recorder_alone_seals_at_its_deadline() {
+    let f = Fixture::new();
+    let (mut recorder, ours, mut harness) = by_hand(&f, Some(3_000));
+    drop(ours);
+    assert_eq!(f.sealed_status()["seal"]["reason"], "deadline");
+    assert!(common::within(WAIT, move || recorder.wait().unwrap()).success());
+    assert!(!gone(harness.id()), "the harness was ended");
+    harness.kill().unwrap();
+    harness.wait().unwrap();
+}
+
+/// Point 3 and point 4 (PRD-02 section 11): SIGTERM to a recorder whose watchdog is gone seals
+/// with reason `signal`, removes the CA key and exits 0.
+#[test]
+fn watchdog_end_real_sigterm_seals_with_signal() {
+    let f = Fixture::new();
+    let (mut recorder, ours, mut harness) = by_hand(&f, None);
+    drop(ours);
+    // SAFETY: a signal to one pid, the recorder this test started.
+    unsafe { libc::kill(recorder.id() as libc::pid_t, libc::SIGTERM) };
+    let status = common::within(WAIT, move || recorder.wait().unwrap());
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(f.sealed_status()["seal"]["reason"], "signal");
+    assert!(!f.entry_dir.join("rec").join(watchdog::KEY_FILE).exists());
+    harness.kill().unwrap();
+    harness.wait().unwrap();
 }

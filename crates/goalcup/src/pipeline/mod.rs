@@ -62,7 +62,7 @@ use item::Item;
 use serde_json::{Value, json};
 use status::{Losing, Off, Outlived};
 use std::collections::{HashMap, HashSet};
-use std::io::{BufRead, BufReader};
+use std::io::BufReader;
 use std::os::fd::FromRawFd;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::UnixStream;
@@ -781,6 +781,15 @@ const EXIT_MASKER: i32 = 78;
 /// records nothing, and so does a boot on an entry already sealed.
 pub fn run_recorder(null: bool) -> ExitCode {
     secure::harden();
+    // SAFETY: a zeroed local struct, filled before `sigaction` reads it; the handler stores into
+    // a static atomic and nothing else.
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction = on_term as *const () as libc::sighandler_t;
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_flags = libc::SA_RESTART;
+        libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
+    }
     // SAFETY: the watchdog's spawn hands fd 4 to this process as a connected Unix socket, owned
     // by nothing else here.
     let ctl = unsafe { UnixStream::from_raw_fd(4) };
@@ -900,8 +909,19 @@ pub fn run_recorder(null: bool) -> ExitCode {
         seal::sealed_status(&dir, |s| (s.pid, s.start_id, s.port) = me);
         run.late = Some(seal::keep_sealed(&run.rec, &dir, masker));
     }
+    // The deadline on boot time, converted once (PRD-17 S7); only a server word moves it.
+    let wall_ms = clock::wall_ns() / 1_000_000;
+    let left_ns = |d: u64| d.saturating_sub(wall_ms).saturating_mul(1_000_000);
+    let deadline = (facts.deadline).map(|d| Mono(Mono::now().0.saturating_add(left_ns(d))));
     run.send(&ToWatchdog::Ready);
-    run.control(&mut lines, &dir, &facts.workspace)
+    run.control(lines, deadline, &dir, &facts.workspace)
+}
+
+/// SIGTERM to the recorder: the control loop seals with reason `signal` (PRD-02 section 11).
+static TERM: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn on_term(_: libc::c_int) {
+    TERM.store(true, Ordering::SeqCst);
 }
 
 /// What the control loop holds for the seal.
@@ -928,17 +948,38 @@ struct Run {
 }
 
 impl Run {
-    /// Reads control lines from the watchdog (PRD-02 section 8) until the seal. On EOF (the
-    /// watchdog is gone, section 9.1) it watches the harness by pid and start id each second and
-    /// seals with `harness_exit` once it is gone.
-    fn control(mut self, lines: &mut impl BufRead, dir: &Path, workspace: &Path) -> ExitCode {
-        while let Some(line) = read_line(lines) {
-            match line {
-                Some(ToRecorder::Launch(h)) => {
+    /// Reads control lines from the watchdog (PRD-02 section 8) until the seal, on a tick of at
+    /// most 1 s. Each tick: SIGTERM seals with `signal`; a new server word goes to the watchdog,
+    /// and `seconds_left` moves the deadline. While the watchdog lives it decides; after EOF (it
+    /// is gone, section 9.1) the recorder seals itself: on a server `stop` at once, at the
+    /// deadline, or once the harness, watched by pid and start id, is gone. It never signals the
+    /// harness.
+    fn control(
+        mut self,
+        mut lines: BufReader<UnixStream>,
+        mut deadline: Option<Mono>,
+        dir: &Path,
+        workspace: &Path,
+    ) -> ExitCode {
+        let (tx, rx) = mpsc::channel();
+        // At EOF the thread ends and drops `tx`: the loop sees the channel disconnected.
+        std::thread::spawn(move || {
+            while let Some(line) = read_line::<ToRecorder>(&mut lines) {
+                if tx.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        let mut word = self.uploader.as_ref().map(UploadHandle::server_word);
+        let tick = std::time::Duration::from_secs(1);
+        let mut eof = false;
+        loop {
+            match rx.recv_timeout(tick) {
+                Ok(Some(ToRecorder::Launch(h))) => {
                     self.board.set(|s| s.harness = Some(harness_status(&h)));
                     self.harness = Some(h);
                 }
-                Some(ToRecorder::Exit { exit }) => {
+                Ok(Some(ToRecorder::Exit { exit })) => {
                     self.board.set(|s| {
                         if let Some(h) = &mut s.harness {
                             h.exit = exit;
@@ -946,21 +987,42 @@ impl Run {
                     });
                     (self.exit, self.exit_at) = (exit, Some(self.rec.now()));
                 }
-                Some(ToRecorder::Seal { reason, outlived }) => {
+                Ok(Some(ToRecorder::Seal { reason, outlived })) => {
                     return self.seal(reason, outlived, dir, workspace);
                 }
                 // A null recorder exits without sealing; the watchdog starts a normal one.
-                Some(ToRecorder::Restart) if self.null => return ExitCode::SUCCESS,
+                Ok(Some(ToRecorder::Restart)) if self.null => return ExitCode::SUCCESS,
+                Err(mpsc::RecvTimeoutError::Disconnected) if !eof => eof = true,
+                Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(tick),
                 _ => {}
             }
-        }
-        // Slice B adds the recorder's own deadline timer to this watch.
-        loop {
-            let gone = (self.harness.as_ref()).is_none_or(|h| !cli::alive(h.pid, h.start_id));
-            if gone {
-                return self.seal(SealReason::HarnessExit, None, dir, workspace);
+            if TERM.load(Ordering::SeqCst) {
+                return self.seal(SealReason::Signal, None, dir, workspace);
             }
-            std::thread::sleep(std::time::Duration::from_secs(1));
+            let changed = word.as_mut().filter(|w| w.has_changed().unwrap_or(false));
+            if let Some(w) = changed.and_then(|w| w.borrow_and_update().clone()) {
+                if let Some(s) = w.seconds_left {
+                    let left = s.saturating_mul(1_000_000_000);
+                    deadline = Some(Mono(w.asked_at.0.saturating_add(left)));
+                }
+                if !eof {
+                    self.send(&ToWatchdog::Server(w));
+                }
+            }
+            if !eof {
+                continue;
+            }
+            let stop = (word.as_ref())
+                .and_then(|w| w.borrow().as_ref().filter(|w| w.stop).map(|w| w.reason.clone()));
+            let gone = (self.harness.as_ref()).is_none_or(|h| !cli::alive(h.pid, h.start_id));
+            let reason = match stop {
+                Some(r) if r.as_deref() != Some("deadline") => SealReason::ServerStop,
+                Some(_) => SealReason::Deadline,
+                None if deadline.is_some_and(|d| Mono::now() >= d) => SealReason::Deadline,
+                None if gone => SealReason::HarnessExit,
+                None => continue,
+            };
+            return self.seal(reason, None, dir, workspace);
         }
     }
 
