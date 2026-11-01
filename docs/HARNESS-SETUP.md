@@ -1,5 +1,9 @@
 # Set up your harness for a 168-hour run
 
+> Kept live only because the harness facts sheets in [harnesses](harnesses/README.md) still link to
+> it. The [participant's guide](PARTICIPANT-GUIDE.md#3-set-up) is the current setup text; this page
+> goes to `archive/` when the sheets stop linking here.
+
 **For participants.** This page is about a harness that Goal Cup already ships. To add a harness
 that is not here, see [Add a harness](HARNESS-ONBOARDING.md), the contributors' guide: its
 connector PR adds the harness's section to this page.
@@ -8,10 +12,9 @@ During your run you may type only "keep going" ([RULES](RULES.md#one-prompt-then
 So your harness must work for 168 hours without you. This page tells you which harness settings
 to set before the start, and where they go.
 
-Goal Cup never changes your harness settings
-([D67](DECISIONS.md#d67-goal-cup-recommends-running-without-permission-prompts-the-participant-sets-it)).
-You set them yourself. `goalcup setup` tells you when a permission setting is missing, and links
-to this page.
+`goalcup setup` writes the no-prompt settings into goalcup's own harness home after one question,
+and never changes your own settings
+([D86](DECISIONS.md#d86-goalcup-setup-writes-the-auto-update-switch-and-the-no-prompt-values-after-one-question)).
 
 Goal Cup records two things: the model calls (on the wire) and the harness's own session file.
 One does not stand in for the other. If a run has recorded requests to the model service for ten
@@ -22,7 +25,7 @@ a session file is recorded.
 
 A run that has recorded no model call at all is a different `PROBLEM:` line (3 minutes into a practice
 run, 10 into a real one): it works for every harness, and means Goal Cup is not seeing the agent's
-calls. The line says what to do, and [PARTICIPANT-GUIDE](PARTICIPANT-GUIDE.md#appendix-what-goalcup-status-says)
+calls. The line says what to do, and [PARTICIPANT-GUIDE](PARTICIPANT-GUIDE.md#7-during-the-run)
 lists it.
 
 The facts here come from Goal Cup's own runs, most of them from the
@@ -36,7 +39,7 @@ means that nobody at Goal Cup has tried it. The details are in each
 2. Sign in there, or paste your API key into the harness's own prompt. Answer the harness's
    first-run screens there ([section 7](#7-first-run-screens)). The `.env.local` in your project
    folder is not for this: model keys there are for your agent's own product, and the harness's
-   sign-in happens here, in setup ([guide, section 5](PARTICIPANT-GUIDE.md#5-your-run)).
+   sign-in happens here, in setup ([guide, section 5](PARTICIPANT-GUIDE.md#6-your-run)).
 3. Exit the harness.
 4. Open the settings file of your harness ([where the settings live](#where-the-settings-live)).
 5. Add the settings from your harness's section below.
@@ -186,7 +189,7 @@ Amp needs no setting to run without permission prompts.
 Hermes's own installer (`curl … install.sh | bash`) gives you the newest release. Before each
 start, Goal Cup adds a `recorder` entry for your model service to Hermes's config, with Goal
 Cup's recording certificate, and stops a Hermes gateway left running from before
-([facts sheet](harnesses/hermes-cli.md#hermes-022-the-gateway-and-certificate-trust)). You do not
+([facts sheet](harnesses/hermes-cli.md#6-network)). You do not
 need to do anything for it.
 
 What to expect from a recent Hermes:
@@ -365,7 +368,7 @@ Cup never pushes for your agent.
 1. Say in your prompt that the agent commits and pushes its work often.
 2. Let the agent write `.git`. For Codex, this needs `sandbox_mode = "danger-full-access"`.
 3. The agent pushes with the GitHub token in your project folder's `.env.local`
-   ([guide, section 5](PARTICIPANT-GUIDE.md#5-your-run)). Goal Cup passes it nothing of your git
+   ([guide, section 5](PARTICIPANT-GUIDE.md#6-your-run)). Goal Cup passes it nothing of your git
    login (D71), so it has no global git config: the agent must set `git config user.name` and
    `git config user.email` in its repository. The block `goalcup start` prints (it starts with
    "Push to") says so. Paste it at the very start of your first prompt: it is how the agent learns

@@ -1,0 +1,26 @@
+# Factory Droid 0.251.0, checked against docs.factory.ai (CLI settings, BYOK overview) and the 0.251.0 binary.
+# FACTORY_HOME_OVERRIDE (read in the binary, not in the docs) moves ~/.factory and nothing else, so HOME stays
+# the participant's. There is no `droid daemon stop`: a daemon or desktop app started outside goalcup keeps its env.
+id = "droid-cli"
+name = "Factory Droid"
+program = "droid"
+resume = ["--resume", "--last"]
+home = { FACTORY_HOME_OVERRIDE = "{home}" }
+env = { FACTORY_DROID_AUTO_UPDATE_ENABLED = "false" }
+ca_env = ["FACTORY_EXTRA_CA_CERTS"]
+host_hints = [
+  { file = "{home}/.factory/settings*.json", key = "customModels.*.baseUrl" },
+  { file = "{home}/.factory/config.json", key = "custom_models.*.base_url" },
+  { file = "{workspace}/.factory/settings*.json", key = "customModels.*.baseUrl" },
+]
+hint_env = ["FACTORY_API_BASE_URL", "FACTORY_API_BASE_URL_EU"]
+secret_files = [
+  "{home}/.factory/auth.json", "{home}/.factory/config.json", "{home}/.factory/settings.json",
+  "{home}/.factory/settings.local.json",
+]
+native = [
+  { name = "settings", root = "{home}/.factory/sessions", pattern = "**/*.settings.json", form = "snapshot" },
+  { name = "sessions", root = "{home}/.factory/sessions", pattern = "**/*.jsonl" },
+]
+first_screen = "If Droid asks you to sign in, do it now, before you type your prompt."
+no_prompts = [{ file = "{home}/.factory/settings.json", key = "sessionDefaultSettings.autonomyLevel", value = "high" }]

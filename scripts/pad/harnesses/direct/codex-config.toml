@@ -1,0 +1,5 @@
+# Codex config.toml for the direct case, as a participant writes it
+# (https://learn.chatgpt.com/docs/config-file/config-reference: `model`, `model_reasoning_effort`).
+# The cheapest OpenAI model in pad.toml [rates], at low reasoning effort: the settings of the A1 comparison with run 1.
+model = "gpt-6.1-sol"
+model_reasoning_effort = "low"

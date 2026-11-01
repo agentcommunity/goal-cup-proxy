@@ -21,6 +21,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub mod run1;
+
 pub const ENTRY: &str = "e0123456789abcdef";
 pub const RUN: &str = "r0123456789abcdef";
 pub const HOST: &str = "model.example.test";
@@ -427,6 +429,23 @@ impl Entry {
             off,
             lost,
             tail,
+        });
+    }
+
+    /// A metadata GAP as PRD-02's mask worker writes it: wall times 0, extent on mono only.
+    pub fn meta_gap(&mut self, sid: u64, tail: Value) {
+        self.clock.ns += MS;
+        let end = self.clock.now();
+        self.put(Record::Gap {
+            sid,
+            reason: GapReason::MaskFailed,
+            start_wall: 0,
+            end_wall: 0,
+            start_mono: end.mono_ns - 1,
+            end_mono: end.mono_ns,
+            off: 0,
+            lost: 1,
+            tail: tail.to_string().into_bytes(),
         });
     }
 
@@ -874,4 +893,18 @@ pub fn ids_with(v: &Value, res: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Copies a folder: the K2 and K7 exports of PRD-12 (section 12). With `GOALCUP_FIXTURES_OUT`
+/// set, the run 1 test writes `k2-part`, `k2-fetched` (lying `fetch.json`), `k7-part` and
+/// `k7-fetched` (honest, from the Clean shape) there, to be committed under
+/// `scripts/pad/fixtures/`.
+pub fn export(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for f in fs::read_dir(from).unwrap().map(|f| f.unwrap().path()) {
+        match f.is_dir() {
+            true => export(&f, &to.join(f.file_name().unwrap())),
+            false => drop(fs::copy(&f, to.join(f.file_name().unwrap())).unwrap()),
+        }
+    }
 }

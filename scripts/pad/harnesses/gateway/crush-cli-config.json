@@ -1,0 +1,6 @@
+{
+  "models": {
+    "large": { "provider": "vercel", "model": "deepseek/deepseek-v4.1-flash" },
+    "small": { "provider": "vercel", "model": "deepseek/deepseek-v4.1-flash" }
+  }
+}

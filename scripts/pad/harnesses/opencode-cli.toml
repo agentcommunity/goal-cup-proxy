@@ -1,0 +1,31 @@
+# Pad data for OpenCode 1 (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://opencode.ai/docs/providers/ (DeepSeek through /connect, keys in
+# ~/.local/share/opencode/auth.json), https://opencode.ai/docs/config/ (provider/model-id, small_model, autoupdate),
+# https://opencode.ai/docs/tui/ (/exit), https://vercel.com/docs/ai-gateway/coding-agents/opencode (provider vercel).
+# Measured in a build box 31 Oct 2026: opencode-ai@1.19.5 installs under its own prefix and prints 1.19.5.
+# Read from docs and the audit facts sheet, not run against a live harness: the auth.json shape, the model ids, the TUI.
+#
+# OpenCode 1 and 2 are both the program `opencode` (connectors/opencode-cli.toml and opencode2-cli.toml differ by version).
+# Each major lives in $HOME/.opencode/<version>; `~/.local/bin/opencode` is a link to one of them (the image PATH reaches
+# it, and goalcup finds `opencode` there). version_cmd points the link at this file's version first, so every run
+# starts the major its file pins; where the image layout is absent (a run by hand), it only prints the version.
+version = "1.19.5"
+version_cmd = 'if [ -x "$HOME/.opencode/1.19.5/bin/opencode" ]; then mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/1.19.5/bin/opencode" "$HOME/.local/bin/opencode"; fi; opencode --version'
+install = 'npm i -g --prefix "$HOME/.opencode/1.19.5" opencode-ai@1.19.5 && mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/1.19.5/bin/opencode" "$HOME/.local/bin/opencode"'
+key_kind = "deepseek"
+key_route = "file"
+key_file = "{home}/.local/share/opencode/auth.json"
+key_line = '{"deepseek": {"type": "api", "key": "{key}"}}'
+# Pad data for the dodger copy only (section 2): provider deepseek calls https://api.deepseek.com.
+model_host = "api.deepseek.com"
+exit_keys = '/exit\r'
+keep_going = true
+
+[direct]
+files = { ".config/opencode/opencode.json" = "direct/opencode-cli-config.json" }
+
+[gateway]
+files = { ".config/opencode/opencode.json" = "gateway/opencode-cli-config.json" }
+key_route = "file"
+key_file = "{home}/.local/share/opencode/auth.json"
+key_line = '{"vercel": {"type": "api", "key": "{key}"}}'

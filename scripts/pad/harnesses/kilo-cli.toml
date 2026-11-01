@@ -1,0 +1,31 @@
+# Pad data for Kilo CLI (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 31 Oct 2026: https://kilo.ai/docs/cli (`npm install -g @kilocode/cli`, kilo.json under
+# $XDG_CONFIG_HOME/kilo, `model` as provider/model, {env:NAME} in global config, /connect), https://kilo.ai/docs/ai-providers/deepseek
+# (DeepSeek is a native provider; the CLI tab was not in the fetched text), https://vercel.com/docs/ai-gateway/coding-agents/kilo-code
+# (the openai-compatible provider block, https://ai-gateway.vercel.sh/coding-agent/v1, AI_GATEWAY_API_KEY, model ids
+# `openai-compatible/<gateway id>`), https://api-docs.deepseek.com/quick_start/pricing (the model id),
+# https://vercel.com/ai-gateway/models/deepseek-v4.1-flash (the gateway's id), https://github.com/Kilo-Org/kilocode/releases/tag/v7.8.25
+# (the pinned version, docs/plans/2026-10-30-audit/O-harness-access.md H12.1), https://kilo.ai/docs/cli (/exit, /quit, /q).
+# Read from the docs, not run against a live harness (no key enters a build box): both routes and both config files. The
+# model entry below is declared by hand because no page shows whether Kilo's catalog lists it.
+version = "7.8.25"
+version_cmd = "kilo --version"
+install = "npm i -g @kilocode/cli@7.8.25"
+key_kind = "deepseek"
+# Kilo's native deepseek provider reads DEEPSEEK_API_KEY from the environment.
+key_route = "env"
+key_env = "DEEPSEEK_API_KEY"
+# Pad data for the dodger copy only (section 2): provider deepseek calls https://api.deepseek.com.
+model_host = "api.deepseek.com"
+exit_keys = '/exit\r'
+keep_going = true
+
+[direct]
+# XDG_CONFIG_HOME is the isolated home's .config, so this is Kilo's global kilo.json.
+files = { ".config/kilo/kilo.json" = "direct/kilo-cli-config.json" }
+
+[gateway]
+# Vercel AI Gateway as an OpenAI-compatible provider: the owner's own example (PRD-16 A4). The key is read through {env:}.
+files = { ".config/kilo/kilo.json" = "gateway/kilo-cli-config.json" }
+key_route = "env"
+key_env = "AI_GATEWAY_API_KEY"

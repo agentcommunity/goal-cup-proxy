@@ -1,13 +1,15 @@
 //! The end screen (PRD-10 section 5): what a sealed part wrote, what it lost, how long recording
 //! was off and what is still on this computer. It prints only what the sealed `status.json` holds
 //! (its `written` and `off` equal the seal's totals) and adds no counter (ledger L2), so the screen
-//! and `goalcup-verify check` agree by construction. The upload lines follow with seam S9.
+//! and `goalcup-verify check` agree by construction. The upload line comes from `upload.json`
+//! (seam S9).
 
 use std::path::Path;
 
 use super::status::by_count;
 use super::{ServerJson, text};
 use crate::pipeline::status::{Mode, Status};
+use crate::upload::state::{self as up, UploadJson};
 use crate::watchdog::SealReason;
 
 /// The part is not sealed (or its `status.json` cannot be read): there is no end screen yet.
@@ -17,7 +19,8 @@ pub struct NotSealed;
 /// How many unlisted tunnel hosts are named on screen (rule 4).
 const SHOWN_HOSTS: usize = 5;
 
-/// The end screen of the part in `entry_dir`, from its `status.json` and its run's `server.json`.
+/// The end screen of the part in `entry_dir`, from its `status.json`, `upload.json` and its run's
+/// `server.json`.
 pub fn end_screen(entry_dir: &Path) -> Result<String, NotSealed> {
     let st: Status = super::read_json(&super::status_json(entry_dir)).ok_or(NotSealed)?;
     let run_dir = entry_dir.parent().ok_or(NotSealed)?;
@@ -29,17 +32,23 @@ pub fn end_screen(entry_dir: &Path) -> Result<String, NotSealed> {
     screen(
         &st,
         server.as_ref(),
+        up::read(entry_dir).as_ref(),
         &run,
         &super::goalcup_log(entry_dir),
         super::now(),
     )
 }
 
-/// The end screen as a pure function of the sealed `status.json`, `server.json`, the run id, the
-/// `goalcup.log` path and now (seconds since 1970).
+/// The end screen as a function of the sealed `status.json`, `server.json`, `upload.json`, the run
+/// id, the `goalcup.log` path and now (seconds since 1970). The one thing it reads besides those is
+/// process liveness (`super::alive(st.pid, st.start_id)`): a live recorder still sends the wrap-up,
+/// so the upload line names `goalcup upload` only when that process is gone. Whoever seals a dead
+/// recorder's entry (`close_dead_entry`) must write that recorder's `pid` and `start_id`, not the
+/// caller's own, or this screen would see it alive and drop the line.
 pub fn screen(
     st: &Status,
     server: Option<&ServerJson>,
+    upload: Option<&UploadJson>,
     run: &str,
     log: &Path,
     now: u64,
@@ -137,6 +146,99 @@ pub fn screen(
     for l in &body {
         out += &format!("  {l}\n");
     }
+    // The wrap-up sends while the recorder lives: only then is the end screen not the last word.
+    let end = !super::alive(st.pid, st.start_id);
+    if let Some(u) = upload {
+        out += &format!("{}\n", text::upload_line(u, now, end));
+    }
     out += &format!("{}\n", text::details_at(log));
     Ok(out)
+}
+
+// What `start` prints once `watchdog::run` has returned (PRD-10 section 3 step 10).
+
+/// How long a sealed `status.json` is waited for after the watchdog returns, in 100 ms steps.
+const SEALED_WAIT: u32 = 30;
+
+/// What `start` prints when the watchdog has returned: the end screen of the sealed part, with a
+/// line first when the harness never started, or the start refusal when nothing was recorded at
+/// all. `refused` is the watchdog's mask refusal, which has its own text; `not_started` is its
+/// `NOT_STARTED` exit. Only the details a participant can act on; no value and no byte of the
+/// record.
+pub fn closing(
+    entry_dir: &Path,
+    name: &str,
+    run: &str,
+    refused: bool,
+    not_started: bool,
+) -> String {
+    if refused {
+        return format!("{}\n", text::mask_refused());
+    }
+    for _ in 0..SEALED_WAIT {
+        if let Ok(screen) = end_screen(entry_dir) {
+            let st: Option<Status> = super::read_json(&super::status_json(entry_dir));
+            let gone = st.is_some_and(|s| s.harness.is_none());
+            let first = gone.then(|| format!("{name} did not start.\n\n"));
+            return format!("{}{screen}", first.unwrap_or_default());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let log = text::details_at(&super::goalcup_log(entry_dir));
+    let support = text::SUPPORT_ADDRESS;
+    // The recorder can die between writing `status.json` and sending `ready`: not started, no
+    // harness, never sealed.
+    let never_ran = not_started
+        && super::read_json::<Status>(&super::status_json(entry_dir))
+            .is_some_and(|s| s.harness.is_none());
+    if super::status_json(entry_dir).exists() && !never_ran {
+        return format!(
+            "goalcup could not read the final counts of this part. Run goalcup status, or write \
+             to {support}.\n{log}\n"
+        );
+    }
+    format!(
+        "Goal Cup could not start recording, so {name} was not started. Run the command again. \
+         If it fails again, write to {support} and name run {run}.\n{log}\n"
+    )
+}
+
+/// The upload progress after the end screen (PRD-06 section 9): while the recorder lives and the
+/// upload is going, one `Upload:` line whenever its state or the bytes waiting change, then the
+/// last word. It ends when the recorder does (its own bound is 60 minutes, PRD-06 section 9).
+/// Ctrl-C ends this wait only; the recorder finishes alone.
+pub fn wrap_up(entry_dir: &Path, say: &mut dyn FnMut(&str)) {
+    let recorder = || -> bool {
+        let st: Option<Status> = super::read_json(&super::status_json(entry_dir));
+        st.is_some_and(|s| super::alive(s.pid, s.start_id))
+    };
+    if !recorder() {
+        return;
+    }
+    // The end screen just showed the upload line it read; do not print the same state again.
+    let key = |u: &UploadJson| (u.state, u.waiting_bytes, u.final_);
+    let mut shown = up::read(entry_dir).as_ref().map(key);
+    while recorder() {
+        if let Some(u) = up::read(entry_dir) {
+            if shown != Some(key(&u)) {
+                say(&text::upload_line(&u, super::now(), false));
+                shown = Some(key(&u));
+            }
+            if matches!(
+                u.state,
+                up::State::Local
+                    | up::State::Done
+                    | up::State::Closed
+                    | up::State::Stuck
+                    | up::State::Refused
+            ) {
+                return;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(1));
+    }
+    // The wrap-up is over: nothing sends this part by itself now.
+    if let Some(u) = up::read(entry_dir) {
+        say(&text::upload_line(&u, super::now(), true));
+    }
 }

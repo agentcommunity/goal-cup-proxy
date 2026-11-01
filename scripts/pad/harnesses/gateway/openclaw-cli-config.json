@@ -1,0 +1,13 @@
+{
+  "models": {
+    "providers": {
+      "vercel-ai-gateway": {
+        "baseUrl": "https://ai-gateway.vercel.sh/coding-agent/v1",
+        "apiKey": "${AI_GATEWAY_API_KEY}",
+        "api": "openai-completions",
+        "models": [{ "id": "deepseek/deepseek-v4.1-flash", "name": "DeepSeek V4.1 Flash (Gateway)" }]
+      }
+    }
+  },
+  "agents": { "defaults": { "model": { "primary": "vercel-ai-gateway/deepseek/deepseek-v4.1-flash" } } }
+}

@@ -1,5 +1,5 @@
 # Kilo CLI 7.8.25, checked against kilo.ai CLI docs, Vercel's AI Gateway Kilo guide and the 7.8.25 package.
-# Kilo reads .jsonc files as JSON with comments (seam: docs/harnesses/kilo-cli.md).
+# Kilo reads .jsonc files as JSON with comments.
 id = "kilo-cli"
 name = "Kilo CLI"
 program = "kilo"

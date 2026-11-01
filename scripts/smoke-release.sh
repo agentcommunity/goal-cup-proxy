@@ -3,13 +3,10 @@
 #
 #   sh scripts/smoke-release.sh <tarball> <version>
 #
-# Unpacks it, checks that all three binaries print <version>, and checks through
-# `goalcup doctor --json` that the unpacked goalcup finds the connectors it ships, and every
-# one's pin passes. doctor exits 1 when no harness is
-# installed, so only its report is judged. It also checks that the tarball holds every folder of
-# the repository's connectors/ (the checkout this script is in), so a harness that was merged
-# but not packaged fails the release. It runs with an environment built from nothing, so
-# neither $GOALCUP_CONNECTORS_DIR nor a real config directory can stand in for the tarball's.
+# Unpacks it and, in an environment built from nothing, checks that both binaries print
+# `<name> <version>`, that `goalcup-verify dump` of PRD-01's worked example gives the committed
+# lines (compared as JSON values, as crates/goalcup-format/tests/golden.rs does), which proves
+# the shipped reader on this target, and that no GOALCUP_TEST_ hook reached the shipped goalcup.
 set -eu
 
 if [ $# -ne 2 ]; then
@@ -18,17 +15,18 @@ if [ $# -ne 2 ]; then
 fi
 tarball=$1
 version=$2
+data="$(cd "$(dirname "$0")/.." && pwd)/crates/goalcup-format/tests/data"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 tar -xzf "$tarball" -C "$work"
 root="$work/$(basename "$tarball" .tar.gz)"
-mkdir "$work/home"
+mkdir "$work/home" "$work/entry"
 run() {
-    env -i HOME="$work/home" PATH=/usr/bin:/bin GOALCUP_CONFIG_DIR="$work/config" "$@"
+    env -i HOME="$work/home" PATH=/usr/bin:/bin "$@"
 }
 
-for binary in goalcup goalcup-daemon goalcup-verify; do
+for binary in goalcup goalcup-verify; do
     printed=$(run "$root/bin/$binary" --version)
     if [ "$printed" != "$binary $version" ]; then
         echo "smoke: $binary --version printed '$printed', expected '$binary $version'" >&2
@@ -36,20 +34,20 @@ for binary in goalcup goalcup-daemon goalcup-verify; do
     fi
 done
 
-run "$root/bin/goalcup" doctor --json >"$work/doctor.json" || true
-python3 - "$work/doctor.json" "$root/share/goalcup/connectors" "$(dirname "$0")/../connectors" <<'PY'
-import json, os, sys
-try:
-    report = json.load(open(sys.argv[1]))
-except ValueError:
-    sys.exit("smoke: goalcup doctor --json printed no report:\n" + open(sys.argv[1]).read())
-shipped = sorted(d for d in os.listdir(sys.argv[2]) if os.path.isdir(os.path.join(sys.argv[2], d)))
-committed = sorted(d for d in os.listdir(sys.argv[3]) if os.path.isdir(os.path.join(sys.argv[3], d)))
-if shipped != committed:
-    sys.exit(f"smoke: the tarball ships connectors {shipped}, the repository has {committed}")
-pins = {c["connector_id"]: next((k["level"] for k in c["checks"] if k["id"] == "manifest_pin"), None)
-        for c in report["connectors"]}
-if sorted(pins) != shipped or set(pins.values()) != {"pass"}:
-    sys.exit(f"smoke: shipped connectors {shipped}, doctor manifest_pin {pins}")
-PY
+# The worked example is the raw stream; a part file on disk is zstd, so compress it first.
+zstd -q -c "$data/worked-example.gcr" >"$work/entry/worked-example.gcr"
+run "$root/bin/goalcup-verify" dump --text "$work/entry/worked-example.gcr" >"$work/dump.jsonl"
+python3 -c '
+import json, sys
+got = [json.loads(l) for l in open(sys.argv[1])]
+want = [json.loads(l) for l in open(sys.argv[2])]
+if got != want:
+    sys.exit("smoke: goalcup-verify dump of the worked example differs from the committed lines")
+' "$work/dump.jsonl" "$data/worked-example.dump.jsonl"
+
+hooks=$(grep -ac GOALCUP_TEST_ "$root/bin/goalcup" || true)
+if [ "$hooks" != 0 ]; then
+    echo "smoke: bin/goalcup holds GOALCUP_TEST_ $hooks times; a hooked build must not ship" >&2
+    exit 1
+fi
 echo "smoke: $(basename "$tarball") ok"

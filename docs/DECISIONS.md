@@ -203,7 +203,7 @@ chained record is the start.
 
 A connector declares how its harness is ended: `process_group` or `native_pid` (the npm wrapper of
 Codex hides the native binary), plus a grace. Seal-time termination follows it. See D30 and
-[TERMINATION](TERMINATION.md).
+[TERMINATION](archive/TERMINATION.md).
 
 ## D23. Harness tiers.
 
@@ -232,7 +232,7 @@ must be stripped before anything is published (open: [TODO](../TODO.md#known-iss
 `Confirmed` means: a process-table sweep after signalling found no member of the owned set alive,
 confirmed by a second sweep. The owned set is the root and what the daemon could reach by walking
 its descendants. A process that left the walk before the first snapshot is outside it. The limit is
-stated, not hidden. Full contract and per-platform windows: [TERMINATION](TERMINATION.md).
+stated, not hidden. Full contract and per-platform windows: [TERMINATION](archive/TERMINATION.md).
 
 ## D36. Two-tier redaction on the wire leg, and a harness-agnostic recorder.
 
@@ -450,7 +450,7 @@ choice the participant can make through the connector.
 A tool command therefore runs with the participant's full access. It can reach Goal Cup Proxy's control
 file, its own session file, the shared config homes and the real `~/.codex` and `~/.claude`, and
 use a tool that ignores `HTTPS_PROXY`. Traffic to an unlisted host is tunnelled and noted
-([CHEAT-CHECKLIST](CHEAT-CHECKLIST.md)). D57 adds that connectors run chat mode and set no
+([CHEAT-CHECKLIST](archive/CHEAT-CHECKLIST.md)). D57 adds that connectors run chat mode and set no
 approval or permission option. The v5 `Launch` fields `allowed_tool_rule` and
 `process_handoff_digest` stay readable and are written empty. The verifier names no harness for
 them: both present and well-formed, or both absent.
@@ -1225,8 +1225,8 @@ from nothing.
   no longer banned.
 - **`providers.toml` is frozen.** It keeps `anthropic` and `deepseek` (CONNECTOR-SCHEMA promise 6),
   and no row is added: no `vercel` row and no per-path hint in a host row.
-- **The access token.** README and SECURITY say it in one sentence
-  ([README](../README.md#the-access-token)): it is forwarded unread and never written.
+- **The access token.** RULES says it in one sentence
+  ([RULES](RULES.md)): it is forwarded unread and never written.
 
 This supersedes D62's refusal of a missing value (it now holds only with `absent = "refuse"`), its
 `env` deny word and its one-key form.

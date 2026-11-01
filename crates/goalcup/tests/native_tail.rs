@@ -2,6 +2,7 @@
 //! GAP, the run-start rule, snapshots and the seal's close, driven with real files.
 
 mod common;
+mod native_common;
 
 use std::ffi::OsStr;
 use std::fs::{self, File, OpenOptions};
@@ -9,10 +10,11 @@ use std::io::Write;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use common::recorder::{data_of, gaps};
+use common::recorder::{data_of, ends, events, gaps, opens};
 use goalcup::native::fsx::{Dir, Kind, Stat};
 use goalcup::native::tail::{Stop, Tail};
-use goalcup::pipeline::{Call, Calls, Cursors, EndReason, GapReason, Recorder, StreamKind};
+use goalcup::pipeline::{Calls, Cursors, EndReason, GapReason, Recorder, StreamKind};
+use native_common::{append, gap_rows};
 use serde_json::{Value, json};
 
 struct T {
@@ -66,41 +68,6 @@ fn stat(dir: &Path, name: &str) -> std::io::Result<Stat> {
     Dir::open_root(dir)?.stat_at(OsStr::new(name))
 }
 
-fn append(p: &Path, b: &[u8]) {
-    OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(p)
-        .unwrap()
-        .write_all(b)
-        .unwrap();
-}
-
-fn opens(c: &Calls) -> Vec<(u64, StreamKind, Value)> {
-    let f = |c: Call| match c {
-        Call::Open(sid, kind, .., meta) => Some((sid, kind, meta)),
-        _ => None,
-    };
-    c.all().into_iter().filter_map(f).collect()
-}
-
-fn ends(c: &Calls) -> Vec<(u64, EndReason, u64)> {
-    let f = |c: Call| match c {
-        Call::End(sid, _, r, seen, _) => Some((sid, r, seen)),
-        _ => None,
-    };
-    c.all().into_iter().filter_map(f).collect()
-}
-
-/// Each GAP as (sid, reason, lost, tail).
-fn lost(c: &Calls) -> Vec<(u64, GapReason, Option<u64>, Option<Value>)> {
-    let f = |c: Call| match c {
-        Call::Gap(sid, r, _, _, _, lost, tail) => Some((sid, r, lost, tail)),
-        _ => None,
-    };
-    gaps(c).into_iter().filter_map(f).collect()
-}
-
 #[test]
 fn live_eof_is_no_end_and_partial_lines_and_binary_bytes_are_kept() {
     let mut t = T::new(UNIX_EPOCH);
@@ -120,7 +87,7 @@ fn live_eof_is_no_end_and_partial_lines_and_binary_bytes_are_kept() {
         (&Value::from(0), &Value::from(0))
     );
     assert_eq!(data_of(c, o[0].0), [first, b"\":1}\n".to_vec()].concat());
-    assert!(ends(c).is_empty() && lost(c).is_empty());
+    assert!(ends(c).is_empty() && gaps(c).is_empty());
 }
 
 #[test]
@@ -146,11 +113,11 @@ fn truncate_and_rename_over_start_a_new_generation_from_zero() {
     assert_eq!(
         e,
         [
-            (o[0].0, EndReason::SourceChanged, 6),
-            (o[1].0, EndReason::SourceChanged, 3)
+            (o[0].0, EndReason::SourceChanged, 6, None),
+            (o[1].0, EndReason::SourceChanged, 3, None)
         ]
     );
-    assert!(lost(c).is_empty(), "every byte seen was read");
+    assert!(gaps(c).is_empty(), "every byte seen was read");
 }
 
 #[test]
@@ -163,8 +130,9 @@ fn a_vanished_file_with_unread_bytes_gives_a_gap_then_an_end() {
     let c = &t.calls;
     let sid = opens(c)[0].0;
     let tail = Some(json!({"unread_at_least": 10}));
-    assert_eq!(lost(c), [(sid, GapReason::SourceChanged, None, tail)]);
-    assert_eq!(ends(c), [(sid, EndReason::SourceChanged, 0)]);
+    let lost = gap_rows(c);
+    assert_eq!(lost, [(sid, GapReason::SourceChanged, None, tail)]);
+    assert_eq!(ends(c), [(sid, EndReason::SourceChanged, 0, None)]);
 }
 
 #[test]
@@ -174,7 +142,7 @@ fn a_file_under_a_folder_the_walk_could_not_list_is_not_gone() {
     t.walk(&["a"], false);
     let unlisted = [t.dir.path().to_path_buf()];
     t.tail.sweep(&t.rec, &unlisted);
-    assert!(ends(&t.calls).is_empty() && lost(&t.calls).is_empty());
+    assert!(ends(&t.calls).is_empty() && gaps(&t.calls).is_empty());
     t.read(Duration::ZERO);
     assert_eq!(data_of(&t.calls, opens(&t.calls)[0].0), b"0123456789");
 }
@@ -212,11 +180,7 @@ fn unreadable_to_the_seal(snapshot: bool) {
     let streams = u64::from(!snapshot);
     assert_eq!((closed.streams, closed.cut_files), (streams, 0));
     let c = &calls;
-    let ev = |c: Call| match c {
-        Call::Event(v) => Some(v),
-        _ => None,
-    };
-    let notes: Vec<Value> = c.all().into_iter().filter_map(ev).collect();
+    let notes = events(c);
     assert_eq!(notes.len(), 1);
     assert_eq!(notes[0]["what"], "native_unreadable");
     assert_eq!(notes[0]["errno"], libc::ENAMETOOLONG);
@@ -224,8 +188,9 @@ fn unreadable_to_the_seal(snapshot: bool) {
     let snap = kind == StreamKind::Snapshot;
     assert_eq!((opens(c).len(), snap), (1, snapshot));
     let tail = Some(json!({"unread_at_least": 10}));
-    assert_eq!(lost(c), [(sid, GapReason::SourceChanged, Some(10), tail)]);
-    assert_eq!(ends(c), [(sid, EndReason::SourceChanged, 10)]);
+    let lost = gap_rows(c);
+    assert_eq!(lost, [(sid, GapReason::SourceChanged, Some(10), tail)]);
+    assert_eq!(ends(c), [(sid, EndReason::SourceChanged, 10, None)]);
 }
 
 #[test]
@@ -243,8 +208,9 @@ fn a_shrink_still_past_the_offset_is_a_truncation_with_a_gap() {
     let gens: Vec<Value> = o.iter().map(|o| o.2["gen"].clone()).collect();
     assert_eq!(gens, [0, 1]);
     let tail = Some(json!({"unread_at_least": 70}));
-    assert_eq!(lost(c), [(o[0].0, GapReason::SourceChanged, None, tail)]);
-    assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, 30)]);
+    let lost = gap_rows(c);
+    assert_eq!(lost, [(o[0].0, GapReason::SourceChanged, None, tail)]);
+    assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, 30, None)]);
     assert_eq!(data_of(c, o[1].0), [7u8; 50]);
 }
 
@@ -313,8 +279,8 @@ fn a_snapshot_is_copied_once_settled_and_again_after_a_change() {
     assert_eq!(
         ends(c),
         [
-            (o[0].0, EndReason::Complete, 7),
-            (o[1].0, EndReason::Complete, 8)
+            (o[0].0, EndReason::Complete, 7, None),
+            (o[1].0, EndReason::Complete, 8, None)
         ]
     );
 }
@@ -337,7 +303,7 @@ fn close_with_the_guard_out_cuts_with_the_exact_loss() {
         (3, 2, 30)
     );
     let c = &calls;
-    let cut: Vec<_> = lost(c).into_iter().map(|g| (g.1, g.2)).collect();
+    let cut: Vec<_> = gap_rows(c).into_iter().map(|g| (g.1, g.2)).collect();
     assert_eq!(
         cut,
         [
@@ -371,8 +337,9 @@ fn close_with_the_guard_out_cuts_a_snapshot_not_copied_yet() {
     let c = &calls;
     let o = opens(c);
     assert_eq!((o.len(), o[0].1), (1, StreamKind::Snapshot));
-    assert_eq!(lost(c), [(o[0].0, GapReason::CutAtSeal, Some(7), None)]);
-    assert_eq!(ends(c), [(o[0].0, EndReason::CutAtSeal, 7)]);
+    let lost = gap_rows(c);
+    assert_eq!(lost, [(o[0].0, GapReason::CutAtSeal, Some(7), None)]);
+    assert_eq!(ends(c), [(o[0].0, EndReason::CutAtSeal, 7, None)]);
 }
 
 #[test]
@@ -396,9 +363,10 @@ fn a_snapshot_gone_with_bytes_unread_gives_its_gap_and_end() {
         assert_eq!((o.len(), o[0].1), (1, StreamKind::Snapshot));
         let tail = Some(json!({"unread_at_least": 100 - read}));
         let gap = (o[0].0, GapReason::SourceChanged, Some(100 - read), tail);
-        assert_eq!(lost(c), [gap]);
+        let lost = gap_rows(c);
+        assert_eq!(lost, [gap]);
         // END `seen` is the offset: the bytes read plus the exact GAP.
-        assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, 100)]);
+        assert_eq!(ends(c), [(o[0].0, EndReason::SourceChanged, 100, None)]);
     }
 }
 
@@ -421,11 +389,15 @@ fn torn_then_last(c: &Calls, size: u64, gap: GapReason, end: EndReason) {
     assert_eq!(o[1].2["size"], size);
     assert_eq!(data_of(c, o[0].0), [7; 10]);
     let tail = (gap == GapReason::SourceChanged).then(|| json!({"unread_at_least": size}));
-    assert_eq!(lost(c), [(o[1].0, gap, Some(size), tail)]);
+    let lost = gap_rows(c);
+    assert_eq!(lost, [(o[1].0, gap, Some(size), tail)]);
     let e = ends(c);
     assert_eq!(
         e,
-        [(o[0].0, EndReason::SourceChanged, 10), (o[1].0, end, size)]
+        [
+            (o[0].0, EndReason::SourceChanged, 10, None),
+            (o[1].0, end, size, None)
+        ]
     );
 }
 

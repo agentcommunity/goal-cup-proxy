@@ -35,7 +35,7 @@ if ! printf '%s\n' "$new" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9
     echo "release: '$new' is not a version of the form x.y.z" >&2
     exit 2
 fi
-next="run sh scripts/gate.sh full, then scripts/pad/table --release-check <commit>, on that origin/main commit before sh scripts/release.sh tag $new"
+next="run sh scripts/gate.sh full on that origin/main commit, then sh scripts/release.sh tag $new"
 
 cd "$(dirname "$0")/.."
 

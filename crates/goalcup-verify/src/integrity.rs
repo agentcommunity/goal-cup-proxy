@@ -2,8 +2,10 @@
 //! one streaming pass per entry. State is a few words per open stream (dropped at END) and per
 //! boot. A finding is a code and counts, never a byte of the record.
 
+use crate::honesty::Honesty;
 use crate::input::{self, Entry};
 use goalcup_format::dump::wall;
+use goalcup_format::read::Tail;
 use goalcup_format::{EndReason, FLAG_FIN, GapReason, Item, Record, StreamKind};
 use serde_json::{Map, Value, json};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -49,12 +51,44 @@ impl Check {
             facts: Map::new(),
         }
     }
+
+    /// Raises the check to `res` when that is worse; the first finding at the worst level is kept.
+    pub(crate) fn raise(&mut self, res: Res, why: &str, at: Option<At>) {
+        if res > self.result {
+            self.result = res;
+            self.why = why.into();
+            self.first = at.map(|At(o, sid, w)| json!({"o": o, "sid": sid, "wall": wall(w)}));
+        }
+    }
 }
 
 /// The integrity checks, in report order. The first 14 are invariants 1 to 14.
 pub const IDS: &str = "inv1 inv2 inv3 inv4 inv5 inv6 inv7 inv8 inv9 streams_closed \
     seen_matches_written gap_has_end recorder_alive inv14 torn_tail native_path_gen \
     counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown";
+
+/// Whether a GAP covers a stretch of time: it is not run 1's shape. A GAP in the recorder's own
+/// clock is judged on record time, one carrying `boot_id` (another clock) on wall time. Covers,
+/// off spans and gapped files use this, so a metadata GAP covers nothing.
+pub(crate) fn has_extent(
+    tail: &Map<String, Value>,
+    w: (u64, u64),
+    m: (u64, u64),
+    lost: u64,
+) -> bool {
+    let (s, e) = clock(tail, w, m);
+    !((e <= s && lost <= 1) || w.1 < w.0)
+}
+
+/// A metadata mask_failed GAP (lost 1, tail "meta"): it loses no stream byte and needs no
+/// extent, so `gap_has_end` accepts it. Only that reason has this shape.
+pub(crate) fn is_meta_gap(reason: GapReason, lost: u64, tail: &Map<String, Value>) -> bool {
+    reason == GapReason::MaskFailed && lost == 1 && tail.get("meta").is_some_and(Value::is_string)
+}
+
+fn clock(tail: &Map<String, Value>, w: (u64, u64), m: (u64, u64)) -> (u64, u64) {
+    if tail.contains_key("boot_id") { w } else { m }
+}
 
 /// COUNT counters (PRD-01 section 9). Gauges (`open_streams`, `held_bytes`, `held_peak`, `up_ms`)
 /// are not recounted.
@@ -165,7 +199,7 @@ struct St {
 
 /// Where a finding is: raw offset, stream, wall time.
 #[derive(Clone, Copy)]
-struct At(u64, u64, u64);
+pub(crate) struct At(pub(crate) u64, pub(crate) u64, pub(crate) u64);
 
 /// What one entry gave.
 pub struct Outcome {
@@ -184,6 +218,11 @@ pub struct Outcome {
     pub data_bytes: u64,
     pub links: u64,
     pub pruned: bool,
+    /// The legs: harness_log, provider errors, thread rows and the coverage text.
+    pub legs: crate::legs::Out,
+    /// The report's timeline, and the native and snapshot streams by file path.
+    pub timeline: Value,
+    pub streams: crate::timeline::Streams,
 }
 
 /// Checks one entry. `now_ns` is set for `--live`; `want` names the link seqs whose hashes
@@ -195,17 +234,16 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         .map(|(id, n)| Check::new(id, (n < 15).then_some(n), Res::Pass, ""))
         .collect();
     p.want.clone_from(want);
-    let (mut err, mut truncated) = (None, None);
-    let mut meter = std::rc::Rc::new(input::Meter::default());
+    let (mut err, mut tail) = (None, Tail::default());
     match input::open(e) {
-        Ok((mut rd, m)) => {
+        Ok(mut rd) => {
             for r in rd.by_ref() {
                 match r {
                     Ok(it) => p.item(&it),
                     Err(x) => err = Some(x.to_string()),
                 }
             }
-            (truncated, meter) = (rd.tail().truncated, m);
+            tail = rd.tail();
         }
         Err(x) => err = Some(x.to_string()),
     }
@@ -213,7 +251,7 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
     if let Some(why) = err {
         let why = format!("the record stops decoding: {why}");
         p.fail("record_decode", &why, at);
-    } else if let Some(o) = truncated {
+    } else if let Some(o) = tail.truncated {
         if p.seal.is_some() {
             let why = "a sealed entry ends inside a record";
             p.fail("torn_tail", why, At(o, 0, at.2));
@@ -221,7 +259,14 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
             p.fact("torn_tail", "open_end", o.into());
         }
     }
-    p.finish(meter.open_frame.get(), now_ns, e);
+    p.finish(tail.open_frame, now_ns, e);
+    let covers = std::mem::take(&mut p.h.covers);
+    let (table, hist) = p.l.finish();
+    let (legs_checks, legs) = crate::legs::judge(&table, &covers);
+    p.checks.extend(std::mem::take(&mut p.h).finish());
+    p.checks.extend(legs_checks);
+    p.tl.finish(&legs.timed);
+    p.checks.push(crate::history::judge(&hist, &table, &covers));
     Outcome {
         sealed: p.seal.is_some(),
         seal: p.seal.take(),
@@ -230,18 +275,24 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         start: p.start.take().unwrap_or_default(),
         counts: std::mem::take(&mut p.all),
         entry: p.entry.take(),
-        raw: meter.raw.get(),
+        raw: tail.raw,
         compressed: input::compressed(e),
         data_bytes: p.data_bytes,
         links: p.links,
         pruned: p.pruned,
         checks: p.checks,
+        timeline: p.tl.timeline(),
+        streams: std::mem::take(&mut p.tl.streams),
+        legs,
     }
 }
 
 #[derive(Default)]
 struct Pass {
     checks: Vec<Check>,
+    h: Honesty,
+    l: crate::history::Sink,
+    tl: crate::timeline::Tally,
     entry: Option<String>,
     start: Option<Map<String, Value>>,
     mask_rules: Vec<String>,
@@ -297,15 +348,9 @@ impl Pass {
             .expect("a known check id")
     }
 
-    /// Raises a check to `res` when that is worse; the first finding at the worst level is kept.
     fn set(&mut self, id: &str, res: Res, why: &str, at: Option<At>) {
         let i = self.idx(id);
-        let c = &mut self.checks[i];
-        if res > c.result {
-            c.result = res;
-            c.why = why.into();
-            c.first = at.map(|At(o, sid, w)| json!({"o": o, "sid": sid, "wall": wall(w)}));
-        }
+        self.checks[i].raise(res, why, at);
     }
 
     fn fail(&mut self, id: &str, why: &str, at: At) {
@@ -364,6 +409,9 @@ impl Pass {
             }
             _ => Map::new(),
         };
+        self.h.item(it, at, &ev);
+        self.l.push(&it.rec, it.off);
+        self.tl.item(&it.rec, at.2);
         let ev_name = ev
             .get("ev")
             .and_then(Value::as_str)
@@ -496,13 +544,8 @@ impl Pass {
                 tail,
             } => {
                 let tail: Map<String, Value> = serde_json::from_slice(tail).unwrap_or_default();
-                let other_clock = tail.contains_key("boot_id");
-                let (s, e) = if other_clock {
-                    (*start_wall, *end_wall)
-                } else {
-                    (*start_mono, *end_mono)
-                };
-                if (e <= s && *lost <= 1) || end_wall < start_wall {
+                let (w, m) = ((*start_wall, *end_wall), (*start_mono, *end_mono));
+                if !is_meta_gap(*reason, *lost, &tail) && !has_extent(&tail, w, m, *lost) {
                     self.fail("gap_has_end", "a GAP with no extent (run 1's shape)", at);
                 }
                 let name = reason.name();
@@ -524,6 +567,7 @@ impl Pass {
                     sat([&mut self.cur.after_stop], [lost_b]);
                 }
                 if is_down {
+                    let (s, e) = clock(&tail, w, m);
                     let ms = e.saturating_sub(s) / 1_000_000;
                     self.cur.add("off_ms", ms);
                     self.cur.off_spans += 1;
@@ -569,6 +613,7 @@ impl Pass {
                     .is_some_and(|r| r == "fail_closed")
                 {
                     self.cur.add("mask_failclosed_bytes", *len);
+                    self.h.mask(*sid, *len, at);
                 }
             }
             Record::Event { .. } => self.event(&ev_name, ev, at),

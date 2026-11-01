@@ -1,0 +1,5 @@
+{
+  "providers": {
+    "vercel-ai-gateway": { "settings": { "provider": "vercel-ai-gateway", "model": "deepseek/deepseek-v4.1-flash" } }
+  }
+}

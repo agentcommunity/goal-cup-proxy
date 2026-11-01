@@ -3,6 +3,7 @@
 //! Content is never parsed; the file is the buffer.
 
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
@@ -84,7 +85,7 @@ impl Tail {
     ) {
         let now = rec.now();
         let Some(e) = self.files.get_mut(&id) else {
-            if !taken(&stat, self.since) {
+            if !self.taken(&stat) {
                 return;
             }
             let (generation, off) = match self.cursors.native.get(&id) {
@@ -132,6 +133,11 @@ impl Tail {
         }
     }
 
+    /// The run-start rule (section 2, D57): max(mtime, ctime) in whole seconds at or after `since`.
+    pub fn taken(&self, stat: &Stat) -> bool {
+        stat.mtime_ns.max(stat.ctime_ns).div_euclid(1_000_000_000) >= self.since
+    }
+
     /// Paths not settled since the last sweep are gone: GAP if unread, END `source_changed`. A gone
     /// snapshot whose last state was not copied whole gets a copy of its own (see `last_copy`) and
     /// its exact loss, since no later copy comes. A path under one of the walk's `unlisted` folders
@@ -156,18 +162,15 @@ impl Tail {
     pub fn read(&mut self, rec: &Recorder, slice: u64, settle: Duration) -> Stop {
         let now = rec.now().ns();
         let settle = u64::try_from(settle.as_nanos()).unwrap_or(u64::MAX);
-        let mut due: Vec<String> = self
-            .files
-            .iter()
-            .filter(|(_, e)| match e.snap {
-                false => e.h.is_some() && e.stat.size > e.off,
-                true => {
-                    let settled = now.saturating_sub(e.seen_at.ns()) >= settle;
-                    e.copy.is_some() || (settled && e.done != Some(e.stat))
-                }
-            })
-            .map(|(id, _)| id.clone())
-            .collect();
+        let is_due = |e: &Entry| match e.snap {
+            false => e.h.is_some() && e.stat.size > e.off,
+            true => {
+                let settled = now.saturating_sub(e.seen_at.ns()) >= settle;
+                e.copy.is_some() || (settled && e.done != Some(e.stat))
+            }
+        };
+        let due = self.files.iter().filter(|(_, e)| is_due(e));
+        let mut due: Vec<String> = due.map(|(id, _)| id.clone()).collect();
         let after = self
             .last
             .as_ref()
@@ -181,7 +184,12 @@ impl Tail {
             let Some(e) = self.files.get_mut(&id) else {
                 continue;
             };
-            let got = read_one(rec, &id, e, &mut left);
+            let copying = e.copy.is_some();
+            let mut got = read_one(rec, &id, e, &mut left);
+            // A copy torn by a state already seen and settled: that state is copied now, once.
+            if copying && e.copy.is_none() && is_due(e) {
+                got = read_one(rec, &id, e, &mut left);
+            }
             if let Err(err) = &got {
                 let errno = err.raw_os_error().unwrap_or(0);
                 let what = "native_unreadable";
@@ -239,27 +247,8 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
     let (to, Some(h)) = (want(e), e.h.as_mut()) else {
         return Ok(None);
     };
-    while e.off < to {
-        let n = rec.room().min(256 << 10).min(to - e.off).min(*left);
-        if n == 0 {
-            return Ok(Some(stop(*left)));
-        }
-        let mut buf = vec![0; n as usize];
-        let t = rec.now();
-        let k = loop {
-            match f.read_at(&mut buf, e.off) {
-                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
-                k => break k?,
-            }
-        };
-        buf.truncate(k);
-        (e.off, *left) = (e.off + k as u64, *left - k as u64);
-        if k > 0 {
-            h.data(t, Bytes::from(buf));
-        }
-        if (k as u64) < n {
-            break;
-        }
+    if let Some(stop) = pump(rec, &f, h, &mut e.off, to, left)? {
+        return Ok(Some(stop));
     }
     if let Some(c) = e.copy.take()
         && let Some(h) = e.h.take()
@@ -268,7 +257,10 @@ fn read_one(rec: &Recorder, id: &str, e: &mut Entry, left: &mut u64) -> io::Resu
         let whole = e.off == c.size && a.as_ref().ok() == Some(&c);
         if whole {
             e.done = Some(c);
-        } else if let Ok(a) = a {
+        } else if let Ok(a) = a
+            && a != e.stat
+        {
+            // Only a state not seen before restarts the settle clock: the one seen keeps its own.
             (e.stat, e.seen_at) = (a, rec.now());
         }
         let reason = if whole { Complete } else { SourceChanged };
@@ -306,14 +298,27 @@ fn begin_copy(rec: &Recorder, id: &str, e: &mut Entry) {
 /// Ends a stream; seen bytes left unread get a GAP first, `exact` at the seal or for a gone
 /// snapshot, a lower bound when the file changed (sections 4 and 8). A torn snapshot copy never
 /// comes here (`end_torn`). Returns the unread.
-fn end(rec: &Recorder, mut h: StreamHandle, e: &Entry, reason: EndReason, exact: bool) -> u64 {
+fn end(rec: &Recorder, h: StreamHandle, e: &Entry, reason: EndReason, exact: bool) -> u64 {
     let n = want(e).saturating_sub(e.off);
+    end_stream(rec, h, e.seen_at, n, reason, exact)
+}
+
+/// The one rule that names a stream cut short (also for a database copy): `n` seen bytes unread
+/// since `since` get a GAP first, then the END. At the seal the loss is exact; else it is
+/// `source_changed` with `unread_at_least`, and `lost` exact only if `exact`. Returns `n`.
+pub(crate) fn end_stream(
+    rec: &Recorder,
+    mut h: StreamHandle,
+    since: Mono,
+    n: u64,
+    reason: EndReason,
+    exact: bool,
+) -> u64 {
     if n > 0 && reason == CutAtSeal {
-        h.gap(GapReason::CutAtSeal, e.seen_at, Some(n), None);
-    } else if n > 0 && (exact || !e.snap) {
+        h.gap(GapReason::CutAtSeal, since, Some(n), None);
+    } else if n > 0 {
         let tail = Some(json!({"unread_at_least": n}));
-        let lost = exact.then_some(n);
-        h.gap(GapReason::SourceChanged, e.seen_at, lost, tail);
+        h.gap(GapReason::SourceChanged, since, exact.then_some(n), tail);
     }
     h.end(rec.now(), reason, None);
     n
@@ -348,16 +353,58 @@ pub(crate) fn fid_hex(fid: Fid) -> String {
     format!("{:x}.{:x}{birth}", fid.dev, fid.ino)
 }
 
-/// The run-start rule (section 2, D57): max(mtime, ctime) in whole seconds at or after `since`.
-pub(crate) fn taken(stat: &Stat, since_secs: i64) -> bool {
-    stat.mtime_ns.max(stat.ctime_ns).div_euclid(1_000_000_000) >= since_secs
+/// Reads `f` from `off` to `to` in pieces of at most `room()` and 256 KiB, each timed just before
+/// its read, until the file ends early. `Some` when the room or `left` ran out first.
+pub(crate) fn pump(
+    rec: &Recorder,
+    f: &File,
+    h: &mut StreamHandle,
+    off: &mut u64,
+    to: u64,
+    left: &mut u64,
+) -> io::Result<Option<Stop>> {
+    while *off < to {
+        let n = rec.room().min(256 << 10).min(to - *off).min(*left);
+        if n == 0 {
+            return Ok(Some(stop(*left)));
+        }
+        let mut buf = vec![0; n as usize];
+        let t = rec.now();
+        let k = loop {
+            match f.read_at(&mut buf, *off) {
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                k => break k?,
+            }
+        };
+        buf.truncate(k);
+        (*off, *left) = (*off + k as u64, *left - k as u64);
+        if k > 0 {
+            h.data(t, Bytes::from(buf));
+        }
+        if (k as u64) < n {
+            break;
+        }
+    }
+    Ok(None)
 }
 
-/// Opens `root/rel` with no symlink followed: the root, each folder, then the file with `fid`.
-pub(crate) fn open_rel(root: &Path, rel: &Path, fid: Fid) -> io::Result<File> {
+/// The folder of `root/rel`, opened with no symlink followed, and the file's name.
+fn parent<'a>(root: &Path, rel: &'a Path) -> io::Result<(Dir, &'a OsStr)> {
     let mut dir = Dir::open_root(root)?;
     for name in rel.parent().into_iter().flat_map(Path::iter) {
         dir = dir.open_child(name)?;
     }
-    dir.open_file(rel.file_name().ok_or(io::ErrorKind::NotFound)?, fid)
+    Ok((dir, rel.file_name().ok_or(io::ErrorKind::NotFound)?))
+}
+
+/// Opens `root/rel` with no symlink followed, the file only with `fid`.
+pub(crate) fn open_rel(root: &Path, rel: &Path, fid: Fid) -> io::Result<File> {
+    let (dir, name) = parent(root, rel)?;
+    dir.open_file(name, fid)
+}
+
+/// `root/rel` as it is now, with no symlink followed.
+pub(crate) fn stat_rel(root: &Path, rel: &Path) -> io::Result<Stat> {
+    let (dir, name) = parent(root, rel)?;
+    dir.stat_at(name)
 }

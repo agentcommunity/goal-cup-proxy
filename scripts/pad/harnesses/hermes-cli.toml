@@ -10,10 +10,10 @@ key_kind = "deepseek"
 key_route = "file"
 key_file = "{home}/.env"
 key_line = "DEEPSEEK_API_KEY={key}"
+# Pad data for the dodger copy only (section 2): [direct] provider deepseek calls https://api.deepseek.com.
+model_host = "api.deepseek.com"
 exit_keys = '/exit\r'
 daemon = "hermes gateway run"
-submit_delay = 2
-subagent_word = "subagent"
 keep_going = true
 
 [direct]

@@ -1,12 +1,13 @@
-# Release: build the three binaries for four targets, package each as a tarball, smoke-test each
-# tarball and packaging/install.sh on its own architecture, and attach the tarballs, SHA256SUMS,
-# install.sh to a GitHub release.
+# Release: on four targets, run the Rust guards, build the two binaries, package each as a
+# tarball, smoke-test each tarball and packaging/install.sh on its own architecture, and attach
+# the tarballs, SHA256SUMS, install.sh to a GitHub release.
 #
 # - A `v*` tag push builds and publishes the release for that tag. The tag must equal
 #   `v` plus the workspace version in Cargo.toml, because the binaries print that version and
 #   the smoke tests check it. Use `sh scripts/release.sh prepare <x.y.z>` for the version PR when
-#   needed, then merge it, run the full gate and separate Linux check on `origin/main`, and use `sh scripts/release.sh tag
-#   <x.y.z>`.
+#   needed, then merge it, run `sh scripts/gate.sh full` on `origin/main`, and use
+#   `sh scripts/release.sh tag <x.y.z>`, which first runs the pad's release check
+#   (`scripts/pad/table --release-check`).
 # - A manual start builds and packages only: the tarballs are the run's artifacts, and nothing
 #   is published. Use it to try package builds before pushing a release tag.
 #
@@ -45,7 +46,7 @@ jobs:
           - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04 }
           - { target: aarch64-unknown-linux-gnu, os: ubuntu-22.04-arm }
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       TARGET: ${{ matrix.target }}
     steps:
@@ -64,26 +65,37 @@ jobs:
       - run: >-
           rustup toolchain install --profile minimal --target "$TARGET"
           "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-      # Fetch the locked target graph, including manifests used by licence metadata, once.
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-nextest
+      # The Rust guards on this machine, so the watchdog, clock and socket-passing tests also run
+      # on macOS and Linux arm64 before anything ships.
+      - run: cargo nextest run --locked -p goalcup-format -p goalcup -p goalcup-verify
+      # Those tests built target/debug/goalcup with the hooks on. Without GOALCUP_TEST_ text there,
+      # the smoke's clean grep of the shipped goalcup proves nothing (PRD-05 amendment).
+      - run: test "$(grep -ac GOALCUP_TEST_ target/debug/goalcup || true)" -gt 0
+      # Fetch the locked graph for this target, including manifests used by licence metadata.
       - run: cargo fetch --locked --target "$TARGET"
+      # Built without dev-dependencies, so no test hook reaches the shipped goalcup.
       - run: >-
           cargo build --offline --release --locked --target "$TARGET"
-          -p goalcup-cli -p goalcup-daemon -p goalcup-verifier
+          -p goalcup -p goalcup-verify
       - run: sh scripts/package-release.sh "$TARGET" "$VERSION" dist
-      # Unpacks the tarball and runs both binaries and `goalcup doctor` from it; a failure here
-      # fails the build, and with it the release.
+      # Unpacks the tarball, runs both binaries and reads the format's worked example with the
+      # shipped goalcup-verify; a failure here fails the build, and with it the release.
       - run: sh scripts/smoke-release.sh "dist/goalcup-$VERSION-$TARGET.tar.gz" "$VERSION"
       # The installer, piped to sh as a participant runs it, against this tarball on this
-      # machine. A SHA256SUMS written here stands in for the release's. It must install the same
-      # connectors the repository holds and a goalcup that prints the version.
+      # machine. A SHA256SUMS written here stands in for the release's. It must install both
+      # binaries, each printing the version.
       - name: install.sh
         run: |
           (cd dist && shasum -a 256 "goalcup-$VERSION-$TARGET.tar.gz" > SHA256SUMS)
           home="$(mktemp -d)"
           GOALCUP_RELEASE_BASE="file://$PWD/dist" HOME="$home" sh < packaging/install.sh
           rm dist/SHA256SUMS
-          test "$("$home/.local/bin/goalcup" --version)" = "goalcup $VERSION"
-          diff -r connectors "$home/.local/share/goalcup/connectors"
+          for binary in goalcup goalcup-verify; do
+            test "$("$home/.local/bin/$binary" --version)" = "$binary $VERSION"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: goalcup-${{ matrix.target }}

@@ -20,7 +20,7 @@ use serde_json::Value;
 
 use super::shapes::{self, Client, End, Reply, Server};
 use super::sse::Sse;
-use super::{CallRow, Ctx, HostKind, Kind, Leg, Outcome, Shape, Via, host_kind};
+use super::{CallRow, Ctx, HostKind, Kind, Leg, Outcome, Shape, Via, hints, host_kind};
 
 type Key = (u64, u64);
 
@@ -42,6 +42,8 @@ pub struct Wire {
 struct Row {
     row: CallRow,
     reply: Reply,
+    /// The reply's request id header, for a by-id join.
+    reply_id: Option<String>,
     conn: u64,
     status: Option<u16>,
     t0: u64,
@@ -216,6 +218,7 @@ impl Wire {
                 let i = self.row(ctx, (k.1, None), (conn, &c), kind, Via::Http, t);
                 let r = &mut self.rows[i];
                 (r.row.shape, r.up) = (shape, Some((k.1, 0, u64::MAX)));
+                r.row.thread = hints::wire_thread(ctx.connector.as_deref(), m.get("headers"), None);
                 self.calls.insert(k, i);
                 let (path, body) = (path.to_string(), Buf::default());
                 self.reqs.insert(k, Req { row: i, path, body });
@@ -226,6 +229,7 @@ impl Wire {
                 };
                 let r = &mut self.rows[i];
                 r.down = Some((k.1, 0, u64::MAX));
+                r.reply_id = hints::reply_id(m.get("headers"));
                 (r.t1, r.row.wall_end) = (Some(t), ctx.wall(t));
                 r.status = m
                     .get("status")
@@ -423,6 +427,7 @@ impl Wire {
             r.row.shape = Some(Shape::Responses);
             let q = shapes::request(Shape::Responses, "", v.as_ref());
             (r.row.model_requested, r.row.effort) = (q.model, q.effort);
+            r.row.thread = hints::wire_thread(ctx.connector.as_deref(), None, v.as_ref());
             s.pending.push_back((i, prev));
             return;
         }
@@ -496,9 +501,9 @@ impl Wire {
         }
     }
 
-    /// The rows in a stable order (boot, sid, msg), outcomes and `whole` decided; `ctx` is the
-    /// last boot's.
-    pub fn finish(mut self, ctx: &Ctx) -> Vec<CallRow> {
+    /// The rows in a stable order (boot, sid, msg), outcomes and `whole` decided, each with its
+    /// reply's request id; `ctx` is the last boot's.
+    pub fn finish(mut self, ctx: &Ctx) -> (Vec<CallRow>, Vec<Option<String>>) {
         self.cut(ctx);
         for (_, r) in std::mem::take(&mut self.reqs) {
             self.req_done(r, false);
@@ -507,9 +512,10 @@ impl Wire {
             self.resp_done(r, false);
         }
         let gaps = std::mem::take(&mut self.gaps);
-        let mut out: Vec<CallRow> = self.rows.into_iter().map(|r| decide(r, &gaps)).collect();
-        out.sort_by_key(|r| (r.boot, r.sid, r.msg));
-        out
+        let rows = self.rows.into_iter().map(|mut r| (r.reply_id.take(), r));
+        let mut out: Vec<_> = rows.map(|(id, r)| (decide(r, &gaps), id)).collect();
+        out.sort_by_key(|r| (r.0.boot, r.0.sid, r.0.msg));
+        out.into_iter().unzip()
     }
 }
 

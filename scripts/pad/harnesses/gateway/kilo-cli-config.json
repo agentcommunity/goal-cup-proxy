@@ -1,0 +1,13 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "openai-compatible/deepseek/deepseek-v4.1-flash",
+  "small_model": "openai-compatible/deepseek/deepseek-v4.1-flash",
+  "provider": {
+    "openai-compatible": {
+      "options": {
+        "apiKey": "{env:AI_GATEWAY_API_KEY}",
+        "baseURL": "https://ai-gateway.vercel.sh/coding-agent/v1"
+      }
+    }
+  }
+}

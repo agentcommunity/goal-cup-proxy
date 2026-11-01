@@ -1,6 +1,7 @@
 //! The folder checks of `goalcup start` (PRD-10 section 3 step 2, PRD-17 SC1): every problem in
 //! one refusal (app. F 5), found by reading only, so a refused start creates nothing. A synced
-//! folder and NFS or SMB are warnings; overlayfs, tmpfs, btrfs, ZFS and FUSE are accepted.
+//! folder and NFS or SMB are warnings; overlayfs, tmpfs, btrfs, ZFS and FUSE are accepted. The WSL
+//! check ([`wsl`]) is shared with `setup`; no box runs WSL, so it has never run.
 
 use std::ffi::CString;
 use std::fs;
@@ -31,24 +32,27 @@ pub fn check(
         Ok(at) => at.starts_with(&real).then(|| text::prompt_inside(p)),
         Err(_) => Some(text::prompt_missing(p)),
     });
-    let problems: Vec<String> = [
+    let mut problems: Vec<String> = [
         (!extra.is_empty()).then(|| text::folder_extra(&extra)),
         (!open.is_empty()).then(|| text::env_not_ignored(&open)),
         git.map(text::inside_git),
         own.then(|| text::beside_goalcup(home)),
         no_token.then(|| text::TOKEN_LINE.to_owned()),
         prompt,
+        wsl(&real, "It"),
+        wsl(home, text::GOALCUP_FOLDER),
     ]
     .into_iter()
     .flatten()
     .collect();
+    problems.dedup(); // On WSL1 both folders give the same line.
     if !problems.is_empty() {
         return Err(problems);
     }
     let synced = synced(&real).then(|| text::synced_folder(project));
     let network = [real.as_path(), home].into_iter().filter_map(|dir| {
-        let at = dir.ancestors().find(|a| a.exists()).unwrap_or(dir);
-        fs_kind(at).map(|kind| text::network_folder(dir, kind))
+        let kind = fs_type(dir).and_then(|(magic, name)| network_fs(magic, &name));
+        kind.map(|kind| text::network_folder(dir, kind))
     });
     Ok(synced.into_iter().chain(network).collect())
 }
@@ -63,8 +67,11 @@ pub fn network_fs(magic: u64, name: &str) -> Option<&'static str> {
     }
 }
 
-fn fs_kind(path: &Path) -> Option<&'static str> {
-    let c = CString::new(path.as_os_str().as_bytes()).ok()?;
+/// The `statfs` type of `path`'s nearest existing ancestor: the Linux magic number, or the macOS
+/// type name.
+fn fs_type(path: &Path) -> Option<(u64, String)> {
+    let at = path.ancestors().find(|a| a.exists()).unwrap_or(path);
+    let c = CString::new(at.as_os_str().as_bytes()).ok()?;
     let mut st = std::mem::MaybeUninit::<libc::statfs>::uninit();
     // SAFETY: `c` is NUL-terminated and `st` is a writable statfs for the call.
     if unsafe { libc::statfs(c.as_ptr(), st.as_mut_ptr()) } != 0 {
@@ -75,14 +82,49 @@ fn fs_kind(path: &Path) -> Option<&'static str> {
     // A Linux magic number fits 32 bits; macOS names the type (not compiled in a box yet).
     #[cfg(not(target_os = "macos"))]
     {
-        network_fs(u64::from(st.f_type as u32), "")
+        Some((u64::from(st.f_type as u32), String::new()))
     }
     #[cfg(target_os = "macos")]
     {
         let name = st.f_fstypename.map(|c| c as u8);
         let name = name.split(|&b| b == 0).next().unwrap_or_default();
-        network_fs(0, &String::from_utf8_lossy(name))
+        Some((0, String::from_utf8_lossy(name).into_owned()))
     }
+}
+
+/// `Some(1)` on WSL1, `Some(2)` on WSL2, None elsewhere, from the kernel release as 0.7 read it
+/// (`goalcup-platform/src/machine.rs`): both say `-microsoft` (WSL2 kernels may say only `wsl2`),
+/// and WSL1 is the fixed `4.4.0-<build>-Microsoft`, a release no WSL2 kernel has.
+pub fn wsl_version() -> Option<u8> {
+    let release = fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let release = release.trim().to_ascii_lowercase();
+    if !release.contains("-microsoft") && !release.contains("wsl2") {
+        return None;
+    }
+    Some(if release.starts_with("4.4.") { 1 } else { 2 })
+}
+
+/// Section 3 step 2 for `start` (a problem) and `setup` (a warning), as 0.7's `folder_gate.rs` and
+/// `machine.rs`: WSL1, or WSL2 with `dir` on a Windows drive by the type of the longest mount point
+/// in `/proc/self/mountinfo` holding `dir`, never a path prefix. `what` names `dir`.
+pub fn wsl(dir: &Path, what: &str) -> Option<String> {
+    if wsl_version()? == 1 {
+        return Some(text::wsl(what, None));
+    }
+    let info = fs::read_to_string("/proc/self/mountinfo").ok()?;
+    let dir = resolved(dir);
+    let mounts = info.lines().filter_map(|l| {
+        let (left, right) = l.split_once(" - ")?;
+        let point = left.split(' ').nth(4)?.replace("\\040", " ");
+        Some((point, right.split(' ').next()?))
+    });
+    let mounts = mounts.filter(|(p, _)| dir.starts_with(p));
+    let (_, kind) = mounts.max_by_key(|(p, _)| p.len())?;
+    matches!(
+        kind,
+        "9p" | "drvfs" | "virtiofs" | "cifs" | "smb3" | "smbfs" | "ntfs" | "ntfs3" | "fuse.ntfs-3g"
+    )
+    .then(|| text::wsl(what, Some(kind)))
 }
 
 /// The key files (`.env`, `.env.*`) and every entry besides them, `.gitignore` and `.DS_Store`,
@@ -118,9 +160,8 @@ fn token(env_local: String) -> bool {
             && v.bytes()
                 .all(|b| b.is_ascii_graphic() && !b"\"'".contains(&b))
     };
-    let mut values = env_local
-        .split('\n')
-        .filter_map(|l| l.strip_prefix("GH_TOKEN="));
+    let lines = env_local.split('\n');
+    let mut values = lines.filter_map(|l| l.strip_prefix("GH_TOKEN="));
     values.next().is_some_and(plain) && values.next().is_none()
 }
 
@@ -160,10 +201,8 @@ fn lexical(path: &Path) -> PathBuf {
 /// such a `!` line always re-includes.
 fn ignored(ignore: &str, name: &str) -> bool {
     let mut verdict = false;
-    let ignore = ignore
-        .strip_prefix('\u{feff}')
-        .unwrap_or(ignore)
-        .split('\n');
+    let ignore = ignore.strip_prefix('\u{feff}').unwrap_or(ignore);
+    let ignore = ignore.split('\n');
     for line in ignore.map(|l| l.strip_suffix('\r').unwrap_or(l).trim_end_matches(' ')) {
         if line.is_empty() || line.starts_with('#') || line.ends_with('/') {
             continue;
