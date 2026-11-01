@@ -2,6 +2,7 @@
 
 One public page per harness, `docs/harnesses/<connector-id>.md`. It says where that harness keeps
 its sessions, config and logins on each OS, how it authenticates, and which hosts it calls.
+Hosts that a harness opens on purpose but that carry no model calls (Codex's `ab.chatgpt.com`, Claude Code's Datadog intake) are listed as expected tunnels in the `expected` array of `connectors/model-hosts.toml`.
 
 A connector describes only what Goal Cup Proxy does today. The sheet records the rest: what to
 check when Goal Cup Proxy gains a platform or a new way to capture, without asking each team again.

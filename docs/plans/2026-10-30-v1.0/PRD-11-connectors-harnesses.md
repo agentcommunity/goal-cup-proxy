@@ -1497,3 +1497,8 @@ is left is data and docs only. Four items, in order:
 ### 2026-11-01, note from PRD-12 sweep 2 fixes (merge 98873c1d)
 
 - Acceptance 5 (the stale hub daemon line on Cline) is not exercised by the pad: the Cline row is "not verified: needs sign-in" (the vendor README names no provider config file and its auth command puts the key in argv). It stays unexercised until a config route is shown; the Cline sheet must not claim a pad result. Crush is likewise "not verified: needs permission answer". No locked ledger item is touched.
+
+### 2026-11-01, note from sweep 3 (expected hosts, seam)
+
+- `connectors/model-hosts.toml` has a new array `expected` (non-model hosts tunnelled on purpose: `ab.chatgpt.com`, and Claude Code's two Datadog log intake hosts). It is not a fifth kind: `decide()` still answers `NotListed` for them, and `HostList::lists()` and the `start` event shape are unchanged. `HostList::is_expected(name)` is the one question to ask; a name another array lists, or `never` holds, is not expected.
+- Consumers must call it: PRD-03 `crates/goalcup/src/proxy/tunnel.rs:162` (skip the `long_tunnel` note), PRD-10 `cli/status.rs:175` and `text.rs:626` (no seal-and-continue advice), PRD-08 `honesty.rs:201` (the `long_tunnel_unlisted` fact). Until they do, the long_tunnel note still fires for these hosts.
