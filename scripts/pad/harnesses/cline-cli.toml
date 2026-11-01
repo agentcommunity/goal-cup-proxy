@@ -3,7 +3,7 @@
 # (cline hub, hub dashboard --data-dir, OPENAI_API_KEY and AI_GATEWAY_API_KEY as key variables, CLINE_DATA_DIR; -k and --apikey
 # are arguments, so the key goes by env). docs.cline.bot and vercel.com did not resolve from the writing session.
 # Read from docs only, not run against a live harness: every key below. The providers.json shape (from the connector's
-# host hint providers.*.settings.baseUrl), the provider ids "openai" and "vercel-ai-gateway", the model ids, /exit, and
+# host hint providers.*.settings.baseUrl), the provider ids "openai-compatible" and "vercel-ai-gateway", the model ids, /exit, and
 # whether `hub dashboard` is the process `hub stop` ends.
 # Measured, not settled: Cline ignored an unreadable providers.json (it needs "version": 1 and per-entry "updatedAt").
 # Not settled: whether "openai-compatible" reads OPENAI_API_KEY, and the gateway base URL (the provider default).

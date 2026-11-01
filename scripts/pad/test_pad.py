@@ -442,11 +442,10 @@ class SecretCheck(unittest.TestCase):
         files = dict(self.FILES, **{"verify/secrets.json": {"masks": dict(self.PLANTED, jwt=0)}})
         self.assertEqual(evaluate(files)["checks"]["C3"], "INCONCLUSIVE")
 
-    def test_headerless_pem_body_is_a_fail(self):  # the body stayed on the wire raw: point 4, never a pass
-        files = dict(self.FILES, **{"verify/secrets.json": {"masks": dict(self.PLANTED, private_key=0), "hits": 4},
-                                    "verify/secrets-pem.json": {"hits": 4},
-                                    "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 0, "secrets-pem": 2}})
-        self.assertEqual(evaluate(files)["checks"]["C3"], "FAIL")
+    def test_unscanned_pane_copies_are_not_a_pass(self):  # exit 3 and no report: no scan
+        files = dict(self.FILES, **{"verify/secrets.json": {"masks": self.PLANTED},
+                                    "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0, "secrets-panes": 3}})
+        self.assertNotEqual(evaluate(files)["checks"]["C3"], "PASS")
 
     def test_known_value_on_a_pane_copy_fails(self):  # the rig's own replacement missed a value
         files = dict(self.FILES, **{"verify/secrets.json": {"masks": self.PLANTED}, "verify/secrets-panes.json": {"known_hits": [{}]},

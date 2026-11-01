@@ -3,9 +3,7 @@
   "providers": {
     "vercel-ai-gateway": {
       "settings": { "provider": "vercel-ai-gateway", "model": "deepseek/deepseek-v4.1-flash" },
-      "updatedAt": "2026-11-01T00:00:00.000Z",
-      "tokenSource": "manual"
+      "updatedAt": "2026-11-01T00:00:00.000Z"
     }
-  },
-  "lastUsedProvider": "vercel-ai-gateway"
+  }
 }

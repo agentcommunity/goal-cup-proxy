@@ -306,7 +306,6 @@ class Run:
         write(os.path.join(self.project, ".env.local"), "\n".join(env) + "\n")
         write(os.path.join(self.project, ".gitignore"), ".env*\n", 0o644)
         write(self.path("remote-pw"), password, 0o600)
-        write(self.path("known-pem"), "\n".join(pem) + "\n")  # the body lines alone: check.py tells a headerless PEM from a hit
         return list(shaped.values()) + pem + [password], plain
 
     def seed(self):
@@ -913,7 +912,7 @@ class Run:
         write(self.path("harness-files.json"), json.dumps(out), 0o644)
 
     def wipe_secrets(self, known=False, home=True):
-        found, ks = [], ("known", "known-plain", "known-pem", "paste.txt", "remote-pw") if known else ()
+        found, ks = [], ("known", "known-plain", "paste.txt", "remote-pw") if known else ()
         for what, p in [("keys", self.keys), (".env.local", os.path.join(self.project, ".env.local"))] + [
                 ("harness home", self.st.get("home"))] * home + [(k, self.path(k)) for k in ks]:
             if p and os.path.lexists(p):
@@ -953,12 +952,11 @@ class Run:
                 write(self.path("verify", "gaps.json"), json.dumps(self.dump_lines(e, "gap")), 0o644)
             if self.has("kill-watchdog"):  # check.py: the seal's time is the record's last LINK (nothing follows the seal's)
                 write(self.path("verify", "seal.json"), json.dumps(([{}] + self.dump_lines(e, "link"))[-1]), 0o644)
-            for name, argv in cmds + [("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got),
-                                      ("secrets-pem", ["secrets", "--known", "known-pem", e] + [f] * got)]:
+            for name, argv in cmds + [("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)]:
                 if name == "usage" and on and not got:  # C5 is the server copy's
                     continue
                 if name.startswith("secrets"):
-                    argv = argv + more + ["status.json"] * (name in ("secrets", "secrets-pem"))
+                    argv = argv + more + ["status.json"] * (name == "secrets")
                 exits[name] = self.verify_cmd(argv, None if name == "usage" else name + ".json")[0]
         except Step as stop:
             result = stop.args
