@@ -16,6 +16,9 @@ key_file = "{home}/.env"
 key_line = "DEEPSEEK_API_KEY={key}"
 # Pad data for the dodger copy only (section 2): [direct] provider deepseek calls https://api.deepseek.com.
 model_host = "api.deepseek.com"
+# Hermes masks secrets in tool output itself (docs/harnesses/hermes-cli.md:28); the full3 record held 28 and 190 masked_key masks.
+# check.py reads this as row meta redacts_upstream (C3: a planted kind with no MASK and no hit is masked upstream).
+redacts_tool_output = true
 ready_text = "Type your message or /help"
 ready_wait = 120
 exit_keys = '/exit\r'

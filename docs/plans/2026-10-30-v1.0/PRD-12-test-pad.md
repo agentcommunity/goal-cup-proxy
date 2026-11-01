@@ -2016,3 +2016,7 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 ### 2026-11-01, note from the PRD-16 post-cut slice (merge dacbc61b)
 
 - `scripts/pad/selftest` now exits 0 (every control as wanted) after the k7 and k11-d fixture swap by the post-cut lane under integrator.log 09:57Z; please confirm the swap. The earlier note that the pad ends at selftest exit 3 is superseded for the pad's own controls; Crush and Cline rows remain "not verified" where the harness file says so. The generator is PRD-08's to adopt (see its note). No locked ledger item is touched.
+
+### 2026-11-01, harness file key redacts_tool_output (C3 upstream redaction)
+
+- A harness file may carry `redacts_tool_output = true` (Hermes only, citing docs/harnesses/hermes-cli.md:28). The pad copies it into the row meta as `redacts_upstream`. For such a harness only, C3 treats a planted kind with no MASK, no known-value hit and no plain raw hit as PASS with the note "masked upstream by the harness", and no longer stops at "secret exercise not done" when there is no MASK at all. A shape only in joined streamed deltas stays INCONCLUSIVE, named "stated loss: harness redacts tool output itself". Known-value hits, other shape hits, big masks and plain hits fail as before, and a harness without the key is unchanged. Like the C3 stated-loss rule, this needs the owner's later confirmation (point 4). No locked ledger item is touched.
