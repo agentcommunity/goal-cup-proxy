@@ -358,9 +358,11 @@ def local(r, few):
     off = any(dig(e, "s6_off") for e in r.entries)
     covered = r.check("history_complete") == "named" and 0 < unexpected <= orphans
     stated = r.loss_exit(code)  # exit 2 from the stated loss alone: the named gaps are still judged
+    # Any check the verifier names (not only history_complete) can give exit 1, so under exit 2 it keeps the exit rule.
+    other_named = any(c.get("result") == "named" for e in r.entries for c in dig(e, "s6_checks") or [] if isinstance(c, dict))
     explained = (code == 1 or stated) and named and (not off or "recorder_down" in allowed) and (covered or named <= allowed)
-    r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and (not r.failed or (r.stated_loss() and set(r.failed) <= {"secrets"}))
-           and code != 0 and not explained and not (stated and not named and not off and r.check("history_complete") != "named"),  # nothing else could give exit 1
+    r.flag(r.meta.get("case") in ("direct", "gateway") and set(fault_kinds(r.meta)) <= set(CLEAN) and (not r.failed or stated)
+           and code != 0 and not explained and not (stated and not named and not off and not other_named),  # nothing else could give exit 1
            "C1", "FAIL", "verifier exit %s, the %s case expects 0 or only the GAPs %s" % (
                code, r.meta.get("case"), ", ".join(sorted(allowed))))
     own = sorted(i for i in r.failed if i not in ("secrets", "history_complete"))  # `secrets` is C3's, `history_complete` C1's

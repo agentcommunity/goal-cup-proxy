@@ -508,6 +508,9 @@ class StatedLoss(unittest.TestCase):
         for shapes, code in (([], 1), ([self.DELTAS], 2)):  # no gap at all, but a named history orphan
             row = self.plain_row(shapes, code, {}, [{"id": "history_complete", "result": "named"}])
             self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
+        for shapes, code in (([], 1), ([self.DELTAS], 2)):  # no gap at all, another check named
+            row = self.plain_row(shapes, code, {}, [{"id": "gaps_named", "result": "named"}])
+            self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
 
     def test_any_other_hit_still_fails(self):
         for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),
