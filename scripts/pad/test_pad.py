@@ -304,7 +304,7 @@ class CrashRows(unittest.TestCase):
 
     @staticmethod
     def row(kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
-            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1, extra=None):
+            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1, extra=None, known_box=False):
         told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
                 for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
         kills = [dict({"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"}, **({"quiet": True} if quiet else {}))
@@ -312,7 +312,7 @@ class CrashRows(unittest.TestCase):
         rec = [{"kind": "wait-recovery", "result": x, "at": "2026-10-30T%s:00+00:00" % t} for x, t in recovery]
         files = {"meta.json": {"connector": "codex-cli", "case": case, "model_host": "api.example", "variant": [kind + "@3"], "server": "off",
                                "keep": True, "commits_since_start": commits, "entry": "e1", "over_cap": over_cap,
-                               "started": "2026-10-30T10:00:00+00:00"},
+                               "started": "2026-10-30T10:00:00+00:00", **({"known_box": True} if known_box else {})},
                  "verify/check-local.json": {"exit": code, "entries": [{"entry": "e1", "seal_reason": seal,
                      "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
                          {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
@@ -481,7 +481,7 @@ class StatedLoss(unittest.TestCase):
                  "verify/secrets-conductor.json": {"hits": 0},
                  "verify/exits.json": {"secrets": 2 if known or shapes else 0, "secrets-out": 0, "secrets-plain": 0}}
         gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
-        return CrashRows.row("kill-recorder", gap, code=code, extra=extra)
+        return CrashRows.row("kill-recorder", gap, code=code, extra=extra, known_box=True)
 
     def plain_row(self, shapes, code, counts, extra_checks=()):
         checks = ([{"id": "secrets", "result": "fail"}] if shapes else []) + list(extra_checks)
