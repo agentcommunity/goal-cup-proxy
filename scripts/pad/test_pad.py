@@ -552,9 +552,12 @@ class UpstreamRedaction(unittest.TestCase):
                         )["checks"]["C3"]
 
     def test_no_hit_and_no_planted_mask_passes_upstream(self):
-        self.assertEqual(self.c3(True, {}), "PASS")
         self.assertEqual(self.c3(True, {"masked_key": 3}), "PASS")
-        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0)), "PASS")
+        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0, masked_key=3)), "PASS")
+
+    def test_no_exercise_evidence_is_not_a_pass(self):  # nothing shows the planted file reached the harness
+        self.assertEqual(self.c3(True, {}), "INCONCLUSIVE")
+        self.assertEqual(self.c3(True, {"auth": 8}), "INCONCLUSIVE")
 
     def test_a_harness_without_the_flag_stays_open(self):  # control: same files
         self.assertEqual(self.c3(False, {"masked_key": 3}), "INCONCLUSIVE")
@@ -585,10 +588,10 @@ class SecretCheck(unittest.TestCase):
         self.assertEqual(self.c3(dict(self.PLANTED, jwt=0), secrets_exit=2), "FAIL")  # a hit in a kind with no MASK
         self.assertEqual(self.c3(dict(self.PLANTED, jwt=0)), "INCONCLUSIVE")  # no hit, no MASK: not exercised
 
-    def exact(self, masks, plain_exit=0, on=True):
+    def exact(self, masks, plain_exit=0, on=True, skipped=0):
         meta = {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"}
         if on:
-            meta["mask_values"] = {"workspace": 1, "env": 0, "harness": 0, "skipped": 0}
+            meta["mask_values"] = {"workspace": 1, "env": 0, "harness": 0, "skipped": skipped}
         return evaluate({"meta.json": meta, "verify/secrets.json": {"masks": masks}, "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": 1, "secrets-out": 0, "secrets-plain": plain_exit}})["checks"]["C3"]
 
@@ -596,9 +599,11 @@ class SecretCheck(unittest.TestCase):
         self.assertEqual(self.exact(dict(self.PLANTED, run_secret=2), plain_exit=2), "FAIL")  # the planted value reached the record
         self.assertEqual(self.exact(dict(self.PLANTED, run_secret=2)), "PASS")
         self.assertEqual(self.exact({"auth": 8}), "INCONCLUSIVE")  # no run_secret, no plain hit, no planted MASK
+        self.assertEqual(self.exact(self.PLANTED), "INCONCLUSIVE")  # planted-shape MASKs alone are not the exercise
+        self.assertEqual(self.exact(dict(self.PLANTED, run_secret=2), plain_exit=2, skipped=1), "INCONCLUSIVE")  # a stated cut
 
     def test_exact_values_off_keeps_a_plain_hit_as_proof(self):
-        self.assertNotEqual(self.exact(self.PLANTED, plain_exit=2, on=False), "FAIL")
+        self.assertEqual(self.exact(self.PLANTED, plain_exit=2, on=False), "PASS")
         self.assertEqual(self.exact({"auth": 8}, plain_exit=2, on=False), "INCONCLUSIVE")  # plain proves exercise, kinds unmasked
 
     FILES = {"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1"},

@@ -138,8 +138,10 @@ def release_check(commit):
     except ValueError:
         items.append("pad-rows.jsonl unreadable")
 
-    def need(name, want, ok=lambda r: r.get("result") == "PASS" and r.get("pad_trusted_at"),
-             say=lambda r: "result %s, pad_trusted_at %s" % (r.get("result"), r.get("pad_trusted_at"))):
+    def need(name, want, ok=lambda r: r.get("result") == "PASS" and r.get("pad_trusted_at") and not g(r.get("facts"), "masked_upstream"),
+             say=lambda r: "result %s, pad_trusted_at %s%s" % (r.get("result"), r.get("pad_trusted_at"),
+                                                               ", C3 passed as masked upstream (owner has not confirmed)"
+                                                               if g(r.get("facts"), "masked_upstream") else "")):
         r = latest(rows, want)
         if r is not None and ok(r):
             return used.append((name, r))

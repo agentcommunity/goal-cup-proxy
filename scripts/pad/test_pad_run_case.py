@@ -191,3 +191,16 @@ class PaneBeforePaste(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MaskValues(unittest.TestCase):
+    """The start event's mask_values reaches check.py: a dump event line (as goalcup-verify prints it) is read whole."""
+
+    def test_start_event_line_is_read(self):
+        r = bare()
+        mv = {"workspace": 3, "env": 0, "harness": 1, "skipped": 0}
+        r.dump_lines = lambda e, kind: [{"k": "event", "o": 9, "t": 1, "ev": "other"},
+                                        {"k": "event", "o": 10, "t": 2, "ev": "start", "mask_rules": ["auth"], "mask_values": mv}]
+        self.assertEqual(r.mask_values("e"), mv)
+        r.dump_lines = lambda e, kind: [{"k": "event", "ev": "start"}]
+        self.assertIsNone(r.mask_values("e"))

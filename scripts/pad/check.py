@@ -185,6 +185,7 @@ class Run:
                        if isinstance(c, dict) and c.get("result") == "fail" and isinstance(c.get("id"), str)}
         self.v = dict.fromkeys(CHECKS + ("faults",), "PASS")
         seals = [when(f.get("began") or f.get("at")) for f in self.faults if f.get("kind") == "seal-now" and f.get("exit") in (0, "timeout")]  # section 7,
+        self.upstream_pass = False  # C3 passed on "masked upstream" (owner has not confirmed that rule, point 4)
         self.cap_at = min([t for t in seals if t], default=None) if meta.get("over_cap") is True else None  # as pad-run
         got = [dig(e, "s6_requests") for e in self.entries if isinstance(dig(e, "s6_requests"), int)]
         self.reqs, self.native = sum(got) if got else None, sum(count(dig(e, "s6_native")) for e in self.entries)
@@ -244,15 +245,10 @@ class Run:
         return code == 2 and bool(self.stated_loss()) and set(self.failed) <= {"secrets"}
 
     def exact_values(self):
-        """True when the start event's mask_values shows workspace values masked by exact bytes (PRD-05 ValueCounts). Read from
-        verify/secrets.json, else meta.json; absent or unreadable is not on."""
-        for rel in ("verify/secrets.json", "meta.json"):
-            doc = load(self.folder, rel)
-            mv = doc.get("mask_values") if isinstance(doc, dict) else None
-            if isinstance(mv, dict):
-                n = mv.get("workspace")
-                return type(n) is int and n > 0
-        return False
+        """The start event's mask_values (PRD-05 ValueCounts) as pad-run copies it into meta.json, or None. Exact values are on
+        when workspace is above 0."""
+        mv = self.meta.get("mask_values")
+        return mv if isinstance(mv, dict) else None
 
     def masks(self):
         """MASK spans by rule kind from the record scan, or None when the report has none."""
@@ -495,32 +491,39 @@ def secrets(r):
     masks = r.masks()
     if masks is None:
         return r.mark("C3", "INCONCLUSIVE", "no MASK counts by rule in verify/secrets.json")
-    # A harness that redacts tool output itself (harness file redacts_tool_output, point 4) shows the exercise by the masker's
-    # own MASK of the redacted form (masked_key), or by none: its planted kinds may never reach the wire.
+    # A harness that redacts tool output itself (harness file redacts_tool_output, point 4) may never put the planted kinds on
+    # the wire. That is a PASS only with exercise evidence: the masker's MASK of the redacted form (masked_key), or with exact
+    # values on the run_secret MASK. No evidence stays INCONCLUSIVE.
     up = r.meta.get("redacts_tool_output") is True
     loss = r.stated_loss()  # the only hit being the stated loss (scan() reports it) is not a real hit
-    hit, plain, exact = 0 if loss else r.hits("secrets"), r.hits("secrets-plain"), r.exact_values()
-    # Exact values on: the planted .env value is a known value to the masker, so a plain hit is a leak, and its run_secret
-    # MASK is the exercise. Off: a plain hit is the exercise proof, as before.
-    if exact and plain:
+    hit, plain, mv = 0 if loss else r.hits("secrets"), r.hits("secrets-plain"), r.exact_values()
+    n = (mv or {}).get("workspace")
+    exact = type(n) is int and n > 0
+    if exact and (mv.get("skipped") or 0) > 0:  # a stated cut: the planted value may be one of the skipped ones
+        r.mark("C3", "INCONCLUSIVE", "exact values skipped %s; the planted value may be cut" % mv.get("skipped"))
+    elif exact and plain:
         r.mark("C3", "FAIL", "planted .env value reached the record unmasked (%s plain hits)" % plain)
     proof = masks.get("run_secret") if exact else plain
-    clean = up and not hit and not plain and not loss  # nothing reached the record
+    if exact and not proof and not plain:  # the run_secret MASK is the exercise proof; planted-shape MASKs alone are not
+        r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no MASK of the planted .env value")
+    seen = masks.get("run_secret") if exact else masks.get("masked_key")
+    # clean: nothing reached the record, and the exercise shows in the MASK counts (hit 0, not None: no scan is no proof)
+    clean = up and hit == 0 and plain == 0 and not loss and bool(seen)
+    # With a hit or a stated loss the masked_key term lets the run reach the per-kind lines below.
     if not proof and not any(masks.get(kinds[0]) for kinds in PLANTED) and not clean and not (up and masks.get("masked_key")):
         return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no %s and no MASK of a planted shape"
                       % ("MASK of the planted .env value" if exact else "plain-value hit"))
     # A planted kind with no MASK is a FAIL when a hit shows it reached the record, else not exercised (a run never passes on
-    # a missing exercise). An upstream-redacting harness with no hit at all passes: masked upstream, before the wire.
-    for kinds in PLANTED:
-        if any(masks.get(k) for k in kinds):
-            continue
-        if clean:
-            r.mark("C3", "PASS", "masked upstream: no MASK of %s, the harness redacts tool output before the wire" % " or ".join(kinds))
-            continue
+    # a missing exercise). An upstream-redacting harness with exercise evidence and no hit passes: masked upstream.
+    bare = [" or ".join(k) for k in PLANTED if not any(masks.get(x) for x in k)]
+    if bare and clean:
+        r.mark("C3", "PASS", "masked upstream, before the wire: no MASK of %s" % ", ".join(bare))
+        r.upstream_pass = True
+    for name in bare if not clean else ():
         why = "not exercised"
         if loss:
-            why += "; %s only in joined streamed replies (not verified)" % ("hit" if set(kinds) & set(loss[0]) else "shape")
-        r.mark("C3", "FAIL" if hit else "INCONCLUSIVE", "%s of %s: no MASK" % ("hits" if hit else why, " or ".join(kinds)))
+            why += "; %s only in joined streamed replies (not verified)" % ("hit" if set(name.split(" or ")) & set(loss[0]) else "shape")
+        r.mark("C3", "FAIL" if hit else "INCONCLUSIVE", "%s of %s: no MASK" % ("hits" if hit else why, name))
 
 def c6(r):
     st, final = r.status, dig(r.status, "s4_requests")
@@ -825,7 +828,7 @@ def facts(r):
             "raw_bytes": size.get("raw"), "compressed_bytes": size.get("compressed"), "over_cap": m.get("over_cap") is True,
             "recorder_rss_peak_mb": round(max(rss) / 1024, 1) if rss else None, "spend_usd_est": m.get("spend_usd_est"),
             "priced_high": m.get("priced_high") or [], "first_live_alarm": (alarm or [None])[0],
-            "push": m.get("push"), "wire_only": dig(u, "s7_wire_only"), "local_log_reason": dig(u, "s7_reason")}
+            "push": m.get("push"), "masked_upstream": r.upstream_pass, "wire_only": dig(u, "s7_wire_only"), "local_log_reason": dig(u, "s7_reason")}
 
 def owner_notes(r):
     """Section 3.1: owner lines that need a human read, for report.txt only, never a check."""

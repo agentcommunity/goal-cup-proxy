@@ -490,6 +490,11 @@ class Run:
             return []
         return [d for d in map(loads, r.stdout.splitlines()) if d.get("k") == kind]
 
+    def mask_values(self, e):
+        """The start event's mask_values object (PRD-05), or None; a `dump --kind event` line carries the event's own keys."""
+        start = next((d for d in self.dump_lines(e, "event") if d.get("ev") == "start"), {})
+        return start["mask_values"] if isinstance(start.get("mask_values"), dict) else None
+
     def look(self, _):
         """Section 4: the live line; a failed check, the `secrets` one included, is written for "first seen at T"."""
         self.need("goalcup-verify", started=True, entry=True)
@@ -973,6 +978,7 @@ class Run:
                 cmds += [(n + "-new", a) for n, a in pc.verify_cmds(new[1], fn if len(more) > 1 else None) if n.startswith("check")]
             if self.has("route-drop"):  # check.py: when decode_failed gaps started
                 write(self.path("verify", "gaps.json"), json.dumps(self.dump_lines(e, "gap")), 0o644)
+            self.st["mask_values"] = self.mask_values(e)  # check.py exact_values
             if self.has("kill-watchdog"):  # check.py: the seal's time is the record's last LINK (nothing follows the seal's)
                 write(self.path("verify", "seal.json"), json.dumps(([{}] + self.dump_lines(e, "link"))[-1]), 0o644)
             for name, argv in cmds + [("secrets-plain", ["secrets", "--known", "known-plain", e] + [f] * got)]:
@@ -989,7 +995,7 @@ class Run:
             r = sh(["git", "-C", self.project, "rev-list", "--count", self.st["head"] + "..HEAD"])
             self.st["commits_since_start"] = int(r.stdout) if r.returncode == 0 else None
         keys = ("harness_version", "run", "entry", "screen_known", "end_screen_requests", "commits_since_start", "plain_planted",
-                "known_box")
+                "known_box", "mask_values")
         write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
         self.copy_log(e)
         if new:  # the entry goalcup continue started has its own log (the recovery lines)
