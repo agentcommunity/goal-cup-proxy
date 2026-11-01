@@ -338,3 +338,23 @@ fn the_open_call_names_the_repository_each_mode_needs() {
         "https://github.com/o/r"
     );
 }
+
+/// An unreadable harness version goes up as the string "unknown", never null; a read one as read.
+#[test]
+fn an_unread_harness_version_is_sent_as_unknown_and_the_run_opens() {
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let sent = |version: Option<&'static str>| {
+        let w = FakeWorker::start();
+        let (server, seen) = spy(&w);
+        let (home, c, mut out) = (tempfile::tempdir().unwrap(), connector(), Vec::new());
+        let (_held, closed) = ports::refusing();
+        let api = format!("http://{closed}");
+        let mut a = ask_in(RunMode::Practice, &c, None, &api);
+        a.harness_version = version;
+        begin(home.path(), &server, &a, &mut out).unwrap();
+        let body = seen.lock().unwrap()[0].clone();
+        body["harness_version"].clone()
+    };
+    assert_eq!(sent(None), json!("unknown"));
+    assert_eq!(sent(Some("1.2.3")), json!("1.2.3"));
+}
