@@ -523,22 +523,22 @@ class StatedLoss(unittest.TestCase):
 
 
 class UpstreamRedaction(unittest.TestCase):
-    """C3 for a harness file with redacts_tool_output (point 4): no MASK and no hit is masked upstream, not a missing exercise."""
+    """C3 for a harness file with redacts_tool_output (point 4): open until the owner answers, never PASS."""
 
     DELTAS = StatedLoss.DELTAS
 
     def c3(self, up, masks, known=(), shapes=()):
-        return evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_upstream": up},
+        return evaluate({"meta.json": {"connector": "hermes-cli", "case": "direct", "known_box": True, "entry": "e1", "redacts_tool_output": up},
                          "verify/secrets.json": {"masks": masks, "known_hits": list(known), "shape_hits": list(shapes), "big_masks": []},
                          "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": 2 if known or shapes else 1, "secrets-out": 0, "secrets-plain": 0}}
                         )["checks"]["C3"]
 
-    def test_no_mask_and_no_hit_passes_only_with_the_flag(self):
-        self.assertEqual(self.c3(True, {}), "PASS")
-        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0)), "PASS")
-        self.assertEqual(self.c3(False, dict(SecretCheck.PLANTED, jwt=0)), "INCONCLUSIVE")  # control
-        self.assertEqual(self.c3(False, {}), "INCONCLUSIVE")
+    def test_no_mask_and_no_hit_is_never_a_pass(self):
+        self.assertEqual(self.c3(True, {}), "INCONCLUSIVE")  # no sign of any exercise
+        self.assertEqual(self.c3(True, {"masked_key": 3}), "INCONCLUSIVE")  # exercised, planted kinds open: stated loss, not PASS
+        self.assertEqual(self.c3(True, dict(SecretCheck.PLANTED, jwt=0)), "INCONCLUSIVE")
+        self.assertEqual(self.c3(False, {"masked_key": 3}), "INCONCLUSIVE")  # control: the flag is what counts masked_key as exercise
 
     def test_a_known_hit_still_fails(self):
         self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN]), "FAIL")

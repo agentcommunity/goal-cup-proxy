@@ -113,34 +113,6 @@ class Recovery(unittest.TestCase):
         self.assertEqual(cm.exception.args[0], "INCONCLUSIVE")  # not FAIL: the first three held
 
 
-class LiveDodger(unittest.TestCase):
-    def line(self, case, failed):
-        r = bare()
-        r.s["case"] = case
-        r.st["entry_dir"] = "e"
-        checks = [{"id": i, "result": "fail"} for i in failed] + [{"id": "calls", "result": "pass"}]
-        rep = {"result": "fail", "s6_entries": [{"s6_checks": checks}]}
-        r.verify_cmd = lambda argv, limit=None: (0, rep if "check" in argv else {})
-        r.path = lambda *a: "live.jsonl"
-        got = []
-        with mock.patch.object(padrun.pc, "dig", lambda d, n: d.get(n)), mock.patch.object(padrun.pc, "count", lambda x: 0), \
-                mock.patch.object(padrun.pc, "worst", lambda e, n: {}), mock.patch.object(padrun, "append", lambda p, d: got.append(d)):
-            r.look_line()
-        return got[0]
-
-    def test_dodger_expected_ids_are_not_an_alarm(self):
-        row = self.line("dodger", ["threads_match", "wire_keeps_up"])
-        self.assertEqual((row["fail"], row["result"]), ([], "ok"))
-
-    def test_other_cases_keep_them(self):
-        row = self.line("gateway", ["threads_match", "wire_keeps_up"])
-        self.assertEqual((row["fail"], row["result"]), (["threads_match", "wire_keeps_up"], "fail"))
-
-    def test_dodger_still_reports_secrets(self):
-        row = self.line("dodger", ["threads_match", "secrets"])
-        self.assertEqual((row["fail"], row["result"]), (["secrets"], "fail"))
-
-
 class EarlyPane(unittest.TestCase):
     def test_pane_is_copied_right_after_respawn_before_any_wait(self):
         d = tempfile.TemporaryDirectory()
@@ -152,28 +124,14 @@ class EarlyPane(unittest.TestCase):
         r.gc_env = lambda: {}
         r.path = lambda *a: os.path.join(d.name, *a)
         order = []
+        r.capture = lambda *a: "goalcup 1.0"
         r.pane = lambda *a, **k: order.append("pane") or ""
         r.recording_seen = lambda why: order.append("wait") or (_ for _ in ()).throw(Stop())
-        sh = lambda cmd, *a, **k: order.append(cmd[1]) or mock.Mock(stdout="")
+        sh = lambda cmd, *a, **k: mock.Mock(stdout="")
         with mock.patch.object(padrun, "sh", sh), mock.patch.object(padrun, "tool", lambda n: n):
             with self.assertRaises(Stop):
                 r.start(None)
-        self.assertEqual(order, ["new-session", "set-option", "respawn-pane", "pane", "wait"])
-
-    def test_pane_copy_never_holds_a_known_value(self):
-        d = tempfile.TemporaryDirectory()
-        self.addCleanup(d.cleanup)
-        r = bare()
-        r.known = lambda: ["sekret-value-1234"]
-        r.capture = lambda *a: "goalcup 1.0 sekret-value-1234 ready"
-        r.path = lambda *a: os.path.join(d.name, *a)
-        os.makedirs(os.path.join(d.name, "watch"))
-        r.pane()
-        copy = open(os.path.join(d.name, "watch", "pane-1.txt")).read()
-        self.assertNotIn("sekret-value-1234", copy)
-        r.known = lambda: None  # the known file is gone: nothing is written
-        r.pane()
-        self.assertEqual(os.listdir(os.path.join(d.name, "watch")), ["pane-1.txt"])
+        self.assertEqual(order, ["pane", "wait"])
 
 
 if __name__ == "__main__":

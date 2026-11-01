@@ -833,7 +833,7 @@ class Run:
                            server=s["server"], keep=s["keep"], minutes=s["minutes"],
                            started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines],
                            hosts_sha256=self.hosts_sha, model_host=self.harness.get("model_host"),
-                           redacts_upstream=self.harness.get("redacts_tool_output") is True),
+                           redacts_tool_output=self.harness.get("redacts_tool_output") is True),
                       f, indent=1, sort_keys=True)
         self.scan_out()
         result, saw, _ = self.box(step, 300, "PADCHECK", [sys.executable, os.path.join(HERE, "check.py"), self.dir])
