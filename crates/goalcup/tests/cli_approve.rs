@@ -32,8 +32,17 @@ fn connector() -> ConnectorSource {
 }
 
 fn ask<'a>(c: &'a ConnectorSource, repo: Option<&'a str>, api: &'a str) -> Ask<'a> {
+    ask_in(RunMode::Competition, c, repo, api)
+}
+
+fn ask_in<'a>(
+    mode: RunMode,
+    c: &'a ConnectorSource,
+    repo: Option<&'a str>,
+    api: &'a str,
+) -> Ask<'a> {
     Ask {
-        mode: RunMode::Competition,
+        mode,
         connector: c,
         connector_sha256: SHA,
         workspace: Path::new("/work"),
@@ -233,4 +242,105 @@ fn a_local_only_run_asks_for_nothing() {
     assert!(out.is_empty() && opened.deadline.is_none() && opened.token.is_none());
     let dir = home.path().join("runs").join(&opened.run);
     assert!(dir.join("server.json").is_file() && !dir.join("credential").exists());
+}
+
+/// Forwards to the fake Worker and keeps the body of `POST /v1/runs`.
+fn spy(worker: &FakeWorker) -> (Server, std::sync::Arc<Mutex<Vec<Value>>>) {
+    let (listener, addr) = ports::held();
+    let (to, seen) = (
+        worker.url().trim_start_matches("http://").to_owned(),
+        std::sync::Arc::new(Mutex::new(Vec::new())),
+    );
+    let kept = seen.clone();
+    std::thread::spawn(move || {
+        for client in listener.incoming().flatten() {
+            let (to, kept) = (to.clone(), kept.clone());
+            std::thread::spawn(move || {
+                let up = std::net::TcpStream::connect(to).unwrap();
+                let (mut c, mut u) = (std::io::BufReader::new(client), std::io::BufReader::new(up));
+                loop {
+                    let Some((head, body)) = message(&mut c) else {
+                        return;
+                    };
+                    if head.starts_with("POST /v1/runs ") {
+                        kept.lock().unwrap().push(serde_json::from_slice(&body).unwrap());
+                    }
+                    u.get_mut().write_all(&[head.as_bytes(), &body].concat()).unwrap();
+                    let Some((head, body)) = message(&mut u) else {
+                        return;
+                    };
+                    c.get_mut().write_all(&[head.as_bytes(), &body].concat()).unwrap();
+                }
+            });
+        }
+    });
+    (Server::Url(format!("http://{addr}")), seen)
+}
+
+/// One HTTP message: its head as read (with the blank line) and its body.
+fn message<R: Read>(r: &mut std::io::BufReader<R>) -> Option<(String, Vec<u8>)> {
+    use std::io::BufRead;
+    let (mut head, mut len) = (String::new(), 0usize);
+    loop {
+        let mut line = String::new();
+        if r.read_line(&mut line).ok()? == 0 {
+            return None;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            if k.eq_ignore_ascii_case("content-length") {
+                len = v.trim().parse().ok()?;
+            }
+        }
+        head += &line;
+        if line == "\r\n" {
+            break;
+        }
+    }
+    let mut body = vec![0; len];
+    r.read_exact(&mut body).ok()?;
+    Some((head, body))
+}
+
+#[test]
+fn the_open_call_names_the_repository_each_mode_needs() {
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    let sent = |mode, repo: Option<&str>, api: &str| {
+        let w = FakeWorker::start();
+        let (server, seen) = spy(&w);
+        let (home, c, mut out) = (tempfile::tempdir().unwrap(), connector(), Vec::new());
+        begin(home.path(), &server, &ask_in(mode, &c, repo, api), &mut out).unwrap();
+        let body = seen.lock().unwrap()[0].clone();
+        body["repo_url"].clone()
+    };
+    // No GitHub call for practice: its API address is a refused port.
+    let (_held, closed) = ports::refusing();
+    let none = format!("http://{closed}");
+    assert_eq!(
+        sent(RunMode::Practice, None, &none),
+        "https://github.com/agentcommunity/goalcup-matrix-empty"
+    );
+    assert_eq!(sent(RunMode::Test, None, &none), Value::Null);
+    // GitHub's fake: public and empty.
+    let (listener, addr) = ports::held();
+    std::thread::spawn(move || {
+        for mut s in listener.incoming().flatten() {
+            let mut buf = [0u8; 2048];
+            let n = s.read(&mut buf).unwrap_or(0);
+            let body = if String::from_utf8_lossy(&buf[..n]).contains("/commits") {
+                "[]"
+            } else {
+                r#"{"private":false}"#
+            };
+            let _ = write!(
+                s,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    let api = format!("http://{addr}");
+    assert_eq!(
+        sent(RunMode::Competition, Some("o/r"), &api),
+        "https://github.com/o/r"
+    );
 }
