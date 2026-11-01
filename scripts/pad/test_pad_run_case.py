@@ -134,5 +134,56 @@ class EarlyPane(unittest.TestCase):
         self.assertEqual(order, ["pane", "wait"])
 
 
+class GoalcupLog(unittest.TestCase):
+    def run_with(self, write_log):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        run, entry = os.path.join(d.name, "run"), os.path.join(d.name, "entry")
+        os.makedirs(run)
+        os.makedirs(entry)
+        if write_log:
+            open(os.path.join(entry, "goalcup.log"), "w").write("line\n")
+        r = bare()
+        r.run = run
+        r.path = lambda *a: os.path.join(run, *a)
+        r.copy_log(entry)
+        r.copy_log(None)  # no entry: quiet
+        return r, run
+
+    def test_log_is_copied_and_scanned(self):
+        r, run = self.run_with(True)
+        self.assertTrue(os.path.isfile(os.path.join(run, "goalcup.log")))
+        self.assertIn("goalcup.log", padrun.OUT)
+        self.assertIn("goalcup.log", r.out_paths())
+
+    def test_missing_log_is_quiet(self):
+        r, run = self.run_with(False)
+        self.assertFalse(os.path.exists(os.path.join(run, "goalcup.log")))
+        self.assertNotIn("goalcup.log", r.out_paths())
+
+
+class PaneBeforePaste(unittest.TestCase):
+    def test_pane_copied_before_the_paste(self):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        open(os.path.join(d.name, "prompt.txt"), "w").write("task")
+        r = bare()
+        r.h, r.tmux, r.env = {}, "t", {"GOALCUP_HOME": d.name}
+        r.seed = lambda: None
+        r.path = lambda *a: os.path.join(d.name, *a)
+        order = []
+        r.pane = lambda *a, **k: order.append("pane") or ""
+
+        def sh(cmd, *a, **k):
+            if "paste-buffer" in cmd:
+                order.append("paste")
+                raise Stop
+            return mock.Mock(stdout="")
+        with mock.patch.object(padrun, "sh", sh), mock.patch.object(padrun.time, "sleep", lambda s: None):
+            with self.assertRaises(Stop):
+                r.type_prompt()
+        self.assertEqual(order, ["pane", "paste"])
+
+
 if __name__ == "__main__":
     unittest.main()
