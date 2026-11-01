@@ -295,7 +295,9 @@ impl Native {
         let task_id = |d: &str, n: u64| format!("{d}/task-{n}");
         let mut logged = BTreeSet::new();
         for path in &self.tasks {
-            let Some((d, n)) = hermes_task(path) else { continue };
+            let Some((d, n)) = hermes_task(path) else {
+                continue;
+            };
             let id = task_id(&d, n);
             let t = threads.entry(id.clone()).or_insert_with(|| named(&id));
             (t.reason, t.parent, t.depth) = (None, Some(d.clone()), Some(1));
@@ -303,7 +305,11 @@ impl Native {
             logged.insert(id);
         }
         for (d, ns) in &self.manifests {
-            for id in ns.iter().map(|&n| task_id(d, n)).filter(|i| !logged.contains(i)) {
+            for id in ns
+                .iter()
+                .map(|&n| task_id(d, n))
+                .filter(|i| !logged.contains(i))
+            {
                 kids.entry(d.clone()).or_default().insert(id);
             }
         }
@@ -557,7 +563,11 @@ fn hermes_dir(path: &str) -> Option<String> {
 /// The Hermes subagent of a task log path `delegation:<…>/<delegation>/task-<n>.log`:
 /// (delegation id, task index). Hermes `tools/delegation_live_log.py`.
 fn hermes_task(path: &str) -> Option<(String, u64)> {
-    let n = path.rsplit('/').next()?.strip_prefix("task-")?.strip_suffix(".log")?;
+    let n = path
+        .rsplit('/')
+        .next()?
+        .strip_prefix("task-")?
+        .strip_suffix(".log")?;
     Some((hermes_dir(path)?, n.parse().ok()?))
 }
 
