@@ -29,6 +29,16 @@ fn hash(b: &[u8]) -> Key {
     k
 }
 
+/// A tool-call id's key: letters and digits only, lower case. A harness that sanitises or
+/// re-cases the id when it resends the turn (`call_00_AbC` to `call00AbC`) still matches, and the
+/// key stays one per call, so a dropped call is not covered by another call's response. An id
+/// with no letter or digit keeps its raw bytes.
+fn id_key(id: &str) -> Key {
+    let n: String = id.chars().filter(char::is_ascii_alphanumeric).collect();
+    let n = n.to_ascii_lowercase();
+    hash(if n.is_empty() { id } else { &n }.as_bytes())
+}
+
 /// The answer as one assistant turn: its tool-call ids, else (Gemini function calls, no id, and
 /// text) the hash of its whitespace-collapsed text. `None` when it has neither.
 fn turn(m: &Map<String, Value>) -> Option<Turn> {
@@ -60,7 +70,7 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
         }
     }
     if !ids.is_empty() {
-        return Some(ids.iter().map(|i| (hash(i.as_bytes()), true)).collect());
+        return Some(ids.iter().map(|i| (id_key(i), true)).collect());
     }
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let t = (!text.is_empty()).then(|| vec![(hash(text.as_bytes()), false)]);

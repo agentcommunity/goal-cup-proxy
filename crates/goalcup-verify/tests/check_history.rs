@@ -509,6 +509,28 @@ fn an_answer_recorded_in_another_thread_matches() {
     assert_eq!((n(&h, "checked"), missing(&h)), (1, (0, 0, 0)));
 }
 
+/// A harness that re-cases or sanitises a call id on resend still matches its own response; a
+/// call of the same name dropped in another thread is not covered by it.
+#[test]
+fn a_rewritten_call_id_matches_but_another_threads_response_does_not_cover_a_drop() {
+    let d = rec("h-ids", |e| {
+        call(e, Chat, T, &[], Call(0));
+        let (id, other) = (tid(Chat, 0).to_uppercase().replace('_', "-"), tid(Chat, 0));
+        let asked = json!({"role": "assistant", "content": null, "tool_calls": [{"id": id,
+            "type": "function", "function": {"name": "f"}}]});
+        let tool = json!({"role": "tool", "tool_call_id": other, "content": "ok"});
+        let b = json!({"model": "fake-model", "messages": [asked, tool, user(Chat)]});
+        send(e, "/v1/chat/completions", T, &b, reply(Chat, Text(1)));
+    });
+    assert_eq!(missing(&verdict(&d, "pass", 0)), (0, 0, 0));
+    let d = rec("h-ids-other", |e| {
+        call(e, Chat, T, &[], Call(0));
+        call(e, Chat, "t-other", &[], Text(5));
+        call(e, Chat, "t-other", &[Call(1)], Text(6));
+    });
+    assert_eq!(missing(&verdict(&d, "fail", 2)), (1, 0, 0));
+}
+
 /// The lost call is found by (sid, message number): the thread is the one of the second message
 /// on its stream, after a message that is no request, so only a count of every message names it.
 #[test]
