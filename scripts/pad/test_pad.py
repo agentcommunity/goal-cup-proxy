@@ -922,5 +922,34 @@ class RigFaults(unittest.TestCase):
             self.assertTrue(r.until("Recording in chat mode", "none"))
 
 
+class PinnedModel(unittest.TestCase):
+    """The cheapest-model rule: the harness toml pins the main model, the row meta carries it, C5 warns of a different one."""
+
+    @staticmethod
+    def row(pinned, recorded, case="direct", read=True):
+        use = {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
+               "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3}, {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]}
+        if read:
+            use["models"] = [{"model": m, "tokens": {"input": 1}} for m in recorded]
+        return evaluate({"meta.json": {"connector": "claude-code-cli", "case": case, "model_host": "api.example", "server": "off",
+                                       "keep": True, "entry": "e1", "commits_since_start": 1, "pinned_model": pinned, "started": "2026-10-30T10:00:00+00:00"},
+                         "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "counts": {"model_requests": 5}, "checks": []}]},
+                         "verify/usage/e1.json": use})
+
+    def test_c5_follows_the_pin(self):
+        bad = self.row("claude-haiku-5-5", ["claude-opus-5-5"])
+        self.assertEqual(bad["checks"]["C5"], "PASS")  # a warning line, never a verdict by itself
+        self.assertIn("recorded model claude-opus-5-5, pinned claude-haiku-5-5", " ".join(bad["why"]))
+        self.assertEqual(bad["facts"]["pinned_model"], "claude-haiku-5-5")
+        self.assertEqual(self.row("claude-haiku-5-5", ["claude-haiku-5-5"])["checks"]["C5"], "PASS")
+        self.assertEqual(self.row("anthropic/claude-haiku-5.5", ["claude-haiku-5.5"], "gateway")["checks"]["C5"], "PASS")
+        self.assertEqual(self.row(" claude-haiku-5-5 ", ["anthropic/claude-haiku-5-5"])["checks"]["C5"], "PASS")
+        self.assertEqual(self.row("claude-haiku-5-5", ["claude-haiku-5-5", "claude-opus-5-5"])["checks"]["C5"], "PASS")
+
+    def test_no_models_read_or_no_pin_says_nothing(self):
+        for pin, recorded, read in (("claude-haiku-5-5", [], True), ("claude-haiku-5-5", [], False), (None, ["claude-opus-5-5"], True)):
+            self.assertNotIn("pinned", " ".join(self.row(pin, recorded, read=read)["why"]), (pin, recorded, read))
+
+
 if __name__ == "__main__":
     unittest.main()

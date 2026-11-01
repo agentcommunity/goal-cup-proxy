@@ -24,9 +24,11 @@ daemon = "opencode serve --service"
 keep_going = true
 
 [direct]
+model = "deepseek-flash"
 files = { ".config/opencode/opencode.json" = "direct/opencode2-cli-config.json" }
 
 [gateway]
+model = "deepseek/deepseek-v4.1-flash"
 files = { ".config/opencode/opencode.json" = "gateway/opencode2-cli-config.json" }
 key_route = "env"
 key_env = "AI_GATEWAY_API_KEY"

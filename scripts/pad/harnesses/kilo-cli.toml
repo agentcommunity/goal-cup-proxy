@@ -21,10 +21,12 @@ exit_keys = '/exit\r'
 keep_going = true
 
 [direct]
+model = "deepseek-flash"
 # XDG_CONFIG_HOME is the isolated home's .config, so this is Kilo's global kilo.json.
 files = { ".config/kilo/kilo.json" = "direct/kilo-cli-config.json" }
 
 [gateway]
+model = "deepseek/deepseek-v4.1-flash"
 # Vercel AI Gateway as an OpenAI-compatible provider: the owner's own example (PRD-16 A4). The key is read through {env:}.
 files = { ".config/kilo/kilo.json" = "gateway/kilo-cli-config.json" }
 key_route = "env"

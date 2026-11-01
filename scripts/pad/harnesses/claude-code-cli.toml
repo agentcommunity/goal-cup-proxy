@@ -2,6 +2,11 @@
 # Vendor pages read 30 Oct 2026: https://code.claude.com/docs/en/setup (npm install of an exact version),
 # https://code.claude.com/docs/en/authentication (ANTHROPIC_API_KEY; interactive mode asks once to use it),
 # https://vercel.com/docs/ai-gateway/coding-agents/claude-code (gateway: base URL, ANTHROPIC_AUTH_TOKEN).
+# Model pin (owner rule 1 Nov 2026), https://code.claude.com/docs/en/model-config (ANTHROPIC_MODEL; --model is also an option, unused) and
+# https://code.claude.com/docs/en/env-vars (ANTHROPIC_SMALL_FAST_MODEL is DEPRECATED, ANTHROPIC_DEFAULT_HAIKU_MODEL sets the
+# background model; ANTHROPIC_DEFAULT_SONNET_MODEL and ANTHROPIC_DEFAULT_OPUS_MODEL decide what the `sonnet` and `opus` aliases
+# resolve to, so a subagent spawned with either alias still runs Haiku): all set to Haiku 5.5 so no run falls back to the default Opus. Gateway id spelling is from the task brief;
+# vercel.com was not reachable when this was written, so the first gateway run confirms it.
 version = "2.1.312"
 version_cmd = "claude --version"
 install = "npm i -g @anthropic-ai/claude-code@2.1.312"
@@ -16,7 +21,13 @@ pre_keys = ['\r', '\033[A\r', '\r', '\033[B\r']  # probed on 2.1.312: theme Ente
 exit_keys = '/exit\r'
 keep_going = true
 
+[direct]
+model = "claude-haiku-5-5"
+env = { ANTHROPIC_MODEL = "claude-haiku-5-5", ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-haiku-5-5", ANTHROPIC_DEFAULT_SONNET_MODEL = "claude-haiku-5-5", ANTHROPIC_DEFAULT_OPUS_MODEL = "claude-haiku-5-5" }
+
 [gateway]
+model = "anthropic/claude-haiku-5.5"
+env = { ANTHROPIC_MODEL = "anthropic/claude-haiku-5.5", ANTHROPIC_DEFAULT_HAIKU_MODEL = "anthropic/claude-haiku-5.5", ANTHROPIC_DEFAULT_SONNET_MODEL = "anthropic/claude-haiku-5.5", ANTHROPIC_DEFAULT_OPUS_MODEL = "anthropic/claude-haiku-5.5" }
 files = { "settings.json" = "gateway/claude-code-settings.json" }
 key_route = "env"
 key_env = "ANTHROPIC_AUTH_TOKEN"
