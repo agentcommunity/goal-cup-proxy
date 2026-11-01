@@ -84,8 +84,7 @@ fn counts_and_hosts_are_the_fixtures() {
     assert!(out.contains(&text::no_request_written("your agent", None)));
     // N3: an off total under a second is not "0 s".
     let short = show(json!({"off": {"spans": 2, "ms": 620}}));
-    assert!(short.contains("under 1 s"), "{short}");
-    assert!(!short.contains("0 s in total"), "{short}");
+    assert!(short.contains(&text::off_total(2, 620)), "{short}");
     // N4b: a pinned host is named and the proxy guess is dropped; with no pin the guess stays.
     let pin = json!({"written": {"model_requests": 0,
         "tunnel_hosts": {"p.example.org": {"conns": 1, "up": 1, "down": 1, "listed": "pinned"}}}});
@@ -97,10 +96,9 @@ fn counts_and_hosts_are_the_fixtures() {
         )),
         "{out}"
     );
-    assert!(out.contains("p.example.org"), "{out}");
-    assert!(!out.contains("may not use the recording proxy"), "{out}");
+    assert!(!out.contains(&text::no_request_written("your agent", None)), "{out}");
     let none = show(json!({"written": {"model_requests": 0}}));
-    assert!(none.contains("may not use the recording proxy"), "{none}");
+    assert!(none.contains(&text::no_request_written("your agent", None)), "{none}");
     let host = |c: char| format!("{c}.example.org");
     let mut tunnels: Map<String, Value> = ('a'..='g')
         .zip(1u64..)

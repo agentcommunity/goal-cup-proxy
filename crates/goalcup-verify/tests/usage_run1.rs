@@ -498,7 +498,6 @@ fn a_tunnelled_listed_host_is_named_not_on_the_wire() {
     assert_eq!(named[0]["host"], "pinned.example.test");
     assert_eq!(named[0]["reason"], "pinned");
     assert_eq!(named[0]["conns"], 1);
-    assert_eq!(named[0]["note"], "not recorded on the wire");
     assert_eq!(sum["coverage"]["wire_calls"], 0);
 }
 

@@ -727,8 +727,7 @@ pub fn continue_now(run: &str) -> String {
 pub fn no_request_written(name: &str, pinned: Option<&str>) -> String {
     match pinned {
         Some(host) => format!(
-            "No model request was written. {} {host}, so its traffic passed through unread.",
-            "The host list pins"
+            "No model request was written. The host list pins {host}, so its traffic passed through unread."
         ),
         None => format!(
             "No model request was written. {name} may not use the recording proxy, or it made no call."
@@ -1119,7 +1118,8 @@ pub fn run_kind(mode: RunMode) -> &'static str {
     }
 }
 
-/// The harness version could not be read: said on every tier, because the upload carries "unknown".
+/// The harness version could not be read. The upload sentence is said only when there is an upload,
+/// because the upload carries "unknown".
 pub fn version_unread(name: &str, upload: bool) -> String {
     let said = format!("{name}'s version could not be read, so the run starts without it.");
     if upload {
