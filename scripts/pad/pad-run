@@ -340,7 +340,9 @@ class Run:
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
         hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
         argv += [a for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v for a in ("--" + k, self.path(v))]
-        write(self.path("launch.sh"), "\n".join(lines + [shlex.join(argv)]) + "\n", 0o700)
+        keep_tty = ["exec sleep 1000000"] * self.has("kill-watchdog-recover")  # conductor decision, owner to confirm (R5-1): the launch
+        # shell outlives goalcup start, as a participant's open terminal does, so a killed watchdog does not hang up the harness
+        write(self.path("launch.sh"), "\n".join(lines + [shlex.join(argv)] + keep_tty) + "\n", 0o700)
         t = self.tmux  # one session per run, so runs on one machine never meet
         for argv in (["new-session", "-d", "-s", t, "-x", "200", "-y", "50"], ["set-option", "-w", "-t", t, "remain-on-exit", "on"],
                      ["respawn-pane", "-k", "-t", t, "bash " + shlex.quote(self.path("launch.sh"))]):
@@ -670,7 +672,7 @@ class Run:
         self.exit_harness()
         wait(lambda: not alive(pid), 30, 1)
         cmd = "upload" if self.span == "upload" else "continue"
-        head = open(self.path("launch.sh")).read().splitlines()[:-1]  # the launch shell's cd and exports, not goalcup start
+        head = [l for l in open(self.path("launch.sh")).read().splitlines() if l != "exec sleep 1000000"][:-1]  # the launch shell's cd and exports, not goalcup start
         write(self.path("cont.sh"), "\n".join(head + [shlex.join([tool("goalcup"), cmd])]) + "\n", 0o700)
         sh(["tmux", "new-window", "-d", "-t", self.session, "-n", "cont", "bash " + shlex.quote(self.path("cont.sh"))])
         sh(["tmux", "set-option", "-w", "-t", self.session + ":cont", "remain-on-exit", "on"])
