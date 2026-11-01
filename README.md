@@ -14,9 +14,7 @@ Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 
 ## Quick start for participants
 
-> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet". The end at the
-> deadline and on the server's stop, and null mode, are not built yet either, so a practice run goes
-> on until you quit the harness or run `goalcup seal`.
+> **Build state.** `goalcup continue` and `goalcup recover` print "not built yet".
 
 The full walk-through, with every message you will see, is the
 [participant's guide](docs/PARTICIPANT-GUIDE.md). The contract is [RULES](docs/RULES.md).
