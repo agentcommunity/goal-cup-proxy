@@ -1,8 +1,9 @@
-//! `goalcup upload` (PRD-06 section 9): sends what is left of one sealed entry by hand, in the
-//! wrap-up's order (final heartbeat, chunks, the final again until sealed), then prunes. It gives
-//! up only on 401, 404, 410 or `stuck`; a network or server failure waits on section 5's backoff,
-//! with no cap of ours. The words are PRD-10's; [`run`] returns the facts. The same step, one
-//! entry round, serves the upload thread's [`Queue`] of older sealed entries (section 1).
+//! `goalcup upload` (PRD-06 section 9): closes a dead entry with the `recovered` seal (PRD-02 9.4)
+//! and sends what is left of one sealed entry by hand, in the wrap-up's order (final heartbeat,
+//! chunks, the final again until sealed), then prunes. It gives up only on 401, 404, 410 or
+//! `stuck`; a network or server failure waits on section 5's backoff, with no cap of ours. The
+//! words are PRD-10's; [`run`] returns the facts. The same step, one entry round, serves the upload
+//! thread's [`Queue`] of older sealed entries (section 1).
 
 use super::beat::{Beat, FinalFacts, health};
 use super::chunk::Bound;
@@ -31,9 +32,13 @@ pub enum Outcome {
     Done,
     /// The server already held it, sealed: nothing was sent.
     AlreadyThere,
-    /// A recorder holds `rec/lock`: the entry sends itself.
+    /// A recorder holds `rec/lock`, or the entry's watchdog lives (it boots the next recorder):
+    /// the entry sends itself. Also an unsealed entry whose recorder and watchdog are gone while
+    /// its harness lives: nothing records or sends it, and only `goalcup recover` brings recording
+    /// back (PRD-02 9.1, ledger R3b). Nothing was sent either way.
     StillRecording,
-    /// The entry has no seal and no recorder: `pipeline::close_dead_entry` (PRD-02 9.4) closes it.
+    /// The entry has no seal to send with: the dead-entry close failed (`close_dead_entry` writes
+    /// its I/O error to `goalcup.log`), or it found the entry sealed but left no seal LINK.
     NotClosed,
     /// The run has no server.
     Local,
@@ -50,10 +55,15 @@ pub enum Outcome {
 /// Sends the entry in `entry_dir` of the run in `run_dir`. Says `StillRecording` at once while a
 /// recorder holds `rec/lock`, checked before `upload.lock` and on every 1 s tick spent waiting for
 /// another uploader to let `upload.lock` go. An entry is sealed when `status.json` says `sealed`
-/// with its seal, or `upload.json` says the server sealed it; any other is `NotClosed`. A sealed
-/// entry with nothing left on disk to check against (every part pruned and `upload.json` lost) is
-/// decided by the server: `AlreadyThere` when it holds the entry sealed, `Stuck` otherwise, so a
-/// sealed entry is never handed to `pipeline::close_dead_entry`.
+/// with its seal, or `upload.json` says the server sealed it. Only an entry with no seal anywhere,
+/// no live watchdog and no live harness is handed to `pipeline::close_dead_entry` (section 9 step
+/// 2), under `upload.lock`, and then sent with the `recovered` seal; a failed close is
+/// `NotClosed`. A live watchdog leaves `rec/lock` unheld between boots, so it alone says
+/// `StillRecording` there. A live harness whose goalcup processes are gone says `StillRecording`
+/// too: that entry is `goalcup recover`'s (PRD-02 9.1, ledger R3b), and a close here would remove
+/// the run key recover needs. A sealed entry with nothing left on disk to check against (every
+/// part pruned and `upload.json` lost) is decided by the server: `AlreadyThere` when it holds the
+/// entry sealed, `Stuck` otherwise.
 pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> Outcome {
     let held = loop {
         if recording(entry_dir) {
@@ -68,17 +78,35 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
         return Outcome::StillRecording;
     }
     let old = state::read(entry_dir).unwrap_or_default();
-    let seal = sealed(entry_dir).and_then(|s| s.seal);
     let stored = old.final_ == Final::Sealed;
-    if seal.is_none() && !stored {
-        return Outcome::NotClosed;
+    let read = cli::read_json::<Status>(&cli::status_json(entry_dir));
+    // Whether the harness `status.json` names still runs (same pid and OS start time).
+    let harness = read.as_ref().and_then(|s| s.harness.as_ref());
+    let harness_lives = harness.is_some_and(|h| cli::alive(h.pid, h.start_id));
+    let (mut status, mut closed) = (read.filter(is_sealed), None);
+    if status.is_none() && !stored {
+        // No seal anywhere and no watchdog to boot another recorder: the entry is dead, closed
+        // here while `upload.lock` is held. A live watchdog may be between boots (its restart
+        // spacing holds a boot back up to 30 s); closing then would seal the live entry for good.
+        // A live harness with both goalcup processes gone is `goalcup recover`'s, which needs the
+        // entry unsealed and its run key; this also covers a watchdog with no `watchdog.pid` yet.
+        if cli::watchdog_alive(entry_dir) || harness_lives {
+            return Outcome::StillRecording;
+        }
+        match pipeline::close_dead_entry(entry_dir) {
+            Err(_) => return Outcome::StillRecording,
+            Ok(pipeline::Closed::Sealed(f)) => closed = Some(f),
+            Ok(pipeline::Closed::AlreadySealed) => status = sealed(entry_dir),
+            Ok(pipeline::Closed::Failed(_)) => return Outcome::NotClosed,
+        }
     }
+    let seal = status.and_then(|s| s.seal);
     let link = seal_link(&entry_dir.join("rec"));
     // Every part pruned: the confirmed end of an entry the server sealed stands for the seal LINK.
     let kept = old.confirmed.clone().filter(|_| stored);
     let end = link.map(|l| (l.raw_end, l.seq, hex(&l.hash)));
     let end = end.or(kept.map(|c| (c.raw, c.seq, c.hash)));
-    if end.is_none() && seal.is_none() {
+    if end.is_none() && seal.is_none() && closed.is_none() {
         return Outcome::NotClosed;
     }
     let keep = keep || old.keep;
@@ -98,8 +126,8 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
         }
         (Ok(_), Some(_), Some(point)) => {
             // A separate process: the totals may decode the part files (`counts.jsonl` for pruned
-            // boots).
-            let seal = facts(seal, pipeline::entry_totals(entry_dir));
+            // boots). A close here gave its own.
+            let seal = closed.unwrap_or_else(|| facts(seal, pipeline::entry_totals(entry_dir)));
             let mut e = Entry::new(entry_dir, client, ids, point, seal, (j, file));
             e.held = Some(held);
             // Dropping `e` writes `upload.json`.
@@ -119,8 +147,11 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
 /// `status.json` when it says `sealed` with its seal. Its `written` and `off` are then the seal's
 /// totals: PRD-02 sets the seal and those totals together and nothing else sets the seal.
 fn sealed(entry_dir: &Path) -> Option<Status> {
-    let status = cli::read_json::<Status>(&cli::status_json(entry_dir));
-    status.filter(|s| s.mode == Mode::Sealed && s.seal.is_some())
+    cli::read_json::<Status>(&cli::status_json(entry_dir)).filter(is_sealed)
+}
+
+fn is_sealed(s: &Status) -> bool {
+    s.mode == Mode::Sealed && s.seal.is_some()
 }
 
 /// The seal's facts: a seal not known in `status.json` is `recovered`, a dead entry's reason,
