@@ -202,7 +202,9 @@ fn rebuild(
     for (name, value) in &plan.env {
         match harness_env.get(name) {
             None => harness_env.insert(name.clone(), value.clone()),
-            Some(live) if live != value => harness_env.insert(format!("{name}_PLAN"), value.clone()),
+            Some(live) if live != value => {
+                harness_env.insert(format!("{name}_PLAN"), value.clone())
+            }
             Some(_) => None,
         };
     }
