@@ -339,8 +339,7 @@ what the first part used. If the earlier parts wrote model requests or session f
 harness's last conversation; if that fails at once it opens a new one. When it resumes, type only
 "keep going" and do not paste the first message again. When a new conversation starts (nothing was
 written earlier, or the resume failed at once and goalcup says "Starting a new ... session"), the
-first message is offered again: paste it once and press Enter, as goalcup says. A new conversation
-can still
+first message is offered again: paste it once and press Enter, as goalcup says. A new conversation can still
 push if the agent's `git config` and `git remote add` lines are saved in the repository's
 `.git/config`. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
 current part (it asks first; `--yes` skips that). The run stays open and `continue` goes on.

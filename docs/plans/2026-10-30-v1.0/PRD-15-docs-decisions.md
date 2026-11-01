@@ -1497,3 +1497,14 @@ the HARNESS-ONBOARDING pointer; `docs/README.md` is deleted and `CONTRACTS`, `TE
 ### 2026-11-01, note from PRD-10 slice 11 (merge 64cf49ac)
 
 `goalcup continue` and `goalcup recover` are built. Remove the "not built yet" lines in ARCHITECTURE.md (lines 74, 80), CONNECTOR-SCHEMA.md (line 99) and the PARTICIPANT-GUIDE.md build-state banner, and describe both from the PRD-10 text. No locked ledger item is touched.
+
+### 2026-11-01, replan after PRD-15 slice 19 (merge a632d992)
+
+- **Size report, PRD-15:** docs only, `wc -l` on integration: README 246, AGENTS 95, ARCHITECTURE 199,
+  OPERATING 261, PARTICIPANT-GUIDE 495, RECORD-FORMAT 552, RULES 459, CONNECTOR-SCHEMA 117 (2,424 together).
+  PRD-00 "Size budget" has no PRD-15 row, so nothing to exceed.
+- The `continue` and `recover` "not built yet" notes are gone. Two cosmetic nits (A6, A7/R1) were applied
+  in the replan commit: the CONNECTOR-SCHEMA `continue` paragraph and the PARTICIPANT-GUIDE continue
+  paragraph are re-wrapped. The four earlier queued nits were cleared by this slice.
+- Still open: the HARNESS-SETUP move stays blocked by the hermes sheet link (a PRD-11 file). No seam
+  change; no locked ledger item is touched.
