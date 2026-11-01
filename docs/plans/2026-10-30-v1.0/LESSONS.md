@@ -42,7 +42,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-C9 | 2.1 | A: proxy_connect.rs (PRD-03) | PRD-03 | green | 7e620577 |
 | L-C10 | 2.1 | A: proxy_connect.rs (PRD-03); A: lessons_connect::listed_sni_to_a_local_fake_server_is_never_trusted | PRD-03, PRD-17 | green | c39737d9 |
 | L-C11 | 2.1 | A: proxy_connect::two_thousand_concurrent_connects_are_all_served (PRD-03); A: proxy_connect::accepts_wait_while_descriptors_are_short_and_never_refuse (PRD-03); A: watchdog_rlimit::the_recorder_gets_the_hard_limit_no_core_its_fds_and_its_own_session (PRD-02) | PRD-03 | green | c39737d9 |
-| L-C12 | 2.1 | A: watchdog_restart.rs (PRD-02, file not on tree; no test on the tree asserts 127.0.0.1) | PRD-02 | open | - |
+| L-C12 | 2.1 | A: watchdog_restart::watchdog_restart_keeps_port_backlog_and_ca (PRD-02, `loopback_only` reads /proc/net/tcp and tcp6 and asserts the one listener on the port is 127.0.0.1, before and after the kill) | PRD-02 | open | - |
 | L-T1 | 2.2 | A: lessons_tls::leaf_aki_names_the_ca_key; R: RR3 | PRD-17 | green | 7e620577 |
 | L-T2 | 2.2 | A: lessons_tls::ca_constraints_validity_and_leaf_shape | PRD-17 | green | 7e620577 |
 | L-T3 | 2.2 | A: proxy_tls.rs (PRD-03); A: lessons_connect::untrusted_upstream_reaches_client_unchanged | PRD-03, PRD-17 | green | c39737d9 |
@@ -111,8 +111,8 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-N7 | 2.7 | A: connector_hints.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-N8 | 2.7 | A: connector_launch.rs (PRD-11); A: connector_hints.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-N9 | 2.7 | X: ledger H2, PRD-03 rule 2 | none | open | - |
-| L-P1 | 2.8 | A: watchdog_end::watchdog_end_real_killed_recorder_restarts (PRD-02, the kill and the one `recorder_down` GAP); A: watchdog_restart.rs (PRD-02, the unchanged port and a connection served during the restart; file not on tree); R: RR4 | PRD-02 | open | - |
-| L-P2 | 2.8 | A: proxy_restart::the_next_boot_serves_the_backlog_with_the_same_ca (PRD-03); A: watchdog_restart.rs (PRD-02, a decrypted connection after a real kill verifies against `run-ca.pem`; file not on tree); R: RR4 | PRD-02, PRD-03 | open | - |
+| L-P1 | 2.8 | A: watchdog_end::watchdog_end_real_killed_recorder_restarts (PRD-02, the kill and the one `recorder_down` GAP); A: watchdog_restart::watchdog_restart_keeps_port_backlog_and_ca (PRD-02, the unchanged port after the kill, and a connection made while boot 2 is held is queued and served by it); R: RR4 | PRD-02 | open | - |
+| L-P2 | 2.8 | A: proxy_restart::the_next_boot_serves_the_backlog_with_the_same_ca (PRD-03); A: watchdog_restart::watchdog_restart_keeps_port_backlog_and_ca (PRD-02, after a real SIGKILL the next boot's leaf verifies against the `run-ca.pem` read before the kill, and the request and answer are in the record); R: RR4 | PRD-02, PRD-03 | open | - |
 | L-P3 | 2.8 | A: lessons_launch::ctrl_c_reaches_the_harness_and_the_watchdog_lives (pty); A: watchdog_shield::a_pending_key_does_not_end_the_wrap_up (PRD-02); A: watchdog_shield::a_key_after_harness_exited_gets_the_default_action (PRD-02) | PRD-17, PRD-02 | green | c39737d9 |
 | L-P4 | 2.8 | A: lessons_launch::a_tui_child_reads_the_terminal | PRD-17 | green | 0fa43715 |
 | L-P5 | 2.8 | A: lessons_launch::modes_restored_after_a_raw_exit | PRD-17 | green | 0fa43715 |
@@ -145,7 +145,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-S9 | 2.10 | R: PRD-06 U3 | PRD-06 | open | - |
 | L-S10 | 2.10 | A: device.test.ts (PRD-07); A: lifecycle.test.ts (PRD-07) | PRD-07 | green | b474329d |
 | L-R1 | 2.11 | A: pipeline_guard::a_thousand_guard_episodes_never_latch (PRD-02) | PRD-02 | green | 7e620577 |
-| L-R2 | 2.11 | A: pipeline_guard::two_hundred_streams_with_the_writer_held (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall.rs (PRD-02, file not on tree) | PRD-02 | open | - |
+| L-R2 | 2.11 | A: pipeline_guard::two_hundred_streams_with_the_writer_held (PRD-02); A: lessons_pipeline::open_and_end_survive_a_full_guard; A: pipeline_stall.rs (PRD-02, file not on tree; PRD-02 section on R2 names it, no PRD-02 branch has landed it) | PRD-02 | open | - |
 | L-R3 | 2.11 | A: check_invariants.rs (PRD-08, invariant 12 gap_has_end); A: proxy_http1.rs (PRD-03, fault case); A: see L-H2, L-H9, L-W2, L-W7, L-W10 | PRD-08, PRD-03 | green | 8dc99969 |
 | L-R4 | 2.11 | R: PRD-02 R3; R: PRD-10 acceptance 1 | PRD-02, PRD-10 | open | - |
 | L-R5 | 2.11 | A: golden.rs (PRD-01); A: proxy_ws.rs (PRD-03); R: RR1 | PRD-01, PRD-03 | green | 8dc99969 |
@@ -155,9 +155,9 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-HF1 | 2.12 | R: PRD-11 acceptance 5; R: RR3 | PRD-11 | open | - |
 | L-HF2 | 2.12 | R: RR6 | PRD-11 | open | - |
 | L-HF3 | 2.12 | D: connectors/hermes-cli.toml before, after; A: watchdog_end::watchdog_end_stub_helpers_run_in_order (PRD-02) | PRD-11, PRD-02 | open | - |
-| L-HF4 | 2.12 | A: cli_commands::second_start_on_one_home_refuses (PRD-10, case not in `cli_commands.rs`) | PRD-10 | open | - |
+| L-HF4 | 2.12 | A: cli_commands::second_start_on_one_home_refuses (PRD-10, exit 1 with the held home named, no server call, nothing written) | PRD-10 | open | - |
 | L-HF5 | 2.12 | A: connector_launch::codex_gets_no_dash_c_override (PRD-11); D: connectors/codex-cli.toml args | PRD-11 | green | f5a200ae |
-| L-HF6 | 2.12 | A: cli_continue.rs (PRD-10, file not on tree); D: docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md section 3.1 step 3 | PRD-10 | open | - |
+| L-HF6 | 2.12 | A: cli_continue::the_resume_rule_follows_written_counts_alone (PRD-10, session files with nothing counted are no conversation); A: cli_continue::a_resume_that_failed_at_once_opens_a_new_session (PRD-10); D: docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md section 3.1 step 3 | PRD-10 | open | - |
 | L-HF7 | 2.12 | R: PRD-12 pass rule | PRD-12 | open | - |
 | L-HF8 | 2.12 | A: connector_hosts.rs (PRD-11) | PRD-11 | green | 7e620577 |
 | L-G1 | 2.13 | A: see L-H11; R: PRD-12 P4 gateway rows | PRD-17, PRD-09 | green | 8dc99969 |
@@ -181,7 +181,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-SC1 | 2.16 | A: cli_folder::project_folder_and_goalcup_home_never_hold_each_other (PRD-10) | PRD-10 | green | f5a200ae |
 | L-SC2 | 2.16 | A: cli_folder::refused_start_creates_nothing (PRD-10, folder half; the other cases wait on approve.rs); X: PRD-07 (abandon route cut) | PRD-10, PRD-07 | open | - |
 | L-SC3 | 2.16 | A: lessons_launch::nothing_is_written_to_the_terminal_while_the_harness_runs | PRD-17 | green | c39737d9 |
-| L-SC4 | 2.16 | A: cli_continue.rs (PRD-10, file not on tree); R: PRD-10 acceptance 10 | PRD-10 | open | - |
+| L-SC4 | 2.16 | A: cli_continue::continue_adds_the_next_part_and_resumes_the_session (PRD-10); A: cli_continue::a_part_that_recorded_nothing_starts_a_new_session (PRD-10); R: PRD-10 acceptance 10 | PRD-10 | open | - |
 | L-SC5 | 2.16 | R: PRD-10 acceptance 6 | PRD-10 | open | - |
 | L-SC6 | 2.16 | A: cli_finish::unsealed_status_never_reads_as_finished (PRD-10) | PRD-10 | green | f5a200ae |
 | L-SC7 | 2.16 | X: ledger L5, L6 (PRD-10 section 4) | PRD-10 | open | - |
