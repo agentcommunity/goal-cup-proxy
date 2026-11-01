@@ -216,7 +216,7 @@ impl Native {
                 mains.insert(id.clone(), gemini_suffix(p));
             }
         }
-        for ((path, gen), f) in self.files {
+        for ((path, rev), f) in self.files {
             repeats_skipped += f.repeats;
             copied_skipped += f.copied;
             let (id, parent, depth, label) = match f.meta {
@@ -226,7 +226,7 @@ impl Native {
                 }
                 None if f.codex => (file_uuid(&path), None, None, None),
                 None if f.gemini => {
-                    let (id, parent) = gem[&(path.clone(), gen)].clone();
+                    let (id, parent) = gem[&(path.clone(), rev)].clone();
                     // The folder is a main's full session id, or the id a main file's name ends in.
                     let hit = |p: &String| {
                         let by = |(i, s): &(&String, &Option<String>)| {

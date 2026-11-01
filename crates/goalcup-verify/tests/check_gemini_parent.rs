@@ -22,14 +22,24 @@ fn kid_file() -> String {
 
 /// One native stream holding `body` as the file at `path`, ended complete.
 fn file(e: &mut Entry, path: &str, body: &str) {
-    let s = e.open(StreamKind::Native, 0, 0, json!({"path": path, "gen": 0, "from": 0}));
+    let s = e.open(
+        StreamKind::Native,
+        0,
+        0,
+        json!({"path": path, "gen": 0, "from": 0}),
+    );
     e.data(s, 0, 0, body.as_bytes());
     e.end(s, EndReason::Complete, body.len() as u64, Value::Null);
 }
 
 /// A native stream whose bytes have a known hole after the first line.
 fn holed_file(e: &mut Entry, path: &str, first: &str) {
-    let s = e.open(StreamKind::Native, 0, 0, json!({"path": path, "gen": 0, "from": 0}));
+    let s = e.open(
+        StreamKind::Native,
+        0,
+        0,
+        json!({"path": path, "gen": 0, "from": 0}),
+    );
     let n = first.len() as u64;
     e.data(s, 0, 0, first.as_bytes());
     e.gap(s, GapReason::MemoryGuard, 0, n, 7, Value::Null);
@@ -94,12 +104,18 @@ fn kid_line() -> String {
 }
 
 fn thread<'a>(t: &'a CallTable, id: &str) -> &'a goalcup_verify::usage::Thread {
-    t.threads.iter().find(|x| x.id == id).unwrap_or_else(|| panic!("no thread {id}"))
+    t.threads
+        .iter()
+        .find(|x| x.id == id)
+        .unwrap_or_else(|| panic!("no thread {id}"))
 }
 
 #[test]
 fn a_subagent_file_gives_its_parent_and_depth() {
-    let t = table(&entry("gp-a", &[(MAIN_FILE, &main_line()), (&kid_file(), &kid_line())]));
+    let t = table(&entry(
+        "gp-a",
+        &[(MAIN_FILE, &main_line()), (&kid_file(), &kid_line())],
+    ));
     let (main, kid) = (thread(&t, MAIN), thread(&t, KID));
     assert_eq!((main.parent.as_deref(), main.depth), (None, Some(0)));
     assert_eq!((kid.parent.as_deref(), kid.depth), (Some(MAIN), Some(1)));
@@ -109,7 +125,10 @@ fn a_subagent_file_gives_its_parent_and_depth() {
 
 #[test]
 fn a_main_file_with_no_id_still_gives_the_subagent_its_parent() {
-    let d = entry("gp-b", &[(MAIN_FILE, "not json\n"), (&kid_file(), &kid_line())]);
+    let d = entry(
+        "gp-b",
+        &[(MAIN_FILE, "not json\n"), (&kid_file(), &kid_line())],
+    );
     let t = table(&d);
     let kid = thread(&t, KID);
     // The folder id is matched to the main file by its 8-hex name suffix, so the child links to
@@ -149,7 +168,10 @@ fn wire_calls_stay_the_call_source() {
 
 #[test]
 fn the_check_sees_a_thread_with_a_parent() {
-    let d = entry("gp-check", &[(MAIN_FILE, &main_line()), (&kid_file(), &kid_line())]);
+    let d = entry(
+        "gp-check",
+        &[(MAIN_FILE, &main_line()), (&kid_file(), &kid_line())],
+    );
     let (_, v) = check(&d, &[]);
     // Every child here comes from a recorded file, so only the `--harness-files` manifest part
     // of this check can name a missing subagent; that part is PRD-08's manifest case, not this.
@@ -159,7 +181,10 @@ fn the_check_sees_a_thread_with_a_parent() {
 #[test]
 fn a_message_id_never_names_the_main_thread() {
     // Line 1 is lost; a later line carries a message `id`, which is not the session id.
-    let body = format!("not json\n{}\n", json!({"id": "11111111-0000-4000-8000-0000000000aa"}));
+    let body = format!(
+        "not json\n{}\n",
+        json!({"id": "11111111-0000-4000-8000-0000000000aa"})
+    );
     let t = table(&entry("gp-e", &[(MAIN_FILE, &body)]));
     let stem = "session-2026-11-01T08-42-d56586ab";
     assert!(t.threads.iter().any(|x| x.id == stem));
