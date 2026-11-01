@@ -8,8 +8,7 @@
 mod common;
 
 use common::{
-    ALNUM, B64, B64URL, Rng, append, aq_key, key_of, keys, provider_keys, random_cuts, run,
-    starred,
+    ALNUM, B64, B64URL, Rng, append, aq_key, key_of, keys, provider_keys, random_cuts, run, starred,
 };
 use goalcup::connector::{self, FieldValue, MaskPattern, MaskRule};
 use goalcup::mask::{Masked, Masker, SecretValue, StreamMasker, ValueSource};
@@ -287,7 +286,10 @@ fn a_long_base64_after_a_shell_name_does_not_fail_closed() -> Res {
             .take_while(|&c| c < input.len())
             .collect();
         let got = common::stream_in(&m, StreamKind::HttpReq, input.as_bytes(), &cuts);
-        assert!(!got.spans.iter().any(|s| s.rule == fail_closed), "piece {piece}");
+        assert!(
+            !got.spans.iter().any(|s| s.rule == fail_closed),
+            "piece {piece}"
+        );
         assert!(got == whole, "piece {piece}");
     }
     Ok(())

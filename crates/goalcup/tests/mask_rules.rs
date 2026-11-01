@@ -463,16 +463,26 @@ fn dotted_assignment_values_are_masked_whole() -> Res {
         assert_masks(&m, &input, &value);
         assert_eq!(m.mask_whole(input.as_bytes()).bytes.len(), input.len());
     }
-    for input in [format!("api_key: {a}.{jwt}"), format!("api_key: \"{a}.{jwt}\"")] {
+    for input in [
+        format!("api_key: {a}.{jwt}"),
+        format!("api_key: \"{a}.{jwt}\""),
+    ] {
         assert_masks(&m, &input, &a);
         assert_masks(&m, &input, &jwt);
     }
     let gh = key_of("github_token", 0);
-    for (name, key) in [("OPENAI_API_KEY=", &sk), ("GITHUB_TOKEN=", &gh), ("my token: ", &gh)] {
+    for (name, key) in [
+        ("OPENAI_API_KEY=", &sk),
+        ("GITHUB_TOKEN=", &gh),
+        ("my token: ", &gh),
+    ] {
         let input = format!("{name}{key}\n");
         let out = m.mask_whole(input.as_bytes());
         assert_eq!(&out.bytes[..name.len()], name.as_bytes(), "{input:?}");
-        assert!(starred(&out, name.len()..name.len() + key.len()), "{input:?}");
+        assert!(
+            starred(&out, name.len()..name.len() + key.len()),
+            "{input:?}"
+        );
         assert_eq!(out.spans.len(), 1, "{input:?}");
     }
     // Code is the bulk of what is recorded: a member path stays raw after a spaced `=` or `:`,
