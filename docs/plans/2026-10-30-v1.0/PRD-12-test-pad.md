@@ -1920,3 +1920,8 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
 ### 2026-11-01, note from PRD-06 slice 7 (merge 20634842)
 
 - **U8 procedure (`kill-both@m+upload`):** `goalcup upload` closes a dead entry only after the harness has exited; against a live harness it answers `StillRecording` and closes nothing (that entry belongs to `goalcup recover`). The fault must therefore wait for the harness to exit (the exit keys, then SIGTERM to `harness.pid` after 30 s, then confirm the pid is gone) before it runs `goalcup upload`; a `StillRecording` answer there is a rig fault, not a PRD-06 failure. No locked ledger item is touched.
+
+### 2026-11-01, C3 and nits after slice 13 (merge f5889891)
+
+- **C3 INCONCLUSIVE case added (section 9).** A planted kind with no MASK in the record and the setup check done is now INCONCLUSIVE "not exercised", not FAIL. It is never a PASS: planted values are in the known-values file, so an unmasked one is a known-value hit, and any hit is still FAIL. C3 INCONCLUSIVE causes are now: the setup-check script never ran, a planted kind was not exercised, or the pane scan did not finish. The SecretCheck docstring in test_pad.py still says a planted shape with no MASK fails; update it with the next pad slice.
+- **Open nits for any later pad slice, none a blocker.** A12 (the header comment in harnesses/kimi-code-cli.toml still says type "openai_legacy"; key_line writes type = "openai" and models.ds.protocol = "openai"; fix the earlier line, as with A10 in cline-cli.toml). B10 (the pane-scan comment in check.py secrets() repeats the known-values-only statement; one statement is enough). No locked ledger item is touched.
