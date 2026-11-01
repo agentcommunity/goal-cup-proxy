@@ -303,7 +303,7 @@ class CrashRows(unittest.TestCase):
     UP = ({"written": {"model_requests": 2}}, {"written": {"model_requests": 5}})  # status samples before and after
 
     def row(self, kind, gap, samples=UP, recovery=(("ok", "10:03"),), seal="harness_exit", over_cap=False,
-            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1):
+            words=check.RECOVER, more=(), pid=9, code=1, case="direct", quiet=False, commits=1, extra=None):
         told = [{"kind": k, "exit": 0, "said": w, "at": "2026-10-30T10:%s+00:00" % t}
                 for k, w, t in zip(("recover", "recover", "status"), words + (check.STATUS_RECOVER,), ("02:30", "04:00", "03:30"))]
         kills = [dict({"kind": k, "pid": pid, "at": "2026-10-30T10:02:00+00:00"}, **({"quiet": True} if quiet else {}))
@@ -321,6 +321,7 @@ class CrashRows(unittest.TestCase):
                                                       {"parent": "t0", "models": {"m": 2}, "wire_calls": 2}]},
                  "watch/status.jsonl": [{"at": "2026-10-30T10:0%d:00+00:00" % (4 * i), "status": x} for i, x in enumerate(samples)],
                  "watch/faults.jsonl": told + kills + rec + list(more)}
+        files.update(extra or {})
         return evaluate(files)
 
     GAP = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}  # the kill is at 10:02:00
@@ -464,6 +465,40 @@ class FaultRows(unittest.TestCase):
     def test_freeze_that_stopped_nothing_is_not_a_pass(self):
         for pids, want in ((3, "PASS"), (0, "INCONCLUSIVE")):
             self.assertEqual(self.row("freeze@2", [{"kind": "freeze", "pids": pids, "at": "02:00"}, {"kind": "thaw", "at": "12:00"}]), want)
+
+
+class StatedLoss(unittest.TestCase):
+    """C3 and the kill row's exit rule for a shape found only in a joined SSE deltas body (PRD-05 section 10)."""
+
+    DELTAS = {"kind": "generic_secret_assignment", "in": "e1/1.3/deltas", "sha12": "a" * 12, "n": 1}
+    PLAIN = {"kind": "generic_secret_assignment", "in": "e1/1.3", "sha12": "a" * 12, "n": 1}
+    KNOWN = {"form": "raw", "in": "e1/1.3/deltas", "sha12": "b" * 12, "n": 1}
+
+    def run_row(self, known=(), shapes=(), code=2):
+        extra = {"verify/secrets.json": {"known_hits": list(known), "shape_hits": list(shapes), "big_masks": [],
+                                         "masks": dict(SecretCheck.PLANTED)},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 2 if known or shapes else 0, "secrets-out": 0, "secrets-plain": 0}}
+        gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
+        return CrashRows.row(self, "kill-recorder", gap, code=code, extra=extra)
+
+    def test_deltas_only_shape_is_a_warning_not_a_fail(self):
+        row = self.run_row(shapes=[self.DELTAS])
+        self.assertNotEqual(row["checks"]["C3"], "FAIL")
+        self.assertNotEqual(row["faults"], "FAIL")
+        self.assertNotEqual(row["result"], "FAIL")
+        self.assertTrue(any("WARN" in w and "generic_secret_assignment" in w and "/deltas" in w for w in row["why"]))
+
+    def test_any_other_hit_still_fails(self):
+        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),
+                              ([], [dict(self.DELTAS, **{"in": None})])):
+            row = self.run_row(known, shapes)
+            self.assertEqual((row["checks"]["C3"], row["faults"]), ("FAIL", "FAIL"), (known, shapes))
+
+    def test_kill_row_exit_rule_is_otherwise_unchanged(self):
+        self.assertEqual(self.run_row(code=1)["faults"], "PASS")
+        self.assertEqual(self.run_row(code=3)["faults"], "FAIL")
+        self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
 
 
 class SecretCheck(unittest.TestCase):
