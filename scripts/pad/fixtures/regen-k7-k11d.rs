@@ -3,6 +3,11 @@
 //! crates/goalcup-verify/tests/regen_k7_k11d.rs and runs it (see the scripts/pad/selftest docstring).
 //! GOALCUP_FIXTURES_IN is scripts/pad/fixtures (k7's raw records are read from k7-part there);
 //! GOALCUP_FIXTURES_OUT receives the four folders.
+//! regen_k7 only recompresses and re-chunks the raw records of the committed k7-part, so it shows the
+//! encoding is deterministic, not that k7 can be rebuilt after a record format change (a changed reader
+//! may not decode the old part). When PRD-08 adopts this file, k7 should come from a builder such as the
+//! check_run1_shape helper. regen_k11d builds from scratch; its first_seq is right only for the one chunk
+//! it asserts.
 mod common;
 use common::*;
 use goalcup_format::codec::Record;
