@@ -9,7 +9,9 @@ use std::process::ExitCode;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
-use super::{alive, broke, fail, find, home, read_json, say, status_json, text, time_left, watchdog_pid};
+use super::{
+    alive, broke, fail, find, home, read_json, say, status_json, text, time_left, watchdog_pid,
+};
 use crate::pipeline::status::{Mode, Status};
 use crate::pipeline::{Closed, close_dead_entry};
 
@@ -136,4 +138,3 @@ fn seal_dead(found: &super::Found, name: &str, harness_ran: bool) -> ExitCode {
     );
     ExitCode::SUCCESS
 }
-
