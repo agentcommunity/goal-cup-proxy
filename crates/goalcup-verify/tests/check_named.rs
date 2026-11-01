@@ -220,6 +220,16 @@ fn counts_equal_the_recorder_rules_for_tunnels_snapshots_and_ws_gaps() {
 
 /// A listed tunnel of 512 up and 2048 down bytes, then its GAP (`lost` = up + down + 1) if any.
 fn tunnel(e: &mut Entry, host: &str, reason: &str, gap: Option<(GapReason, Value)>) {
+    tunnel_bytes(e, host, reason, gap, (512, 2048));
+}
+
+fn tunnel_bytes(
+    e: &mut Entry,
+    host: &str,
+    reason: &str,
+    gap: Option<(GapReason, Value)>,
+    (up, down): (u64, u64),
+) {
     let meta = json!({"host": host, "port": 443, "mode": "tunnel", "listed": "shared",
         "kind": "provider", "reason": reason, "alpn": null, "tls": null,
         "fingerprint": "0123456789abcdef"});
@@ -227,7 +237,7 @@ fn tunnel(e: &mut Entry, host: &str, reason: &str, gap: Option<(GapReason, Value
     if let Some((cause, tail)) = gap {
         e.gap(s, cause, 1_000, 0, 2_561, tail);
     }
-    e.end(s, EndReason::Complete, 0, json!({"up": 512, "down": 2048}));
+    e.end(s, EndReason::Complete, 0, json!({"up": up, "down": down}));
 }
 
 fn sealed(mut e: Entry) -> (i32, Value) {
@@ -259,6 +269,21 @@ fn listed_tunnels_with_a_named_reason_are_named_and_without_a_gap_fail() {
         assert_eq!(result(&v, "listed_hosts_decrypted"), res, "{reason}");
         assert_eq!(code == 2, res == "fail", "{reason}");
     }
+}
+
+#[test]
+fn zero_byte_listed_tunnel_is_no_loss_but_a_gap_still_names_it() {
+    let mut e = Entry::new("zero-tunnel");
+    tunnel_bytes(&mut e, "t.example.test", "pinned", None, (0, 0));
+    let (code, v) = sealed(e);
+    assert_eq!(result(&v, "listed_hosts_decrypted"), "pass");
+    assert_eq!(code, 1);
+
+    let mut e = Entry::new("zero-tunnel-gap");
+    let gap = Some((GapReason::Pinned, Value::Null));
+    tunnel_bytes(&mut e, "t.example.test", "pinned", gap, (0, 0));
+    let (_, v) = sealed(e);
+    assert_eq!(result(&v, "listed_hosts_decrypted"), "named");
 }
 
 #[test]
