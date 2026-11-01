@@ -580,3 +580,49 @@ fn a_key_file_with_a_bad_byte_or_a_bom_still_gives_its_values() -> Res {
     }
     Ok(())
 }
+
+/// The inside of a JSON string as an HTML-safe encoder writes it (Go's `encoding/json` by
+/// default): `"` and `\` gain a backslash, `<`, `>` and `&` become `<`, `>`,
+/// `&`, every other printable byte stays raw.
+fn html_safe(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '"' | '\\' => format!("\\{c}"),
+            '<' | '>' | '&' => format!("\\u{:04x}", u32::from(c)),
+            _ => c.to_string(),
+        })
+        .collect()
+}
+
+/// A password holding `&`, `<` and `>` (and a `"`) is masked inside a JSON body an HTML-safe
+/// encoder wrote, and inside one such body nested in another, whole and streamed.
+#[test]
+fn a_value_with_html_bytes_is_masked_in_html_safe_json() -> Res {
+    let mut rng = Rng(0x60E5);
+    let values = [
+        ["Pw&", &rng.chars(ALNUM, 24), "<x>"].concat(),
+        ["a\"b&", &rng.chars(ALNUM, 22), "\\&"].concat(),
+    ];
+    let m = Masker::new(
+        &[],
+        values
+            .iter()
+            .map(|v| SecretValue::new(ValueSource::Workspace, v.as_bytes().to_vec()))
+            .collect(),
+    )?;
+    assert_eq!(m.value_counts().workspace, 2);
+    for value in &values {
+        let once = html_safe(value);
+        let twice = html_safe(&once);
+        let body = format!("{{\"cmd\":\"cat .env\",\"out\":\"PASSWORD={once}\\n\"}}");
+        let nested = format!("{{\"content\":\"{}\"}}", html_safe(&body));
+        for (text, form) in [(&body, &once), (&nested, &twice)] {
+            let at = text.find(form.as_str()).ok_or("form not in body")?;
+            let whole = m.mask_whole(text.as_bytes());
+            assert!(starred(&whole, at..at + form.len()));
+            let cuts: Vec<usize> = (1..text.len() / 3).map(|i| i * 3).collect();
+            assert_eq!(stream_in(&m, StreamKind::Native, text.as_bytes(), &cuts), whole);
+        }
+    }
+    Ok(())
+}

@@ -11,7 +11,10 @@
 //!   byte alignments: the characters that depend on no byte outside `v` (unpadded);
 //! * for a value holding `"` or `\`, `v` JSON-string escaped once (`\"`, `\\`) and twice
 //!   (`\\\"`, `\\\\`), as it travels inside a JSON string and inside a JSON string nested in
-//!   one (a `cat .env` tool result in a request body).
+//!   one (a `cat .env` tool result in a request body);
+//! * for a value holding `<`, `>` or `&`, the same two with those bytes written `\u003c`,
+//!   `\u003e` and `\u0026`, as an HTML-safe JSON encoder (Go's `encoding/json` by default)
+//!   writes them, the other bytes raw.
 //!
 //! A form is found with a line break between any two of its characters ([`Progress`],
 //! [`wrapped_regex`]): LF or CR LF, raw, or escaped with one or two backslashes before each of
@@ -38,8 +41,9 @@ pub const MIN_VALUE_BYTES: usize = 20;
 /// The longest value used.
 pub const MAX_VALUE_BYTES: usize = 256;
 
-/// The longest form of a value: every byte `\u`-escaped, six bytes each.
-pub const MAX_FORM_BYTES: usize = 6 * MAX_VALUE_BYTES;
+/// The longest form of a value: every byte HTML-safe JSON-escaped and nested once
+/// (`\\u003c`), seven bytes each.
+pub const MAX_FORM_BYTES: usize = 7 * MAX_VALUE_BYTES;
 
 /// The longest break: CR LF with two backslashes before each letter (six bytes).
 pub const MAX_BREAK_BYTES: usize = 6;
@@ -56,7 +60,7 @@ pub const MAX_WRAPPED_FORM_BYTES: usize = wrapped_len(MAX_FORM_BYTES);
 const _: () = assert!(MAX_WRAPPED_FORM_BYTES <= super::stream::MAX_HELD_BYTES);
 
 /// The most values used (PRD-05 section 9): a stated guard on start-up time and memory, not a
-/// cap of records. Each value adds up to thirteen compiled forms.
+/// cap of records. Each value adds up to fifteen compiled forms.
 pub const MAX_VALUES: usize = 32;
 
 /// Whether `value` is one the masker uses: 20 to 256 bytes of printable ASCII without a space.
@@ -86,11 +90,14 @@ pub fn encoded_forms(value: &[u8]) -> Vec<Vec<u8>> {
             forms.push(base64_inside(value, alignment, url_safe));
         }
     }
-    if value.iter().any(|b| matches!(b, b'"' | b'\\')) {
-        let once = json_escaped(value);
-        let twice = json_escaped(&once);
-        forms.push(once);
-        forms.push(twice);
+    for html in [false, true] {
+        let escapes = |b: &u8| matches!(b, b'"' | b'\\') || (html && matches!(b, b'<' | b'>' | b'&'));
+        if value.iter().any(escapes) {
+            let once = json_escaped(value, html);
+            let twice = json_escaped(&once, html);
+            forms.push(once);
+            forms.push(twice);
+        }
     }
     forms.retain(|form| form.len() >= 8);
     forms.sort();
@@ -98,15 +105,17 @@ pub fn encoded_forms(value: &[u8]) -> Vec<Vec<u8>> {
     forms
 }
 
-/// `value` as the inside of a JSON string: a backslash before every `"` and `\`. A usable value
-/// is printable ASCII, so nothing else is escaped.
-fn json_escaped(value: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(value.len() * 2);
+/// `value` as the inside of a JSON string: a backslash before every `"` and `\`, and with
+/// `html` each `<`, `>` and `&` as `\u003c`, `\u003e`, `\u0026`. A usable value is printable
+/// ASCII, so nothing else is escaped.
+fn json_escaped(value: &[u8], html: bool) -> Vec<u8> {
+    let mut out = Vec::with_capacity(value.len() * 6);
     for &b in value {
-        if matches!(b, b'"' | b'\\') {
-            out.push(b'\\');
+        match b {
+            b'"' | b'\\' => out.extend_from_slice(&[b'\\', b]),
+            b'<' | b'>' | b'&' if html => out.extend_from_slice(format!("\\u{b:04x}").as_bytes()),
+            _ => out.push(b),
         }
-        out.push(b);
     }
     out
 }
@@ -266,7 +275,9 @@ impl RunSecrets {
     /// ([`SecretValue::left_out`], the readers' cut) adds its count to `skipped`. A value whose
     /// bytes equal one already compiled adds nothing and is counted nowhere. A harness value
     /// (source 4, not built), an unusable value, a value with a form that does not compile, and
-    /// every value once [`MAX_VALUES`] are in use are counted in `skipped`.
+    /// every value once [`MAX_VALUES`] are in use are counted in `skipped`. The readers'
+    /// [`finish`] is the bound on the wire; this dedupe and cut is the backstop for callers that
+    /// pass values directly.
     pub(crate) fn new(values: &[SecretValue]) -> (RunSecrets, ValueCounts) {
         let mut counts = ValueCounts::default();
         let mut forms: Vec<(Vec<u8>, Regex)> = Vec::new();
@@ -333,8 +344,7 @@ const TOKEN_FILE: &str = ".env.local";
 /// The exact values of the project at `project`: the `GH_TOKEN` value (source 1), then every
 /// other credential-named value of its key files (source 3), all `workspace`, through [`finish`].
 pub fn workspace_values(project: &Path) -> Vec<SecretValue> {
-    let (token, others) = key_file_values(project);
-    finish(token.into_iter().chain(others))
+    launch_values(project, &BTreeMap::new())
 }
 
 /// The credential-named variables of `env`, the environment goalcup builds for the harness
