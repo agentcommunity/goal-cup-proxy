@@ -7,9 +7,10 @@
 //! same-length fill ([`finish_spans`]) in place of the marker, and the connector rules
 //! ([`connector`]).
 //!
-//! **No interpretation.** A match is a byte comparison against a regular expression, never a
-//! judgement about what the text means.
+//! **No interpretation.** A match is a byte comparison against a regular expression or an
+//! exact-value form ([`exact_candidates`]), never a judgement about what the text means.
 
+use super::values::RunSecrets;
 use crate::connector::{FieldValue, MaskPattern, MaskRule};
 use regex::bytes::Regex;
 use std::sync::OnceLock;
@@ -88,7 +89,7 @@ pub(crate) fn rows() -> impl Iterator<Item = Option<Row>> {
         })
 }
 
-/// One compiled rule. `Debug` never prints the regex: an exact value's source spells the value.
+/// One compiled rule: a shared literal or a connector rule. `Debug` never prints the regex.
 pub(crate) struct Pattern {
     pub(crate) re: Regex,
     /// `0` for the whole match, `1` for the first capture group (the regex has one).
@@ -147,19 +148,6 @@ impl Pattern {
         })
     }
 
-    /// An exact-value form: a block with no group and no guard.
-    pub(crate) fn exact(re: Regex) -> Pattern {
-        Pattern {
-            re,
-            span_group: 0,
-            soft: false,
-            cut: false,
-            block: true,
-            pem: false,
-            guard: false,
-            head: None,
-        }
-    }
 }
 
 /// The compiled form of a connector rule (PRD-11 data, seam S3): `"field"\s*:\s*VALUE` with the
@@ -397,6 +385,35 @@ pub(crate) fn candidates<'a>(
         }
     }
     found_all
+}
+
+/// Every match of every exact-value form in `bytes`, found on [`match_view`]`(bytes)` in one
+/// pass ([`RunSecrets::find_all`]): form `i` has priority `base + i` and each match is one
+/// whole block with no group and no guard, its end moved to a character boundary.
+pub(crate) fn exact_candidates(secrets: &RunSecrets, base: usize, bytes: &[u8]) -> Vec<Claim> {
+    if secrets.is_empty() {
+        return Vec::new();
+    }
+    let view = match_view(bytes);
+    secrets
+        .find_all(&view)
+        .into_iter()
+        .map(|(form, start, end)| {
+            let end = char_end(&view, end);
+            Claim {
+                priority: base + form,
+                start,
+                end,
+                whole_start: start,
+                whole_end: end,
+                soft: false,
+                cut: false,
+                name_end: start,
+                block: true,
+                bounded: false,
+            }
+        })
+        .collect()
 }
 
 /// The length of the name and separator a [`CUT_KINDS`] span starts with, if any.

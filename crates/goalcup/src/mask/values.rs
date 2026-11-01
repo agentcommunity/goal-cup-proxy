@@ -20,10 +20,13 @@
 //! covered (PRD-05 section 10, a stated loss): a value with both kinds, plainly escaped and then
 //! nested HTML-safe, or the reverse.
 //!
-//! A form is found with a line break between any two of its characters ([`Progress`],
-//! [`wrapped_regex`]): LF or CR LF, raw, or escaped with one or two backslashes before each of
-//! `r` and `n`, at most one break per gap. An escaped break is not taken right before a
-//! backslash of the form itself, so every text matches a form in one way only.
+//! A form is found with a line break between any two of its characters: LF or CR LF, raw, or
+//! escaped with one or two backslashes before each of `r` and `n`, at most one break per gap.
+//! An escaped break is not taken right before a backslash of the form itself, so every text
+//! matches a form in one way only. One trie over every form of every value ([`RunSecrets`])
+//! finds them all in a single pass, with that break grammar in its steps; a plain literal
+//! matcher cannot take a break inside a form. The test module keeps each form's regular
+//! expression as the oracle that this finds the same matches.
 //!
 //! Values are read once, in memory only, and never written, hashed or logged.
 //!
@@ -36,7 +39,6 @@
 //! the forms and states the reader order; `mod.rs` and PRD-05 link here.
 
 use super::{SecretValue, ValueCounts, ValueSource};
-use regex::bytes::Regex;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
@@ -65,7 +67,7 @@ pub const MAX_WRAPPED_FORM_BYTES: usize = wrapped_len(MAX_FORM_BYTES);
 const _: () = assert!(MAX_WRAPPED_FORM_BYTES <= super::stream::MAX_HELD_BYTES);
 
 /// The most values used (PRD-05 section 9): a stated guard on start-up time and memory, not a
-/// cap of records. Each value adds up to fifteen compiled forms.
+/// cap of records. Each value adds up to fifteen forms to the trie.
 pub const MAX_VALUES: usize = 32;
 
 /// Whether `value` is one the masker uses: 20 to 256 bytes of printable ASCII without a space.
@@ -160,16 +162,8 @@ pub fn base64_inside(form: &[u8], alignment: usize, url_safe: bool) -> Vec<u8> {
     out.split_off(lead)
 }
 
-/// How far a text has matched one form, a line break included. It holds counts, never a byte
-/// of the form, so it may be printed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
-pub struct Progress {
-    matched: u16,
-    brk: Break,
-}
-
 /// The line break in progress in the gap before the next character of a form.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
 enum Break {
     #[default]
     None,
@@ -189,85 +183,58 @@ enum Break {
     Done,
 }
 
-/// What one byte did to a [`Progress`].
+/// What one byte did to a match in progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Advance {
     Live,
-    /// This byte was the form's last character: the match is complete and cannot extend.
+    /// This byte was a form's last character and no match from this start goes on.
     Complete,
     Dead,
 }
 
-impl Progress {
-    /// How many characters of the form have matched, breaks not counted.
-    pub fn matched(&self) -> usize {
-        usize::from(self.matched)
-    }
+/// No node, no form.
+const NONE: u32 = u32::MAX;
 
-    /// Feed the next byte of the text to a match of `form` that started at its first character.
-    /// [`wrapped_regex`] is the same language.
-    pub fn step(&mut self, form: &[u8], b: u8) -> Advance {
-        let at = usize::from(self.matched);
-        let Some(&want) = form.get(at) else {
-            return Advance::Dead;
-        };
-        let next = match (self.brk, b) {
-            (Break::None | Break::Done, b) if b == want => {
-                self.matched += 1;
-                self.brk = Break::None;
-                return if at + 1 == form.len() {
-                    Advance::Complete
-                } else {
-                    Advance::Live
-                };
-            }
-            (Break::None, _) if at == 0 => return Advance::Dead,
-            (Break::None, b'\n') => Break::Done,
-            (Break::None, b'\r') => Break::Cr,
-            (Break::None, b'\\') if want != b'\\' => Break::Escape,
-            (Break::Cr, b'\n') => Break::Done,
-            (Break::Escape, b'\\') => Break::Escape2,
-            (Break::Escape | Break::Escape2, b'n') => Break::Done,
-            (Break::Escape | Break::Escape2, b'r') => Break::EscapeR,
-            (Break::EscapeR, b'\\') => Break::EscapeRBackslash,
-            (Break::EscapeRBackslash, b'\\') => Break::EscapeRBackslash2,
-            (Break::EscapeRBackslash | Break::EscapeRBackslash2, b'n') => Break::Done,
-            _ => return Advance::Dead,
-        };
-        self.brk = next;
-        Advance::Live
-    }
+/// One distinct prefix of the forms: its children are `edges[first..first + count]`, sorted by
+/// byte, and `end` is the form that ends here ([`NONE`] when none does). Forms are distinct, so
+/// at most one ends at a node; a form may be a prefix of a longer one, so an end node can
+/// still have children.
+#[derive(Clone, Copy)]
+struct Node {
+    first: u32,
+    count: u32,
+    end: u32,
 }
 
-/// The regular expression of `form` with the breaks [`Progress`] takes. Every character that is
-/// not a letter or a digit is a hex escape. The text spells the form: never print it.
-pub fn wrapped_regex(form: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut re = String::with_capacity(form.len() * 24);
-    for (i, &b) in form.iter().enumerate() {
-        if i > 0 {
-            re.push_str(if b == b'\\' {
-                r"(?:\r?\n)?"
-            } else {
-                r"(?:\r?\n|(?:\\{1,2}r)?\\{1,2}n)?"
-            });
-        }
-        if b.is_ascii_alphanumeric() {
-            re.push(char::from(b));
-        } else {
-            re.push_str(r"\x");
-            re.push(char::from(HEX[usize::from(b >> 4)]));
-            re.push(char::from(HEX[usize::from(b & 0x0f)]));
-        }
-    }
-    re
+/// One way a text is matching the forms from one start: the prefix matched so far (`node`),
+/// the line break in progress, and `no_backslash`, set when an escaped break began at a node
+/// that has a backslash child, which may then not follow (so every text matches a form in
+/// one way only). Node ids only, never a byte, so it may be printed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct State {
+    node: u32,
+    brk: Break,
+    no_backslash: bool,
 }
 
-/// The compiled forms of the exact values, shared by the whole-record matcher and the stream
-/// (kind `run_secret`). `Debug` prints a count.
+impl State {
+    const ROOT: State = State {
+        node: 0,
+        brk: Break::None,
+        no_backslash: false,
+    };
+}
+
+/// The forms of the exact values and one trie over them all, shared by the whole-record
+/// matcher and the stream (kind `run_secret`). One left-to-right pass finds every form, each
+/// with at most one line break in any gap. `Debug` prints a count.
 #[derive(Default)]
 pub(crate) struct RunSecrets {
-    forms: Vec<(Vec<u8>, Regex)>,
+    forms: Vec<Vec<u8>>,
+    nodes: Vec<Node>,
+    edges: Vec<(u8, u32)>,
+    /// The root's child for each byte ([`NONE`] for none): every text position asks it.
+    root: Vec<u32>,
 }
 
 impl std::fmt::Debug for RunSecrets {
@@ -277,16 +244,17 @@ impl std::fmt::Debug for RunSecrets {
 }
 
 impl RunSecrets {
-    /// The forms of `values`, compiled, and the counts for the start event. A count-only entry
+    /// The forms of `values` and the counts for the start event. A count-only entry
     /// ([`SecretValue::left_out`], the readers' cut) adds its count to `skipped`. A value whose
-    /// bytes equal one already compiled adds nothing and is counted nowhere. A harness value
-    /// (source 4, not built), an unusable value, a value with a form that does not compile, and
-    /// every value once [`MAX_VALUES`] are in use are counted in `skipped`. The readers'
-    /// [`finish`] is the bound on the wire; this dedupe and cut is the backstop for callers that
-    /// pass values directly.
+    /// bytes equal one already used adds nothing and is counted nowhere. A harness value
+    /// (source 4, not built), an unusable value, and every value once [`MAX_VALUES`] are in
+    /// use are counted in `skipped`. A form equal to one of an earlier value is kept once. The
+    /// readers' [`finish`] is the bound on the wire; this dedupe and cut is the backstop for
+    /// callers that pass values directly.
     pub(crate) fn new(values: &[SecretValue]) -> (RunSecrets, ValueCounts) {
         let mut counts = ValueCounts::default();
-        let mut forms: Vec<(Vec<u8>, Regex)> = Vec::new();
+        let mut forms: Vec<Vec<u8>> = Vec::new();
+        let mut known: HashSet<Vec<u8>> = HashSet::new();
         let mut used: HashSet<&[u8]> = HashSet::new();
         for value in values {
             if value.left_out > 0 {
@@ -296,23 +264,69 @@ impl RunSecrets {
             if used.contains(value.bytes()) {
                 continue;
             }
-            let compiled = (value.source() != ValueSource::Harness
-                && used.len() < MAX_VALUES
-                && is_usable(value.bytes()))
-            .then(|| compile(value.bytes(), &forms))
-            .flatten();
-            let Some(mut new) = compiled else {
+            if value.source() == ValueSource::Harness
+                || used.len() >= MAX_VALUES
+                || !is_usable(value.bytes())
+            {
                 counts.skipped = counts.skipped.saturating_add(1);
                 continue;
-            };
+            }
             used.insert(value.bytes());
-            forms.append(&mut new);
+            for form in encoded_forms(value.bytes()) {
+                if known.insert(form.clone()) {
+                    forms.push(form);
+                }
+            }
             match value.source() {
                 ValueSource::Env => counts.env += 1,
                 _ => counts.workspace += 1,
             }
         }
-        (RunSecrets { forms }, counts)
+        (RunSecrets::build(forms), counts)
+    }
+
+    /// The trie of `forms`: one node per distinct prefix, each node's children contiguous.
+    fn build(forms: Vec<Vec<u8>>) -> RunSecrets {
+        let mut children: Vec<Vec<(u8, u32)>> = vec![Vec::new()];
+        let mut ends: Vec<u32> = vec![NONE];
+        for (f, form) in forms.iter().enumerate() {
+            let mut node = 0usize;
+            for &b in form {
+                let known = children[node].iter().find(|(c, _)| *c == b).map(|e| e.1);
+                node = match known {
+                    Some(child) => child as usize,
+                    None => {
+                        let child = children.len();
+                        children.push(Vec::new());
+                        ends.push(NONE);
+                        children[node].push((b, child as u32));
+                        child
+                    }
+                };
+            }
+            ends[node] = f as u32;
+        }
+        let mut root = vec![NONE; 256];
+        for &(b, child) in &children[0] {
+            root[usize::from(b)] = child;
+        }
+        let mut nodes = Vec::with_capacity(children.len());
+        let mut edges = Vec::with_capacity(children.len());
+        for (mut kids, end) in children.into_iter().zip(ends) {
+            kids.sort_unstable();
+            nodes.push(Node {
+                first: edges.len() as u32,
+                count: kids.len() as u32,
+                end,
+            });
+            edges.append(&mut kids);
+        }
+        RunSecrets {
+            forms,
+            nodes,
+            edges,
+            root,
+        }
     }
 
     /// The number of forms.
@@ -320,25 +334,197 @@ impl RunSecrets {
         self.forms.len()
     }
 
-    /// Form `i`'s bytes.
-    pub(crate) fn form(&self, i: usize) -> &[u8] {
-        self.forms.get(i).map_or(&[], |(form, _)| form.as_slice())
+    /// Whether no value gave a form.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.forms.is_empty()
     }
 
-    /// Form `i`'s compiled rule.
-    pub(crate) fn regex(&self, i: usize) -> Option<&Regex> {
-        self.forms.get(i).map(|(_, re)| re)
+    /// Form `i`'s bytes (the tests' oracle reads them).
+    #[cfg(test)]
+    pub(crate) fn form(&self, i: usize) -> &[u8] {
+        self.forms.get(i).map_or(&[], Vec::as_slice)
+    }
+
+    fn children(&self, node: u32) -> &[(u8, u32)] {
+        self.nodes.get(node as usize).map_or(&[], |n| {
+            let first = n.first as usize;
+            self.edges.get(first..first + n.count as usize).unwrap_or(&[])
+        })
+    }
+
+    fn child(&self, node: u32, b: u8) -> Option<u32> {
+        if node == 0 {
+            return self.root.get(usize::from(b)).copied().filter(|&c| c != NONE);
+        }
+        let kids = self.children(node);
+        let at = kids.binary_search_by_key(&b, |e| e.0).ok()?;
+        kids.get(at).map(|e| e.1)
+    }
+
+    /// The states after byte `b` from state `s` (up to two: a backslash can be a form byte
+    /// and begin an escaped break), and the form this byte completes, if any. The rules are
+    /// those of each form's `wrapped_regex` (the test oracle): a form byte after no break or a
+    /// whole break; after a matched character (never before the first), LF, CR LF, or one or
+    /// two backslashes before each of `r` and `n`, an escaped break never right before a
+    /// backslash of the form; one break per gap.
+    fn next(&self, s: State, b: u8) -> ([Option<State>; 2], Option<usize>) {
+        let mut out = [None, None];
+        let mut done = None;
+        let gap = |brk| {
+            Some(State {
+                brk,
+                ..s
+            })
+        };
+        match (s.brk, b) {
+            (Break::None | Break::Done, _) => {
+                let byte = if b == b'\\' && s.no_backslash {
+                    None
+                } else {
+                    self.child(s.node, b)
+                };
+                if let Some(child) = byte {
+                    let node = self.nodes.get(child as usize);
+                    done = node.map(|n| n.end).filter(|&f| f != NONE).map(|f| f as usize);
+                    if node.is_some_and(|n| n.count > 0) {
+                        out[0] = Some(State {
+                            node: child,
+                            brk: Break::None,
+                            no_backslash: false,
+                        });
+                    }
+                }
+                if s.brk == Break::None && s.node != 0 {
+                    out[1] = match b {
+                        b'\n' => gap(Break::Done),
+                        b'\r' => gap(Break::Cr),
+                        b'\\' if self.children(s.node).iter().any(|e| e.0 != b'\\') => {
+                            Some(State {
+                                node: s.node,
+                                brk: Break::Escape,
+                                no_backslash: self.child(s.node, b'\\').is_some(),
+                            })
+                        }
+                        _ => None,
+                    };
+                }
+            }
+            (Break::Cr, b'\n') => out[1] = gap(Break::Done),
+            (Break::Escape, b'\\') => out[1] = gap(Break::Escape2),
+            (Break::Escape | Break::Escape2, b'n') => out[1] = gap(Break::Done),
+            (Break::Escape | Break::Escape2, b'r') => out[1] = gap(Break::EscapeR),
+            (Break::EscapeR, b'\\') => out[1] = gap(Break::EscapeRBackslash),
+            (Break::EscapeRBackslash, b'\\') => out[1] = gap(Break::EscapeRBackslash2),
+            (Break::EscapeRBackslash | Break::EscapeRBackslash2, b'n') => {
+                out[1] = gap(Break::Done);
+            }
+            _ => {}
+        }
+        (out, done)
+    }
+
+    /// Every match of every form in `view`, as (form, start, end), in one left-to-right pass:
+    /// per form the leftmost matches that do not overlap, sorted by form and start. A text
+    /// matches a form from one start in one way only, so this is what each form's
+    /// `wrapped_regex` finds, one by one (the test oracle).
+    pub(crate) fn find_all(&self, view: &[u8]) -> Vec<(usize, usize, usize)> {
+        let mut found = Vec::new();
+        if self.is_empty() {
+            return found;
+        }
+        let mut live: Vec<(State, usize)> = Vec::new();
+        let mut next: Vec<(State, usize)> = Vec::new();
+        for (i, &b) in view.iter().enumerate() {
+            for &(s, start) in live.iter().chain(std::iter::once(&(State::ROOT, i))) {
+                let (out, done) = self.next(s, b);
+                if let Some(f) = done {
+                    found.push((f, start, i + 1));
+                }
+                next.extend(out.into_iter().flatten().map(|s| (s, start)));
+            }
+            std::mem::swap(&mut live, &mut next);
+            next.clear();
+        }
+        found.sort_unstable();
+        let mut last_end = vec![0usize; self.forms.len()];
+        found.retain(|&(f, start, end)| match last_end.get_mut(f) {
+            Some(last) if start >= *last => {
+                *last = end;
+                true
+            }
+            _ => false,
+        });
+        found
+    }
+
+    /// The match a text starting with byte `b` begins, before `b` is stepped; `None` when no
+    /// form starts with `b`.
+    pub(crate) fn spawn(&self, b: u8) -> Option<LiteralWalk> {
+        self.child(0, b)
+            .map(|_| LiteralWalk(Walks::One(State::ROOT)))
     }
 }
 
-/// The new forms of one value (those not already in `known`), compiled, or `None` when one
-/// does not compile.
-fn compile(value: &[u8], known: &[(Vec<u8>, Regex)]) -> Option<Vec<(Vec<u8>, Regex)>> {
-    encoded_forms(value)
-        .into_iter()
-        .filter(|form| !known.iter().any(|(k, _)| k == form))
-        .map(|form| Regex::new(&wrapped_regex(&form)).ok().map(|re| (form, re)))
-        .collect()
+/// Every way a text is matching the forms from one start, for the stream's hold. Node ids
+/// only, never a byte, so it may be printed; two walks with the same states are equal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LiteralWalk(Walks);
+
+/// One state (nearly always), or several in order after a backslash forked one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Walks {
+    One(State),
+    Many(Vec<State>),
+}
+
+impl LiteralWalk {
+    /// Feed the next byte of the text. Live while any state lives (a form may have completed
+    /// on this byte all the same); Complete when none lives and a form completed on it.
+    pub(crate) fn step(&mut self, secrets: &RunSecrets, b: u8) -> Advance {
+        let mut complete = false;
+        let mut one: Option<State> = None;
+        let mut more: Vec<State> = Vec::new();
+        let mut take = |s: State| {
+            let (out, done) = secrets.next(s, b);
+            complete |= done.is_some();
+            for s in out.into_iter().flatten() {
+                if let Some(earlier) = one.replace(s) {
+                    more.push(earlier);
+                }
+            }
+        };
+        match &self.0 {
+            Walks::One(s) => take(*s),
+            Walks::Many(all) => all.iter().copied().for_each(&mut take),
+        }
+        let live = one.is_some();
+        self.0 = match one {
+            Some(s) if more.is_empty() => Walks::One(s),
+            _ => {
+                more.extend(one);
+                more.sort_unstable();
+                more.dedup();
+                if more.len() == 1 {
+                    Walks::One(more[0])
+                } else {
+                    Walks::Many(more)
+                }
+            }
+        };
+        match (live, complete) {
+            (true, _) => Advance::Live,
+            (false, true) => Advance::Complete,
+            (false, false) => Advance::Dead,
+        }
+    }
+
+    /// Whether some state has matched at least one character of a form.
+    pub(crate) fn matched_any(&self) -> bool {
+        match &self.0 {
+            Walks::One(s) => s.node != 0,
+            Walks::Many(states) => states.iter().any(|s| s.node != 0),
+        }
+    }
 }
 
 /// The variable the participant keeps their GitHub token in.
@@ -534,4 +720,237 @@ fn is_name_like(value: &str) -> bool {
         && value
             .split(SEPARATORS)
             .any(|segment| segment.bytes().any(|b| (b'g'..=b'z').contains(&b)))
+}
+
+#[cfg(test)]
+mod tests {
+    //! The single-pass matcher against the per-form oracle it replaced: each form's
+    //! [`wrapped_regex`] for the whole-record matcher, and [`Progress`] for the stream's hold.
+
+    use super::*;
+    use regex::bytes::Regex;
+
+    /// How far a text has matched one form, a line break included: the per-form recognizer the
+    /// trie replaced, kept as the oracle of [`LiteralWalk`].
+    #[derive(Debug, Clone, Copy, Default)]
+    struct Progress {
+        matched: usize,
+        brk: Break,
+    }
+
+    impl Progress {
+        fn step(&mut self, form: &[u8], b: u8) -> Advance {
+            let at = self.matched;
+            let Some(&want) = form.get(at) else {
+                return Advance::Dead;
+            };
+            let next = match (self.brk, b) {
+                (Break::None | Break::Done, b) if b == want => {
+                    self.matched += 1;
+                    self.brk = Break::None;
+                    return if at + 1 == form.len() {
+                        Advance::Complete
+                    } else {
+                        Advance::Live
+                    };
+                }
+                (Break::None, _) if at == 0 => return Advance::Dead,
+                (Break::None, b'\n') => Break::Done,
+                (Break::None, b'\r') => Break::Cr,
+                (Break::None, b'\\') if want != b'\\' => Break::Escape,
+                (Break::Cr, b'\n') => Break::Done,
+                (Break::Escape, b'\\') => Break::Escape2,
+                (Break::Escape | Break::Escape2, b'n') => Break::Done,
+                (Break::Escape | Break::Escape2, b'r') => Break::EscapeR,
+                (Break::EscapeR, b'\\') => Break::EscapeRBackslash,
+                (Break::EscapeRBackslash, b'\\') => Break::EscapeRBackslash2,
+                (Break::EscapeRBackslash | Break::EscapeRBackslash2, b'n') => Break::Done,
+                _ => return Advance::Dead,
+            };
+            self.brk = next;
+            Advance::Live
+        }
+    }
+
+    /// The regular expression of `form` with the breaks the grammar takes. Every character
+    /// that is not a letter or a digit is a hex escape. The text spells the form: never print
+    /// it.
+    fn wrapped_regex(form: &[u8]) -> String {
+        const HEX: &[u8; 16] = b"0123456789ABCDEF";
+        let mut re = String::with_capacity(form.len() * 24);
+        for (i, &b) in form.iter().enumerate() {
+            if i > 0 {
+                re.push_str(if b == b'\\' {
+                    r"(?:\r?\n)?"
+                } else {
+                    r"(?:\r?\n|(?:\\{1,2}r)?\\{1,2}n)?"
+                });
+            }
+            if b.is_ascii_alphanumeric() {
+                re.push(char::from(b));
+            } else {
+                re.push_str(r"\x");
+                re.push(char::from(HEX[usize::from(b >> 4)]));
+                re.push(char::from(HEX[usize::from(b & 0x0f)]));
+            }
+        }
+        re
+    }
+
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n.max(1) as u64) as usize
+        }
+
+        fn pick<'a>(&mut self, set: &'a [u8]) -> u8 {
+            set[self.below(set.len())]
+        }
+    }
+
+    /// The breaks the grammar takes, and one it does not take (`\r` alone).
+    const BREAKS: [&[u8]; 9] = [
+        b"\n",
+        b"\r\n",
+        b"\\n",
+        b"\\\\n",
+        b"\\r\\n",
+        b"\\\\r\\\\n",
+        b"\\r\\\\n",
+        b"\\\\r\\n",
+        b"\r",
+    ];
+
+    /// A usable value of 20 to 31 bytes; some hold a `"`, `\`, `<` or `&`.
+    fn value(rng: &mut Rng) -> Vec<u8> {
+        const PLAIN: &[u8] = b"ABCDEFabcdef0123456789nru-_.";
+        const SPECIAL: &[u8] = b"\"\\<&>";
+        let len = 20 + rng.below(12);
+        (0..len)
+            .map(|_| {
+                if rng.below(8) == 0 {
+                    rng.pick(SPECIAL)
+                } else {
+                    rng.pick(PLAIN)
+                }
+            })
+            .collect()
+    }
+
+    /// A text that plants forms of `forms`, whole, cut short, with breaks in random gaps (two
+    /// in one gap, before the first byte, before a backslash of the form), between noise.
+    fn text(rng: &mut Rng, forms: &[Vec<u8>]) -> Vec<u8> {
+        const NOISE: &[u8] = b"Aa0%u\\nr\r\n\"<&x\xc3";
+        let mut out = Vec::new();
+        for _ in 0..1 + rng.below(6) {
+            for _ in 0..rng.below(6) {
+                out.push(rng.pick(NOISE));
+            }
+            let form = &forms[rng.below(forms.len())];
+            let keep = if rng.below(4) == 0 {
+                rng.below(form.len())
+            } else {
+                form.len()
+            };
+            if rng.below(10) == 0 {
+                out.extend_from_slice(BREAKS[rng.below(BREAKS.len())]);
+            }
+            for (i, &b) in form[..keep].iter().enumerate() {
+                let before_backslash = b == b'\\' && rng.below(2) == 0;
+                if i > 0 && (before_backslash || rng.below(12) == 0) {
+                    for _ in 0..1 + usize::from(rng.below(8) == 0) {
+                        out.extend_from_slice(BREAKS[rng.below(BREAKS.len())]);
+                    }
+                }
+                out.push(b);
+            }
+        }
+        out
+    }
+
+    /// The trie finds exactly what each form's regex finds, and its walk from every start
+    /// agrees with the per-form recognizers on live, complete and dead at every byte.
+    #[test]
+    fn the_trie_finds_what_the_per_form_matchers_found() {
+        let mut rng = Rng(0x7A1E_5EED);
+        let mut planted = 0usize;
+        for case in 0..80 {
+            let values: Vec<SecretValue> = (0..1 + rng.below(8))
+                .map(|_| SecretValue::new(ValueSource::Workspace, value(&mut rng)))
+                .collect();
+            let (secrets, _) = RunSecrets::new(&values);
+            let forms: Vec<Vec<u8>> = (0..secrets.len())
+                .map(|i| secrets.form(i).to_vec())
+                .collect();
+            assert!(!forms.is_empty(), "case {case}: no forms");
+            let regexes: Vec<Regex> = forms
+                .iter()
+                .map(|f| Regex::new(&wrapped_regex(f)).expect("a form compiles"))
+                .collect();
+            for _ in 0..6 {
+                let text = text(&mut rng, &forms);
+                let mut expected: Vec<(usize, usize, usize)> = Vec::new();
+                for (f, re) in regexes.iter().enumerate() {
+                    expected.extend(re.find_iter(&text).map(|m| (f, m.start(), m.end())));
+                }
+                planted += expected.len();
+                assert!(
+                    secrets.find_all(&text) == expected,
+                    "case {case}: the trie and the regexes differ"
+                );
+                walks_agree(&secrets, &forms, &text, case);
+            }
+        }
+        assert!(planted > 500, "too few matches planted: {planted}");
+    }
+
+    /// From every start of `text`, a [`LiteralWalk`] and the per-form [`Progress`] set (the
+    /// old hold recognizer) agree byte by byte.
+    fn walks_agree(secrets: &RunSecrets, forms: &[Vec<u8>], text: &[u8], case: usize) {
+        for start in 0..text.len() {
+            let mut old: Vec<(usize, Progress)> = (0..forms.len())
+                .filter(|&f| forms[f].first() == text.get(start))
+                .map(|f| (f, Progress::default()))
+                .collect();
+            let walk = secrets.spawn(text[start]);
+            assert_eq!(walk.is_some(), !old.is_empty(), "case {case}: spawn at {start}");
+            let Some(mut walk) = walk else {
+                continue;
+            };
+            for (at, &b) in text.iter().enumerate().skip(start) {
+                let mut complete = false;
+                old.retain_mut(|(f, p)| match p.step(&forms[*f], b) {
+                    Advance::Live => true,
+                    Advance::Complete => {
+                        complete = true;
+                        false
+                    }
+                    Advance::Dead => false,
+                });
+                let want = match (old.is_empty(), complete) {
+                    (false, _) => Advance::Live,
+                    (true, true) => Advance::Complete,
+                    (true, false) => Advance::Dead,
+                };
+                let got = walk.step(secrets, b);
+                assert_eq!(got, want, "case {case}: walk from {start} at {at}");
+                if got != Advance::Live {
+                    break;
+                }
+                assert_eq!(
+                    walk.matched_any(),
+                    old.iter().any(|(_, p)| p.matched >= 1),
+                    "case {case}: matched from {start} at {at}"
+                );
+            }
+        }
+    }
 }

@@ -34,7 +34,7 @@
 //! password) are starred to the cut; other held bytes are decided as end of input.
 
 use super::rules::{self, Claim, GUARD_BYTES, Pattern, Run, candidates, select};
-use super::values::{Advance, Progress, RunSecrets};
+use super::values::{Advance, LiteralWalk, RunSecrets};
 use super::{MaskError, Masked, SecretValue, Span, ValueCounts};
 use crate::connector::{FieldValue, MaskPattern, MaskRule};
 use std::sync::Arc;
@@ -296,10 +296,10 @@ enum Form {
         prefix: Box<[u8]>,
     },
     /// Form `i` of the exact values ([`RunSecrets`]): printable ASCII, with at most one line
-    /// break in each gap between two of its bytes ([`Progress`]). Only form 0 starts
-    /// candidates, one per start for every form ([`Walk::Literals`]): each value adds two `\u`
-    /// forms that start on every backslash, and one candidate per form would pass
-    /// `MAX_CANDIDATES` on a single backslash from about sixteen values.
+    /// break in each gap between two of its bytes. Only form 0 starts candidates, one per
+    /// start for every form, walking the one trie of all forms ([`Walk::Literals`]): each
+    /// value adds two `\u` forms that start on every backslash, and one candidate per form
+    /// would pass `MAX_CANDIDATES` on a single backslash from about sixteen values.
     Literal {
         form: usize,
     },
@@ -604,9 +604,10 @@ pub(crate) const RUN_SECRET_KIND: &str = "run_secret";
 /// The kind of bytes starred because the hold overflowed.
 pub(crate) const FAIL_CLOSED_KIND: &str = "fail_closed";
 
-/// One rule after the shared literals: a connector rule or an exact-value form.
+/// One rule after the shared literals: a connector rule, with its pattern, or an exact-value
+/// form, found by the one trie of [`RunSecrets`] and so with none.
 struct Extra {
-    pattern: Pattern,
+    pattern: Option<Pattern>,
     form: Form,
 }
 
@@ -682,18 +683,19 @@ impl Policy {
                 },
             };
             rule_of.push(name_index(&mut names, &rule.kind));
-            extra.push(Extra { pattern, form });
+            extra.push(Extra {
+                pattern: Some(pattern),
+                form,
+            });
         }
         let (secrets, counts) = RunSecrets::new(values);
         let secret_rule = name_index(&mut names, RUN_SECRET_KIND);
         for i in 0..secrets.len() {
-            if let Some(re) = secrets.regex(i) {
-                extra.push(Extra {
-                    pattern: Pattern::exact(re.clone()),
-                    form: Form::Literal { form: i },
-                });
-                rule_of.push(secret_rule);
-            }
+            extra.push(Extra {
+                pattern: None,
+                form: Form::Literal { form: i },
+            });
+            rule_of.push(secret_rule);
         }
         names.push(FAIL_CLOSED_KIND.to_string());
         let mut policy = Policy {
@@ -766,11 +768,22 @@ impl Policy {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// The compiled rules in priority order.
+    /// The compiled rules in priority order: the shared literals and the connector rules. The
+    /// exact-value forms follow them and have no pattern ([`Self::claims`]).
     pub(crate) fn rules(&self) -> impl Iterator<Item = &Pattern> {
         self.shared
             .iter()
-            .chain(self.extra.iter().map(|e| &e.pattern))
+            .chain(self.extra.iter().filter_map(|e| e.pattern.as_ref()))
+    }
+
+    /// Every match of every rule over `bytes` (`before` as in [`candidates`]): the compiled
+    /// rules', then the exact-value forms', found in one pass, form `i` at priority (and `lit`)
+    /// `len - forms + i`.
+    fn claims(&self, bytes: &[u8], before: &[u8]) -> Vec<Claim> {
+        let mut found = candidates(self.rules(), bytes, before);
+        let base = self.len() - self.secrets.len();
+        found.extend(rules::exact_candidates(&self.secrets, base, bytes));
+        found
     }
 
     fn form(&self, lit: usize) -> Option<&Form> {
@@ -1166,9 +1179,9 @@ enum Walk {
     Url(Url),
     Field(Field),
     Header(Header),
-    /// How far each exact-value form that is still live matched from this start, a line
-    /// break in progress included, by form index.
-    Literals(Vec<(usize, Progress)>),
+    /// Every way the text from this start is still matching the exact-value forms, a line
+    /// break in progress included ([`LiteralWalk`]).
+    Literals(LiteralWalk),
 }
 
 /// A [`Form::UrlPassword`] candidate.
@@ -1715,13 +1728,7 @@ impl Candidate {
                 Walk::Header(Header::Lit(0))
             }
             // One candidate, on the first form's rule, follows every form that starts here.
-            Form::Literal { form: 0 } => {
-                let forms = literal_forms(policy, u);
-                if forms.is_empty() {
-                    return None;
-                }
-                Walk::Literals(forms)
-            }
+            Form::Literal { form: 0 } => Walk::Literals(policy.secrets.spawn(ascii(u)?)?),
             _ => return None,
         })
     }
@@ -1764,25 +1771,14 @@ impl Candidate {
             }
             // A form cannot extend once complete: its last byte ends it. The candidate lives
             // while any form does, and ends with this unit when the last ones complete here.
-            (Walk::Literals(forms), Form::Literal { .. }) => {
+            (Walk::Literals(walk), Form::Literal { .. }) => {
                 let Some(b) = ascii(u) else {
                     return Step::Dead;
                 };
-                let mut complete = false;
-                forms.retain_mut(|(form, progress)| {
-                    match progress.step(policy.secrets.form(*form), b) {
-                        Advance::Live => true,
-                        Advance::Complete => {
-                            complete = true;
-                            false
-                        }
-                        Advance::Dead => false,
-                    }
-                });
-                return match (forms.is_empty(), complete) {
-                    (false, _) => Step::Live,
-                    (true, true) => Step::Last,
-                    (true, false) => Step::Dead,
+                return match walk.step(&policy.secrets, b) {
+                    Advance::Live => Step::Live,
+                    Advance::Complete => Step::Last,
+                    Advance::Dead => Step::Dead,
                 };
             }
             _ => false,
@@ -1816,21 +1812,10 @@ impl Candidate {
                 FieldPhase::Key(_) | FieldPhase::BeforeColon | FieldPhase::AfterColon => None,
             },
             (Walk::Header(Header::Value { .. }), _) => Some(self.start),
-            (Walk::Literals(forms), _) => forms
-                .iter()
-                .any(|(_, progress)| progress.matched() >= 1)
-                .then_some(self.start),
+            (Walk::Literals(walk), _) => walk.matched_any().then_some(self.start),
             _ => None,
         }
     }
-}
-
-/// The exact-value forms that `u` starts, each at no progress.
-fn literal_forms(policy: &Policy, u: Unit) -> Vec<(usize, Progress)> {
-    (0..policy.secrets.len())
-        .filter(|&form| policy.secrets.form(form).first().is_some_and(|&b| is(u, b)))
-        .map(|form| (form, Progress::default()))
-        .collect()
 }
 
 // ── one stream's undecided bytes ───────────────────────────────────────────────────────
@@ -2159,7 +2144,7 @@ impl Scanner {
     /// ([`OpenBlock`]) there; the index where those pieces begin.
     fn found(&self, n: usize) -> (Vec<Claim>, usize) {
         let policy = &self.policy;
-        let mut found = candidates(policy.rules(), &self.held[..n], self.ring.bytes());
+        let mut found = policy.claims(&self.held[..n], self.ring.bytes());
         let first = found.len();
         let (Some(ob), Some(lit)) = (self.open_block, pem_literal()) else {
             return (found, first);
@@ -2457,7 +2442,7 @@ fn fill(policy: &Policy, bytes: &[u8], runs: Vec<Run>, out: &mut Masked) {
 /// The whole-record masker: the oracle of the stream, with the same rules and guard and never
 /// a `fail_closed` span.
 pub(crate) fn mask_whole(policy: &Policy, bytes: &[u8]) -> Masked {
-    let runs = selected(candidates(policy.rules(), bytes, &[]));
+    let runs = selected(policy.claims(bytes, &[]));
     let mut out = Masked::default();
     fill(policy, bytes, runs, &mut out);
     out
@@ -2631,8 +2616,11 @@ mod tests {
                 _ => panic!("rule {lit} has no connector recognizer"),
             };
             let lead = regex::escape(&String::from_utf8_lossy(lead));
-            assert!(extra.pattern.re.as_str().starts_with(&lead));
-            assert_eq!(extra.pattern.span_group, group);
+            let Some(pattern) = &extra.pattern else {
+                panic!("rule {lit} has no pattern");
+            };
+            assert!(pattern.re.as_str().starts_with(&lead));
+            assert_eq!(pattern.span_group, group);
         }
         for name in [RUN_SECRET_KIND, FAIL_CLOSED_KIND] {
             let bad = rule(name, MaskPattern::HeaderPrefix("x-a".into()));
