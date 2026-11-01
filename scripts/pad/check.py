@@ -64,11 +64,12 @@ ORDER = {"PASS": 0, "INCONCLUSIVE": 1, "FAIL": 2}
 CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6")
 SEAL_SLACK = datetime.timedelta(seconds=120)  # pad's seal-now limit: a seal may begin that long before its line
 WATCHER = ("exec", "pre")  # section 3.1 watcher steps: the owning PRD's pass line decides, not `faults`
-EXPECTS_LOSS = ("refusal-curl.sh",)  # exec scripts whose owner expects a named loss (PRD-03 acceptance 7: a refused call)
-LOSS_GAP = "tls_refused"  # the only loss such a row may name: the curl's own refused connections
+EXPECTS_LOSS = {"refusal-curl.sh": "tls_refused",  # exec scripts whose owner expects a named loss, and the only one it may name:
+                "kill-both-seal.sh": "recorder_down"}  # PRD-03 acceptance 7 (the curl's refused calls); rung 5b (the dead entry's gap)
+SEALS_DEAD = "kill-both-seal.sh"  # the exec script that kills both and seals the dead entry: the record decides its row
 REFUSES = "proxy-setting.sh"  # the pre script after which goalcup start must refuse: no run is recorded
 STALE = "stale-gateway.sh"  # the pre script that leaves a daemon running for goalcup start to stop
-JUDGED = (REFUSES, STALE)  # pre scripts whose row the record decides (section 3.1), as a fault row is
+JUDGED = (REFUSES, STALE, SEALS_DEAD)  # pre scripts whose row the record decides (section 3.1), as a fault row is
 # C3's scans (section 5, 7): the verifier's over the record, the box's output folder, the conductor's own folder.
 SCANS = (("secrets", "the local record and the run's files"), ("secrets-out", "the box's output folder"),
          ("secrets-conductor", "the conductor's run folder (its own secrets, section 7)"))
@@ -97,7 +98,7 @@ def expected_gaps(r):
     """The GAP kinds a row may name without it being a loss: the seal's after_stop (PRD-08 R2), a refused call for a
     script that expects one (PRD-03 acceptance 7), pinned for a dodger (section 2), FAULT_GAPS for a fault row. The meta key
     expect_gaps is selftest-only."""
-    return ({"after_stop"} | ({LOSS_GAP} if any(s in EXPECTS_LOSS for _, s in watchers(r.meta)) else set())
+    return ({"after_stop"} | {EXPECTS_LOSS[s] for _, s in watchers(r.meta) if s in EXPECTS_LOSS}
             | ({"pinned"} if r.meta.get("case") == "dodger" else set()) | set(r.meta.get("expect_gaps") or ()) | {g for k in fault_kinds(r.meta) for g in FAULT_GAPS.get(k, ())})
 
 def dig(doc, name):
@@ -507,6 +508,8 @@ def faults(r):
         recorder_kills(r, kinds)
     for k in sorted(set(kinds) & set(KIND_CHECKS)):
         KIND_CHECKS[k](r)
+    if ("exec", SEALS_DEAD) in watchers(r.meta):
+        dead_seal_row(r)
 
 def recorder_kills(r, kinds):
     """kill-recorder (PRD-02 R1) and kill-watchdog-recover (PRD-10 acceptance 11)."""
@@ -644,6 +647,21 @@ def both_row(r):
     # The abandoned gap starts at the last LINK, up to a minute before the kill (PRD-01 section 10); any other starts at it.
     r.flag(k and any((a := when(g.get("start"))) and a < k - (LINK_SLACK if g.get("cause") == "abandoned" else CRASH_SLACK)
                      for g in gaps), "faults", "FAIL", "a gap starts before the crash window")
+
+def dead_seal_row(r):
+    """Rung 5b: both killed, then `goalcup seal --yes`: sealed `recovered`, one `abandoned` gap that starts before the
+    script ended (the kill is inside it), and the script's own line says it ran and exited 0."""
+    f = next((f for f in reversed(r.faults) if f.get("kind") == "exec" and f.get("script") == SEALS_DEAD), None)
+    if not f:
+        return r.mark("faults", "INCONCLUSIVE", "fault did not fire: %s" % SEALS_DEAD)
+    r.flag(f.get("exit") != 0, "faults", "FAIL", "%s exit %s" % (SEALS_DEAD, f.get("exit")))
+    sealed_as(r, "recovered")
+    gaps = r.gaps()[0]
+    if gaps is None:
+        return r.mark("faults", "INCONCLUSIVE", "recorder_down gaps not readable from inv6")
+    end = when(f.get("at"))
+    r.flag(not any(g.get("cause") == "abandoned" for g in gaps), "faults", "FAIL", "no abandoned gap")
+    r.flag(end and any((a := when(g.get("start"))) and a > end for g in gaps), "faults", "FAIL", "a gap starts after the script ended")
 
 def uploaded(r, t, beat_s):
     """After t (the thaw or the lift), from watch/upload.jsonl (S9, a line a minute, so the catch-up has that minute of

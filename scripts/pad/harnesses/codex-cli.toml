@@ -10,12 +10,8 @@ key_route = "login"
 login = "codex login --with-api-key"
 # Pad data for the dodger copy only (section 2): an API-key login calls https://api.openai.com/v1.
 model_host = "api.openai.com"
-# Exit (R5-4, read 1 Nov 2026): /quit and /exit are both documented ("exit Codex", codex-rs/tui/src/slash_command.rs at
-# rust-v0.165.0). Rung 5 run 4 typed /quit but it did not submit. paste_burst.rs at the same tag explains why: an Enter within
-# 120 ms of a rapid character burst (8 ms gaps) is inserted as a newline, not a submit, and pad-run sends the text and the
-# \r in one tmux send-keys. Ctrl+C is not a documented quit (double-press quit is disabled in bottom_pane/mod.rs), so no key
-# change fixes it from this file alone: pad-run needs to send the text, wait about 200 ms, then send \r. Until then the
-# 30 s SIGTERM fallback ends the run. Not run against a live Codex.
+# Exit: /quit is documented (codex-rs/tui/src/slash_command.rs at rust-v0.165.0). An Enter right after a fast burst is
+# a newline (paste_burst.rs), so pad-run sends the final \r as its own key.
 exit_keys = '/quit\r'
 subagent_word = "sub-agent"
 keep_going = true

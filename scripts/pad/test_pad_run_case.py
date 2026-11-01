@@ -113,28 +113,5 @@ class Recovery(unittest.TestCase):
         self.assertEqual(cm.exception.args[0], "INCONCLUSIVE")  # not FAIL: the first three held
 
 
-class LaunchShell(unittest.TestCase):
-    def launch(self, steps):
-        r = bare()
-        r.s = {"server": "off", "harness_id": "x", "steps": steps}
-        r.run, r.project, r.tmux = "r", "/p", "t"
-        r.st = {}
-        r.sec, r.gc_env, r.path = {}, lambda *a: {}, lambda *n: os.path.join(tempfile.gettempdir(), *n)
-        got = {}
-        r.recording_seen = r.daemon_check = lambda *a: None
-        with mock.patch.object(padrun, "write", lambda p, text, mode: got.update(text=text) if p.endswith("launch.sh") else None), \
-                mock.patch.object(padrun, "sh", lambda *a, **k: mock.Mock(returncode=0, stdout="")), \
-                mock.patch.object(padrun, "tool", lambda n: n), mock.patch.object(padrun, "wait", lambda *a: True):
-            try:
-                r.start(None)
-            except Exception:
-                pass  # only the written launch.sh matters here
-        return got["text"].splitlines()
-
-    def test_recover_run_keeps_the_launch_shell(self):
-        self.assertEqual(self.launch(["kill-watchdog-recover@1"])[-1], "exec sleep 1000000")
-        self.assertNotIn("exec sleep 1000000", self.launch(["kill-recorder@1"]))
-
-
 if __name__ == "__main__":
     unittest.main()

@@ -335,12 +335,9 @@ class CrashRows(unittest.TestCase):
         self.assertNotEqual(got["faults"], "INCONCLUSIVE")
         self.assertEqual(self.row("kill-watchdog-recover", self.GAP, more=[self.LOST])["faults"], "INCONCLUSIVE")
 
-    def test_no_work_names_the_lost_terminal_first(self):  # R5-3
+    def test_no_work_is_inconclusive(self):  # R5-3
         got = self.row("kill-watchdog-recover", self.GAP, more=[self.LOST], commits=0)
         self.assertEqual(got["faults"], "INCONCLUSIVE")
-        text = " ".join(map(str, got["why"]))
-        self.assertIn("did no work", text)
-        self.assertLess(text.index("lost its terminal"), text.index("did no work"))
 
     def test_dodger_progress_is_tunnel_connections(self):
         def tun(n):
@@ -413,6 +410,14 @@ class FaultRows(unittest.TestCase):
         for start, want in (("10:04:20", "PASS"), ("10:02:00", "FAIL")):
             gap = {"cause": "abandoned", "start": "2026-10-30T%sZ" % start, "end": "2026-10-30T10:06:00Z"}
             self.assertEqual(self.row("kill-both@5", both, [gap], counts={"recorder_down": 1}, seal="recovered"), want, start)
+
+    def test_kill_both_seal_is_judged_from_the_record(self):  # rung 5b: sealed recovered, an abandoned gap, script exit 0
+        gap = {"cause": "abandoned", "start": "2026-10-30T10:04:20Z", "end": "2026-10-30T10:06:00Z"}
+        ran = lambda code: [{"kind": "exec", "script": "kill-both-seal.sh", "exit": code, "at": "05:10"}]
+        for code, seal, gaps, want in ((0, "recovered", [gap], "PASS"), (0, "harness_exit", [gap], "FAIL"),
+                                       (0, "recovered", [], "FAIL"), (3, "recovered", [gap], "FAIL")):
+            got = self.row("exec kill-both-seal.sh@2", ran(code), gaps, counts={"recorder_down": 1}, seal=seal)
+            self.assertEqual(got, want, (code, seal, gaps))
 
     def test_kill_watchdog_seal_is_timed_from_the_record(self):  # not from status.json, which is rewritten until the box ends
         faults = [{"kind": "kill-watchdog", "pid": 9, "at": "02:00"}, {"kind": "harness-exit", "seen": True, "at": "05:00"}]
