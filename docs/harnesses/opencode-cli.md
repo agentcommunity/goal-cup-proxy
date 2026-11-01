@@ -1,6 +1,6 @@
 # OpenCode harness facts
 
-Connector ids: `opencode-cli` (OpenCode 1.x) and `opencode2-cli` (OpenCode 2.x) · Facts for versions: `1.19.5` and `2.2.2` · Written by: Goal Cup team · Last checked: 2026-10-31
+Connector ids: `opencode-cli` (OpenCode 1.x) and `opencode2-cli` (OpenCode 2.x) · Facts for versions: `1.19.5` and `2.2.2` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from OpenCode's public docs, its public source and a run on 1.19.4 in a Linux container on 28 Oct 2026. No keys, tokens or personal paths are included.
 Status: shipped connectors ([`opencode-cli.toml`](../../connectors/opencode-cli.toml), [`opencode2-cli.toml`](../../connectors/opencode2-cli.toml)). This one sheet covers both; no separate OpenCode 2 sheet is written.
 
@@ -9,7 +9,7 @@ Source words: "docs" is [opencode.ai/docs](https://opencode.ai/docs/cli/) for 1.
 ## 1. Run one prompt, in chat mode first
 
 - `opencode` with no argument starts the TUI in the current folder ([docs](https://opencode.ai/docs/cli/)). `opencode --continue` (`-c`) reopens the last session, `--session <id>` a named one. Both connectors use `--continue` to resume (2.x: not on its CLI page, taken from 1.x and the source).
-- OpenCode 2 is started `opencode --standalone --auto` (the connector's `args`; `--auto` is explained under "Run without permission prompts"): it "run[s] with a private server" instead of the shared background service ([docs](https://opencode.ai/v2/docs/cli)).
+- OpenCode 2 is started `opencode --standalone` (the connector's `args`): it "run[s] with a private server" instead of the shared background service ([docs](https://opencode.ai/v2/docs/cli)).
 - `opencode run "<prompt>"` is the one-shot form; it is not chat mode and is not used. [RULES](../RULES.md) lists `--pure`, `OPENCODE_PURE=1`, `OPENCODE_DISABLE_PROJECT_CONFIG=1`, `--attach` and `share` as modes that switch recording off.
 
 ## 2. Install and record a version
@@ -66,7 +66,7 @@ Both connectors set the four XDG folders under the isolated home and read `openc
 
 ## Run without permission prompts
 
-1.x: `"permission": "allow"` in `opencode.json`; `external_directory`, `doom_loop` and `.env` reads default to `ask` otherwise ([docs](https://opencode.ai/docs/permissions/)). The `opencode-cli` connector's `no_prompts` row writes it. 2.x names the key `permissions`, an ordered rule list ([docs](https://opencode.ai/v2/docs/config)), so `opencode2-cli` has no `no_prompts` row. It passes the switch `--auto` instead: "Auto-approve permissions that are not explicitly denied" ([docs](https://opencode.ai/v2/docs/cli); listed by `opencode --help` on 2.2.2), so a deny rule the participant wrote still holds. Not yet re-run with the switch.
+1.x: `"permission": "allow"` in `opencode.json`; `external_directory`, `doom_loop` and `.env` reads default to `ask` otherwise ([docs](https://opencode.ai/docs/permissions/)). The `opencode-cli` connector's `no_prompts` row writes it. 2.x names the key `permissions`, an ordered rule list ([docs](https://opencode.ai/v2/docs/config)), so `opencode2-cli` has no `no_prompts` row. The 2.x CLI has a switch `--auto`: "Auto-approve permissions that are not explicitly denied" ([docs](https://opencode.ai/v2/docs/cli); listed by `opencode --help` on 2.2.2). The connector does not pass it: a switch in `args` would apply on every start whatever the participant answered to the setup question, and the `first_screen` line says approvals stay on. An unattended 2.x run therefore waits at the first approval. Owner question: allow a connector switch that setup adds to `args` only after the participant says yes.
 
 ## Pad result
 

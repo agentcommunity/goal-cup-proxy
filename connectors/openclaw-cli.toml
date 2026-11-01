@@ -1,10 +1,4 @@
-# OpenClaw 2026.10.9 (Node 24.22.1+), checked against docs.openclaw.ai (help/environment, cli, cli/tui,
-# cli/gateway/service, cli/approvals, security/network-proxy) and the 2026.10.9 package. The path and profile
-# variables are unset so state stays under {home}; a workspace .env drops every OPENCLAW_* key, and the
-# global .env or gateway.env setting them again is refused. Known limit: the agent works in its own
-# workspace under OPENCLAW_HOME, not the project. OPENCLAW_WORKSPACE_DIR ("Override the default agent workspace",
-# docs.openclaw.ai/help/environment) would fix it, but `chat` has no workspace flag (2026.10.9 package) and the loader fills
-# {workspace} only in args and in `home` values that start with {home}, so this file cannot name it yet.
+# OpenClaw 2026.10.9; facts and the known workspace limit: docs/harnesses/openclaw-cli.md.
 id = "openclaw-cli"
 name = "OpenClaw"
 program = "openclaw"
