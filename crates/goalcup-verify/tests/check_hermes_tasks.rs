@@ -59,7 +59,9 @@ fn task_ids(n: u64) -> Vec<String> {
 fn manifest_and_two_logs_give_two_children() {
     let d = entry("ht-a", |e| {
         manifest(e, 2);
-        (0..2).for_each(|n| drop(e.native(&task_path(n), 0, 0)));
+        for n in 0..2 {
+            e.native(&task_path(n), 0, 0);
+        }
     });
     let t = call_table(&d);
     for id in task_ids(2) {
@@ -78,7 +80,9 @@ fn manifest_and_two_logs_give_two_children() {
 fn a_task_the_manifest_names_with_no_log_is_not_a_pass() {
     let d = entry("ht-b", |e| {
         manifest(e, 3);
-        (0..2).for_each(|n| drop(e.native(&task_path(n), 0, 0)));
+        for n in 0..2 {
+            e.native(&task_path(n), 0, 0);
+        }
     });
     let t = call_table(&d);
     assert_eq!(t.children.as_ref().expect("read")[D].len(), 3);
@@ -89,7 +93,9 @@ fn a_task_the_manifest_names_with_no_log_is_not_a_pass() {
 #[test]
 fn logs_with_no_manifest_still_give_children() {
     let d = entry("ht-c", |e| {
-        (0..2).for_each(|n| drop(e.native(&task_path(n), 0, 0)));
+        for n in 0..2 {
+            e.native(&task_path(n), 0, 0);
+        }
     });
     let t = call_table(&d);
     assert_eq!(t.children.as_ref().expect("read")[D], task_ids(2));
@@ -102,7 +108,9 @@ fn logs_with_no_manifest_still_give_children() {
 fn five_tasks_reopened_across_boots_stay_five() {
     let d = entry("ht-d", |e| {
         manifest(e, 5);
-        (0..5).for_each(|n| drop(e.native(&task_path(n), 0, 0)));
+        for n in 0..5 {
+            e.native(&task_path(n), 0, 0);
+        }
         for _ in 0..2 {
             (0..5).for_each(|n| reopened(e, &task_path(n)));
         }
