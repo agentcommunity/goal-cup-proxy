@@ -1901,3 +1901,7 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
     private key block with an ellipsis token between the markers, and the placeholder rule has no ellipsis
     case. It belongs to PRD-08. The row stays as the check reports it.
 - No locked ledger item is touched and no owner question comes from this note.
+
+### 2026-11-01, replan after slice 12 (merge 5aaf7f55)
+
+- RIG-5, RIG-6 and RIG-7 are in. Open nit B1 (split `test_dead_pane_ends_the_wait_at_once` into short methods sharing a setUp) is optional tidying for the next pad slice; no plan change, no ledger item touched.

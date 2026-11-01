@@ -2466,3 +2466,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 - **Gate effect:** none on order. One open seam: the CLI must send null `repo_url` for `start --test`
   without a repository (note added to PRD-10); until then Rung 2 is fixed at the Worker only. No locked
   ledger item is touched.
+
+### 2026-11-01, replan after PRD-12 slice 12 (merge 5aaf7f55)
+
+- **Size report, PRD-12** (`wc -l` on integration): rig code under `scripts/pad/` (pad 750, pad-run 1,075, check.py 762, table 193, selftest 188, sbx.mjs 133, exec/ scripts included) is 3197 lines; tests (`test_pad.py`) 631. Against the PRD-00 row of about 1,350 to 1,450 with its tests that is about 2.6 times. The slice itself added little (RIG-5/6/7 plus tests). Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the PRD-03, PRD-08, PRD-10 and PRD-17 overages.
+- **Gate effect:** none. The one review finding left (B1, nit: split the long dead-pane test into shorter methods) is taste only and changes no behaviour or plan. No locked ledger item is touched.
