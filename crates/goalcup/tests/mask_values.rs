@@ -239,9 +239,18 @@ fn ordinary_values_do_not_pass_the_name_gate() -> Res {
          SHORT_TOKEN=abc123def456ghi789\n",
     )?;
     let env = BTreeMap::from([
-        ("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin:/opt/tool/bin".to_string()),
-        ("HOME".to_string(), "/home/participant/isolated-home".to_string()),
-        ("OPENAI_BASE_URL".to_string(), "https://gateway.example.test/v1".to_string()),
+        (
+            "PATH".to_string(),
+            "/usr/local/bin:/usr/bin:/bin:/opt/tool/bin".to_string(),
+        ),
+        (
+            "HOME".to_string(),
+            "/home/participant/isolated-home".to_string(),
+        ),
+        (
+            "OPENAI_BASE_URL".to_string(),
+            "https://gateway.example.test/v1".to_string(),
+        ),
     ]);
     assert!(workspace_values(dir.path()).is_empty());
     assert!(env_values(&env).is_empty());
@@ -273,8 +282,14 @@ fn environment_values_are_used_once_in_section_nine_order() -> Res {
     let env = BTreeMap::from([
         ("PROVIDER_API_KEY".to_string(), provider.clone()),
         ("GATEWAY_AUTH".to_string(), gateway.clone()),
-        ("PATH".to_string(), "/usr/local/bin:/usr/bin:/bin:/opt/tool/bin".to_string()),
-        ("HOME".to_string(), "/home/participant/isolated-home".to_string()),
+        (
+            "PATH".to_string(),
+            "/usr/local/bin:/usr/bin:/bin:/opt/tool/bin".to_string(),
+        ),
+        (
+            "HOME".to_string(),
+            "/home/participant/isolated-home".to_string(),
+        ),
     ]);
     assert_eq!(env_values(&env).len(), 2);
     let values = launch_values(dir.path(), &env);
@@ -296,7 +311,12 @@ fn environment_values_are_used_once_in_section_nine_order() -> Res {
         (2, 2, 0, 0)
     );
     for value in [&gh, &provider, &gateway, &own] {
-        assert!(m.mask_whole(value.as_bytes()).bytes.iter().all(|&b| b == b'*'));
+        assert!(
+            m.mask_whole(value.as_bytes())
+                .bytes
+                .iter()
+                .all(|&b| b == b'*')
+        );
     }
     Ok(())
 }

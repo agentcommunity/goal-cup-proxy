@@ -249,7 +249,10 @@ impl RunSecrets {
         let mut counts = ValueCounts::default();
         let mut forms: Vec<(Vec<u8>, Regex)> = Vec::new();
         for (i, value) in values.iter().enumerate() {
-            if values[..i].iter().any(|earlier| earlier.bytes() == value.bytes()) {
+            if values[..i]
+                .iter()
+                .any(|earlier| earlier.bytes() == value.bytes())
+            {
                 continue;
             }
             let used = counts.workspace.saturating_add(counts.env);
@@ -323,7 +326,11 @@ pub fn env_values(env: &BTreeMap<String, String>) -> Vec<SecretValue> {
 /// the other key-file values. Duplicates are dropped by [`RunSecrets::new`].
 pub fn launch_values(project: &Path, env: &BTreeMap<String, String>) -> Vec<SecretValue> {
     let (token, others) = key_file_values(project);
-    token.into_iter().chain(env_values(env)).chain(others).collect()
+    token
+        .into_iter()
+        .chain(env_values(env))
+        .chain(others)
+        .collect()
 }
 
 /// The key files (`.env`, and `.env.` and anything) are read by name, `.env.local` first. The
@@ -397,7 +404,14 @@ fn pair_in(line: &str) -> Option<(&str, &str)> {
 /// neither a URL (holds `://`) nor a path (starts with `/`, `~` or `.`).
 fn gated(name: &str, value: &str) -> bool {
     const WORDS: [&str; 8] = [
-        "key", "token", "secret", "password", "pass", "pwd", "auth", "credential",
+        "key",
+        "token",
+        "secret",
+        "password",
+        "pass",
+        "pwd",
+        "auth",
+        "credential",
     ];
     let name = name.to_ascii_lowercase();
     WORDS.iter().any(|word| name.contains(word))
