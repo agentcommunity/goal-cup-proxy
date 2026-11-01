@@ -462,6 +462,7 @@ messages and session files, JSON-escaped up to three levels (the rules take up t
 | A gateway key: `AI_GATEWAY_API_KEY=…` in `.env`, OpenRouter `sk-or-v1-…`, a Cloudflare `cf-aig-authorization` header | masked: the shell rule (`API_KEY=`), and with the owner's yes to question 3 the exact value; `sk-or-` by `openai_key`; the header by its name (`auth`). Same path as a direct key: one system |
 | `STRIPE_SECRET_KEY=sk_test_…`, `whsec_…` (the payments pad) | default build: `sk_test_…` not masked (no rule; the shell rule misses `SECRET_KEY=`), `whsec_…` masked only after `WEBHOOK_SECRET=` or a JSON secret key. With the owner's yes to question 3: both masked (section 2) and by exact value from `.env` |
 | A token used as a URL user with no password (`https://<token>@host`) | masked only if the token has a shape (`ghp_…` after `//` is not glued) or is an exact value (`GH_TOKEN`; others only with the owner's yes to question 3). The dropped `email` rule used to catch it (PRD-17 K12) |
+| Code with a dotted value whose long segment holds a digit, right after `=`, ending at a line end, a space, a quote or `&` (`secret=os.environ.AWS_S3_SECRET_ACCESS_KEY` on its own line) | masked: a stated over-mask of the shell rule's dotted arm (2026-11-01 amendment). The same value in a call or keyword argument, ending at `(`, `)`, `,` or `;`, stays raw |
 | A key the agent adds to `.env` during the run | shape rules only (with the owner's yes to question 3, by exact value from the next `continue`; section 9) |
 | A key after hours of one WebSocket connection whose hold overflowed | the overflowing message is starred to its end (`fail_closed`, counted); the next message is masked normally |
 | Hermes `state.db` (binary) | best effort: a value split across an overflow page is missed; masking a WAL frame breaks its checksum (PRD-01 risks, PRD-04) |
@@ -657,7 +658,7 @@ Automated tests that guard them (few, each named for its promise):
 | Default | Value | Who may change it |
 |---|---|---|
 | Guard class | `[A-Za-z0-9_]`, the word boundary; `-` added only with the owner's yes (PRD-00 owner question 10) | Owner; ledger M1 says a letter or digit (a word boundary) |
-| Guarded rules | The 13 vendor-prefix literals and `jwt`; `stripe_webhook_secret` too, only with the owner's yes to question 3 | Owner |
+| Guarded rules | The 13 vendor-prefix literals and `jwt`; `stripe_webhook_secret` too, only with the owner's yes to question 3. Pending the owner's answer: the 2026-11-01 amendment ships 10 more, 24 in all (`groq_key` and `sgamp_key` among them) | Owner |
 | Stripe test keys and `whsec_` | no; built in the second slice only with the owner's yes (PRD-00 owner question 3, old 12) | Owner |
 | `url_password` bounds | user 256, password 1,024, escaped slashes allowed | PRD-05 |
 | Hold | 16 KiB per stream, 64 candidates; a fail-closed window ends at `\n`, a message end, a gap or the end | PRD-05 after A5 |
@@ -666,7 +667,7 @@ Automated tests that guard them (few, each named for its promise):
 | Mid-run value reader | not built | Owner |
 | `object` form | cut | Owner |
 | Kept as is | `anthropic_billing_header`, the three Codex id rows | Owner may revisit |
-| Not added | `ASIA` beside `AKIA`, an env-line rule, prefixes `pplx-`, `gsk_`, `tvly-`, `re_`, `vcp_`, `sgamp_` (appendix G, G.4 and G.5) | Owner |
+| Not added | `ASIA` beside `AKIA`, an env-line rule, prefixes `pplx-`, `tvly-`, `re_`, `vcp_` (appendix G, G.4 and G.5). `gsk_` and `sgamp_` ship pending the owner's answer (2026-11-01 amendment; on a no they come out) | Owner |
 
 ## Builder notes
 
@@ -975,14 +976,20 @@ A1 reports it as a stated loss instead of failing on it.
   count in the Overridable defaults, both the owner's to change. The two rows ship because they only add
   masking; the owner question is logged. If the owner says no, the `groq_key` and `sgamp_key` rows, their
   `stream.rs` entries and their fixture keys come out.
-- **Shell literal (line 11).** Arms in order: `=` with a form-encoded value; `=` with no space, or a
-  quote, and a value of token runs joined by single dots, where one run of 16 or more holds a digit when
-  there is a dot (else an undotted run of 16 or more); a spaced or `:` unquoted value, undotted as before.
-  So code such as `token = self.config.long_attribute_name`, the keyword argument
-  `OpenAI(api_key=settings.OPENAI_API_KEY_PRODUCTION)` and
-  `secret: "projects.secretmanager.versions_access_latest"` stay raw. No input the old literal matched is
-  matched shorter.
+- **Shell literal (line 11).** One arm is added in front of the integration literal, which is kept
+  as it was: `=` with no space and a value of token runs joined by single dots, one run of 16 or more
+  holding a digit, that ends at whitespace, a quote, `&`, a backslash (an escaped `\n`) or the end of
+  the input. The ending byte is outside capture group 1, which is the span. So `SERVICE_SECRET=<a.b.c>`
+  in an env line or an escaped env dump is starred whole, and code stays raw: a dotted value after a
+  quote or a spaced `=` or `:`, and a keyword argument or call value that ends at `(`, `)`, `,` or `;`
+  (`token=base64.urlsafe_b64encode(...)`, `f(api_key=settings.OPENAI_API_KEY_V2)`). `AQ.` keys have
+  their own rule. No input the integration literal matched is matched shorter. The stream walk after
+  `=` is the integration one, with `.` kept live once the first 16 units are token units, so a long
+  base64 value after `token=` is decided at its first `+` or `/` and does not fail closed.
+- **Stated over-mask.** Code with such a dotted value at a line end, a space, a quote or `&`, such as
+  `secret=os.environ.AWS_S3_SECRET_ACCESS_KEY` on its own line, is starred (section 10).
 - **Cut, not dropped.** A `generic_secret_assignment` or `bedrock_key` candidate that overlaps an earlier
   hard claim keeps its uncovered pieces (`CUT_KINDS` in `rules.rs`), so `token=<run>.sk-…` and
-  `Bearer bedrock-api-key-<base64 with +>` are starred whole.
+  `Bearer bedrock-api-key-<base64 with +>` are starred whole. A leading piece that holds only the name
+  and separator is not kept, so `OPENAI_API_KEY=sk-…` and `GITHUB_TOKEN=ghp_…` keep the name raw.
 - No locked ledger item is touched.

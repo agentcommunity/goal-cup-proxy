@@ -8,7 +8,8 @@
 mod common;
 
 use common::{
-    ALNUM, B64URL, Rng, append, aq_key, key_of, keys, provider_keys, random_cuts, run, starred,
+    ALNUM, B64, B64URL, Rng, append, aq_key, key_of, keys, provider_keys, random_cuts, run,
+    starred,
 };
 use goalcup::connector::{self, FieldValue, MaskPattern, MaskRule};
 use goalcup::mask::{Masked, Masker, SecretValue, StreamMasker, ValueSource};
@@ -266,6 +267,28 @@ fn a_fail_closed_window_ends_at_the_message() -> Res {
         let out = messages(&mut s, plain.as_bytes());
         assert_eq!(out.bytes, plain.as_bytes(), "message {i}");
         assert!(out.spans.is_empty(), "message {i}");
+    }
+    Ok(())
+}
+
+/// A `token=` value whose first sixteen units are token units is decided at the first unit
+/// outside `[A-Za-z0-9_\-.]`, so 20 KB of base64 after it streams as the whole record masks
+/// it and never fails closed.
+#[test]
+fn a_long_base64_after_a_shell_name_does_not_fail_closed() -> Res {
+    let m = masker()?;
+    let fail_closed = m.mask_rules().len() - 1;
+    let blob = [run(ALNUM, 16, 70), run(B64, 20_000, 71)].concat();
+    let input = format!("{{\"a\":\"token={blob}\",\"b\":1}}");
+    let whole = m.mask_whole(input.as_bytes());
+    for piece in [16 * 1024, 64 * 1024] {
+        let cuts: Vec<usize> = (1..)
+            .map(|i| i * piece)
+            .take_while(|&c| c < input.len())
+            .collect();
+        let got = common::stream_in(&m, StreamKind::HttpReq, input.as_bytes(), &cuts);
+        assert!(!got.spans.iter().any(|s| s.rule == fail_closed), "piece {piece}");
+        assert!(got == whole, "piece {piece}");
     }
     Ok(())
 }

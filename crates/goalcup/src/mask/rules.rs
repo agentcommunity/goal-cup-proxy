@@ -288,6 +288,9 @@ pub(crate) struct Claim {
     pub(crate) whole_end: usize,
     pub(crate) soft: bool,
     pub(crate) cut: bool,
+    /// Where the name and separator in front of a [`CUT_KINDS`] value end (`token=`), else
+    /// `start`. A leading piece cut down to them alone is not kept, so the name stays raw.
+    pub(crate) name_end: usize,
     pub(crate) block: bool,
     /// A piece of a PEM block that ended at its bound or at a later `BEGIN`, with no `END`.
     pub(crate) bounded: bool,
@@ -318,6 +321,11 @@ pub(crate) fn candidates<'a>(
         whole_end,
         soft: p.soft,
         cut: p.cut,
+        name_end: if p.cut {
+            start + name_len(&bytes[start..end])
+        } else {
+            start
+        },
         block: p.block,
         bounded: false,
     };
@@ -384,6 +392,17 @@ pub(crate) fn candidates<'a>(
         }
     }
     found_all
+}
+
+/// The length of the name and separator a [`CUT_KINDS`] span starts with, if any.
+fn name_len(span: &[u8]) -> usize {
+    static NAME: OnceLock<Option<Regex>> = OnceLock::new();
+    NAME.get_or_init(|| {
+        Regex::new(r#"^(?i)(?:api[_-]?key|secret|token|password)\s*[=:]\s*\\{0,7}['"]?"#).ok()
+    })
+    .as_ref()
+    .and_then(|re| re.find(span))
+    .map_or(0, |m| m.end())
 }
 
 /// The `BEGIN` and the `END` line of the `private_key` rule, each alone.
@@ -612,7 +631,8 @@ fn char_start(bytes: &[u8], start: usize) -> usize {
 ///
 /// The hard rules are resolved first-wins, by list position and then by source order: a
 /// candidate that overlaps a claim already made is dropped whole, except a [`CUT_KINDS`]
-/// candidate, which keeps the pieces that claim does not cover. A block is then merged with
+/// candidate, which keeps the pieces that claim does not cover, but for a leading piece that
+/// holds only its name and separator. A block is then merged with
 /// every candidate that overlaps it, selected or dropped, transitively, so a block is never
 /// shadowed and never leaves the outside part of a claim raw. Then the one soft rule is cut
 /// against the hard claims and only its uncovered pieces are kept, so it can only add masking.
@@ -751,7 +771,9 @@ fn select_hard(mut candidates: Vec<Claim>) -> Vec<Claim> {
                 let mut at = candidate.start;
                 let mut next = claimed_at;
                 while next < claimed.len() && claimed[next].start < candidate.end {
-                    if claimed[next].start > at {
+                    let name_only =
+                        at == candidate.start && claimed[next].start <= candidate.name_end;
+                    if claimed[next].start > at && !name_only {
                         admitted.push(Claim {
                             end: claimed[next].start,
                             start: at,

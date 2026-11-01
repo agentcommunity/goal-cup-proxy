@@ -53,10 +53,12 @@ const MAX_QUOTE_ESCAPES: u8 = 7;
 const URL_USER_MAX: u16 = 256;
 const URL_PASSWORD_MAX: u16 = 1024;
 
-/// Positions of the JSON `generic_secret_assignment` literal and of `url_password` in the shared
-/// list, the two with a capture group. They do not move: `url_password` took the slot `email`
-/// left.
+/// Positions of the JSON and the shell `generic_secret_assignment` literals and of
+/// `url_password` in the shared list, the three with a capture group (the shell literal's group
+/// leaves out the byte that ends a dotted value). They do not move: `url_password` took the
+/// slot `email` left.
 const JSON_LITERAL: usize = 10;
+const SHELL_LITERAL: usize = 11;
 const URL_LITERAL: usize = 12;
 
 const _: () = assert!(rules::PEM_BODY_MAX + 512 <= MAX_HELD_BYTES);
@@ -185,21 +187,49 @@ fn space(u: Unit) -> bool {
     u.is_whitespace()
 }
 
-/// One unit of the shell literal's value after a `=` with no space. The form-encoded
-/// alternatives come first there: a run of `%XX` escapes and units of the class
-/// `[A-Za-z0-9_.~+/=\-]` that needs sixteen units and a `%XX` escape, or the `[0-9]\.` shape.
-/// The dotted value of the next alternative (token units and single dots) lies inside that
-/// class, so this keeps every unit of the class live and the regex then decides the exact span.
+/// One unit of the shell literal's value after a `=` with no space, as its alternatives read
+/// it. The dotted value (token runs joined by single dots, ending at a space, a quote, `&`, a
+/// backslash or the end) and `[A-Za-z0-9_\-]{16,}` come first. `token_only` and `run` track
+/// whether the first sixteen units are all token units: then one of those two matches, so a
+/// unit outside `[A-Za-z0-9_\-.]` ends the candidate there. Otherwise the form-encoded value may
+/// still match: a run of `%XX` escapes and units of the class `[A-Za-z0-9_.~+/=\-]` that needs
+/// sixteen units and a `%XX` escape or the `[0-9]\.` shape. Its match ends at the end of that
+/// run, so this keeps every unit of the class live, and the regex then decides the exact span.
 /// `None` ends the candidate.
-fn encoded_step(hex: u8, u: Unit) -> Option<Shell> {
+fn encoded_step(run: u8, token_only: bool, hex: u8, u: Unit) -> Option<Shell> {
     if hex > 0 {
-        return ascii_where(u, |b| b.is_ascii_hexdigit())
-            .then_some(Shell::Encoded { hex: hex - 1 });
+        return ascii_where(u, |b| b.is_ascii_hexdigit()).then_some(Shell::Encoded {
+            run,
+            token_only: false,
+            hex: hex - 1,
+        });
+    }
+    if token_folded(u) {
+        return Some(Shell::Encoded {
+            run: (run + 1).min(16),
+            token_only,
+            hex: 0,
+        });
+    }
+    if token_only && run >= 16 {
+        return is(u, b'.').then_some(Shell::Encoded {
+            run,
+            token_only,
+            hex: 0,
+        });
     }
     match u {
-        '%' => Some(Shell::Encoded { hex: 2 }),
-        '.' | '~' | '+' | '/' | '=' => Some(Shell::Encoded { hex: 0 }),
-        _ => token_folded(u).then_some(Shell::Encoded { hex: 0 }),
+        '%' => Some(Shell::Encoded {
+            run,
+            token_only: false,
+            hex: 2,
+        }),
+        '.' | '~' | '+' | '/' | '=' => Some(Shell::Encoded {
+            run,
+            token_only: false,
+            hex: 0,
+        }),
+        _ => None,
     }
 }
 /// `[^"\\]` in Unicode mode: any scalar value but a double quote or a backslash.
@@ -402,7 +432,7 @@ static SHAPES: [Shape; 30] = [
     },
     Shape {
         kind: "generic_secret_assignment",
-        source: r#"(?i)(?:api[_-]?key|secret|token|password)(?:=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,})|(?:=|\s*[=:]\s*\\{0,7}['"])(?:(?:[A-Za-z0-9_\-]+\.)*(?:[0-9][A-Za-z0-9_\-]{15,}|[A-Za-z_\-][0-9][A-Za-z0-9_\-]{14,}|[A-Za-z_\-]{2}[0-9][A-Za-z0-9_\-]{13,}|[A-Za-z_\-]{3}[0-9][A-Za-z0-9_\-]{12,}|[A-Za-z_\-]{4}[0-9][A-Za-z0-9_\-]{11,}|[A-Za-z_\-]{5}[0-9][A-Za-z0-9_\-]{10,}|[A-Za-z_\-]{6}[0-9][A-Za-z0-9_\-]{9,}|[A-Za-z_\-]{7}[0-9][A-Za-z0-9_\-]{8,}|[A-Za-z_\-]{8}[0-9][A-Za-z0-9_\-]{7,}|[A-Za-z_\-]{9}[0-9][A-Za-z0-9_\-]{6,}|[A-Za-z_\-]{10}[0-9][A-Za-z0-9_\-]{5,}|[A-Za-z_\-]{11}[0-9][A-Za-z0-9_\-]{4,}|[A-Za-z_\-]{12}[0-9][A-Za-z0-9_\-]{3,}|[A-Za-z_\-]{13}[0-9][A-Za-z0-9_\-]{2,}|[A-Za-z_\-]{14}[0-9][A-Za-z0-9_\-]{1,}|[A-Za-z_\-]{15,}[0-9][A-Za-z0-9_\-]*)(?:\.[A-Za-z0-9_\-]+)*|[A-Za-z0-9_\-]{16,})|\s*[=:]\s*[A-Za-z0-9_\-]{16,})"#,
+        source: r#"(?i)(?:((?:api[_-]?key|secret|token|password)=(?:[A-Za-z0-9_\-]+\.)*(?:[0-9][A-Za-z0-9_\-]{15,}|[A-Za-z_\-][0-9][A-Za-z0-9_\-]{14,}|[A-Za-z_\-]{2}[0-9][A-Za-z0-9_\-]{13,}|[A-Za-z_\-]{3}[0-9][A-Za-z0-9_\-]{12,}|[A-Za-z_\-]{4}[0-9][A-Za-z0-9_\-]{11,}|[A-Za-z_\-]{5}[0-9][A-Za-z0-9_\-]{10,}|[A-Za-z_\-]{6}[0-9][A-Za-z0-9_\-]{9,}|[A-Za-z_\-]{7}[0-9][A-Za-z0-9_\-]{8,}|[A-Za-z_\-]{8}[0-9][A-Za-z0-9_\-]{7,}|[A-Za-z_\-]{9}[0-9][A-Za-z0-9_\-]{6,}|[A-Za-z_\-]{10}[0-9][A-Za-z0-9_\-]{5,}|[A-Za-z_\-]{11}[0-9][A-Za-z0-9_\-]{4,}|[A-Za-z_\-]{12}[0-9][A-Za-z0-9_\-]{3,}|[A-Za-z_\-]{13}[0-9][A-Za-z0-9_\-]{2,}|[A-Za-z_\-]{14}[0-9][A-Za-z0-9_\-]{1,}|[A-Za-z_\-]{15,}[0-9][A-Za-z0-9_\-]*)(?:\.[A-Za-z0-9_\-]+)*)(?:[\s'"&\\]|$)|(?:api[_-]?key|secret|token|password)(?:\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}|=(?:%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){15,}|[A-Za-z0-9_.~+/=\-]{1}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){14,}|[A-Za-z0-9_.~+/=\-]{2}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){13,}|[A-Za-z0-9_.~+/=\-]{3}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){12,}|[A-Za-z0-9_.~+/=\-]{4}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){11,}|[A-Za-z0-9_.~+/=\-]{5}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){10,}|[A-Za-z0-9_.~+/=\-]{6}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){9,}|[A-Za-z0-9_.~+/=\-]{7}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){8,}|[A-Za-z0-9_.~+/=\-]{8}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){7,}|[A-Za-z0-9_.~+/=\-]{9}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){6,}|[A-Za-z0-9_.~+/=\-]{10}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){5,}|[A-Za-z0-9_.~+/=\-]{11}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){4,}|[A-Za-z0-9_.~+/=\-]{12}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){3,}|[A-Za-z0-9_.~+/=\-]{13}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){2,}|[A-Za-z0-9_.~+/=\-]{14}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2}){1,}|[A-Za-z0-9_.~+/=\-]{15,}%[0-9A-Fa-f]{2}(?:[A-Za-z0-9_.~+/=\-]|%[0-9A-Fa-f]{2})*|[0-9]\.[A-Za-z0-9_.~+/=\-]{14,})))"#,
         form: Form::ShellAssignment,
     },
     Shape {
@@ -612,7 +642,7 @@ impl Policy {
                 .ok_or(MaskError::Shape(i))?;
             let pattern = Pattern::shared(&row).ok_or(MaskError::Shape(i))?;
             let group_ok = match i {
-                JSON_LITERAL | URL_LITERAL => pattern.span_group == 1,
+                JSON_LITERAL | SHELL_LITERAL | URL_LITERAL => pattern.span_group == 1,
                 _ => pattern.span_group == 0,
             };
             if !group_ok {
@@ -980,16 +1010,16 @@ enum Shell {
     /// Backslashes (one to seven) before the optional quote.
     Escape(u8),
     Quoted,
-    /// Inside an unquoted value after `[=:]` and a space or after `:`: token units only.
-    Run,
-    /// Inside a dotted value, on a token unit.
-    Value,
-    /// Inside a dotted value, just after a dot: a token unit must follow.
-    Dot,
-    /// Just after `=` with no space: the form-encoded value may start here.
+    /// Value characters, capped at sixteen.
+    Value(u8),
+    /// Just after `=` with no space: the dotted or form-encoded value may start here.
     Direct,
     /// Inside a value after `=` with no space (see [`encoded_step`]).
     Encoded {
+        /// Token-class units so far, capped at sixteen.
+        run: u8,
+        /// True while the units so far, up to sixteen, are all token-class units.
+        token_only: bool,
         /// Hex digits still owed by a `%XX` escape.
         hex: u8,
     },
@@ -1519,13 +1549,12 @@ impl Json {
 }
 
 impl Shell {
-    /// The shell literal: `(?i)(?:api[_-]?key|secret|token|password)`, then `=` and a
-    /// form-encoded value; or `=` with no space, or a quote, and a value of token runs joined by
-    /// single dots, one run of sixteen or more that holds a digit when there is a dot; or
-    /// `\s*[=:]\s*` and an undotted value `[A-Za-z0-9_\-]{16,}`. So code such as
-    /// `token = self.config.long_attribute_name` and `f(api_key=settings.OPENAI_API_KEY)` stays
-    /// raw. After a quote the walk holds any token runs joined by single dots, digit or not, a
-    /// superset: it never ends before the regex's match does.
+    /// The shell literal: `(?i)(?:api[_-]?key|secret|token|password)`, then `=` with no space
+    /// and a dotted value with a digit in its long run that ends at a space, a quote, `&`, a
+    /// backslash or the end (see [`encoded_step`]); or `\s*[=:]\s*`, an optional quote and
+    /// `[A-Za-z0-9_\-]{16,}`; or `=` and a form-encoded value. So code such as
+    /// `token = self.config.long_attribute_name` and `f(api_key=settings.OPENAI_API_KEY_V2)`
+    /// stays raw.
     fn step(&mut self, u: Unit) -> bool {
         let next = match *self {
             Shell::Word { which, pos } => {
@@ -1581,17 +1610,20 @@ impl Shell {
             Shell::AfterSep | Shell::Direct | Shell::Escape(_) if is(u, b'\'') || is(u, b'"') => {
                 Shell::Quoted
             }
-            Shell::AfterSep | Shell::Run if token_folded(u) => Shell::Run,
-            Shell::Quoted | Shell::Value | Shell::Dot if token_folded(u) => Shell::Value,
-            Shell::Value if is(u, b'.') => Shell::Dot,
-            Shell::Direct => match encoded_step(0, u) {
+            Shell::AfterSep | Shell::Quoted if token_folded(u) => Shell::Value(1),
+            Shell::Direct => match encoded_step(0, true, 0, u) {
                 Some(next) => next,
                 None => return false,
             },
-            Shell::Encoded { hex } => match encoded_step(hex, u) {
+            Shell::Encoded {
+                run,
+                token_only,
+                hex,
+            } => match encoded_step(run, token_only, hex, u) {
                 Some(next) => next,
                 None => return false,
             },
+            Shell::Value(n) if token_folded(u) => Shell::Value((n + 1).min(16)),
             _ => return false,
         };
         *self = next;
@@ -1759,9 +1791,7 @@ impl Candidate {
                 matches!(json.phase, JsonPhase::Value | JsonPhase::ValueEnd(_))
                     .then_some(json.value_start)
             }
-            (Walk::Shell(Shell::Run | Shell::Value | Shell::Dot | Shell::Encoded { .. }), _) => {
-                Some(self.start)
-            }
+            (Walk::Shell(Shell::Value(_) | Shell::Encoded { .. }), _) => Some(self.start),
             (Walk::Url(Url::Password { from, .. }), _) => Some(*from),
             (Walk::Field(field), Form::Field { scalar, .. }) => match field.phase {
                 FieldPhase::String(_) | FieldPhase::Scalar { .. } => Some(field.value_start),
@@ -2134,6 +2164,7 @@ impl Scanner {
                 whole_end: whole,
                 soft: false,
                 cut: false,
+                name_end: start,
                 block: true,
                 bounded: true,
             });

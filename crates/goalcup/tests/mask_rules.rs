@@ -441,9 +441,9 @@ fn provider_keys_are_masked_where_an_env_dump_leaks_them() -> Res {
     Ok(())
 }
 
-/// A dotted value after `=` or a quote is starred through to its end, length kept. A value
+/// A dotted value after `=` with no space is starred through to its end, length kept. A value
 /// that holds a key of a higher rule is starred whole all the same, and so is a Bedrock key
-/// whose base64 a `bearer` match ends early.
+/// whose base64 a `bearer` match ends early. In front of a key the name stays raw.
 #[test]
 fn dotted_assignment_values_are_masked_whole() -> Res {
     let m = masker()?;
@@ -452,20 +452,9 @@ fn dotted_assignment_values_are_masked_whole() -> Res {
     let bedrock = key_of("bedrock_key", 1);
     for (input, value) in [
         (format!("GEMINI_API_KEY={}", aq_key(84)), aq_key(84)),
-        (format!("token='ab.{a}'"), format!("ab.{a}")),
         (format!("SECRET={a}.{b}.{c}\n"), format!("{a}.{b}.{c}")),
-        (format!("token={a}.{b} x"), format!("{a}.{b}")),
-        (
-            format!("password = \"{c}.{a}.{c}\""),
-            format!("{c}.{a}.{c}"),
-        ),
-        (
-            format!("api_key: '{c}.{c}.{c}.{c}.{c}.{a}.{c}'"),
-            format!("{c}.{c}.{c}.{c}.{c}.{a}.{c}"),
-        ),
         (format!("token={a}.{sk} x"), format!("{a}.{sk}")),
-        (format!("api_key={a}.{jwt} x"), format!("{a}.{jwt}")),
-        (format!("api_key: \"{a}.{jwt}\""), format!("{a}.{jwt}")),
+        (format!("api_key={a}.{jwt}&x=1"), format!("{a}.{jwt}")),
         (
             format!("Authorization: Bearer {bedrock}\n"),
             bedrock.clone(),
@@ -474,27 +463,41 @@ fn dotted_assignment_values_are_masked_whole() -> Res {
         assert_masks(&m, &input, &value);
         assert_eq!(m.mask_whole(input.as_bytes()).bytes.len(), input.len());
     }
-    let input = format!("api_key: {a}.{jwt}");
-    assert_masks(&m, &input, &a);
-    assert_masks(&m, &input, &jwt);
-    // Code is the bulk of what is recorded: a member path stays raw even when one segment is
-    // long, after a spaced `=` or `:`, and as a keyword argument or a quoted name when no long
-    // segment holds a digit.
+    for input in [format!("api_key: {a}.{jwt}"), format!("api_key: \"{a}.{jwt}\"")] {
+        assert_masks(&m, &input, &a);
+        assert_masks(&m, &input, &jwt);
+    }
+    let gh = key_of("github_token", 0);
+    for (name, key) in [("OPENAI_API_KEY=", &sk), ("GITHUB_TOKEN=", &gh), ("my token: ", &gh)] {
+        let input = format!("{name}{key}\n");
+        let out = m.mask_whole(input.as_bytes());
+        assert_eq!(&out.bytes[..name.len()], name.as_bytes(), "{input:?}");
+        assert!(starred(&out, name.len()..name.len() + key.len()), "{input:?}");
+        assert_eq!(out.spans.len(), 1, "{input:?}");
+    }
+    // Code is the bulk of what is recorded: a member path stays raw after a spaced `=` or `:`,
+    // after a quote, and as a keyword argument or call, even when a long segment holds a digit.
     for code in [
         "token = self.config.authentication_token",
         "secret = a.b.c",
         "token: a.b.c.d.e.f.g.h.i.j.k.l",
         "password: process.env.DATABASE_PASSWORD_PRODUCTION",
         "secret: google.cloud.secretmanager_v1beta1",
+        "secret: \"google.cloud.secretmanager_v1beta1.Client\"",
         "api_key=os.environ.get(\"X\")",
         "client = OpenAI(api_key=settings.OPENAI_API_KEY_PRODUCTION)",
-        "client = OpenAI(api_key=settings.OPENROUTER_API_KEY)",
-        "requests.get(url, token=self.config.get_authentication_token())",
-        "requests.get(url, token=self.settings.github_access_token)",
         "jwt.encode(payload, secret=settings.JWT_SIGNING_SECRET_KEY)",
-        "connect(password=os.environ.DATABASE_PASSWORD_PRODUCTION)",
-        "f(secret=request.headers.x_amzn_requestid_value)",
-        "secret: \"projects.secretmanager.versions_access_latest\"",
+        "token=base64.urlsafe_b64encode(os.urandom(32))",
+        "password=hashlib.pbkdf2_hmac_sha256(pw, salt, 100000)",
+        "client(api_key=config.anthropic_api_key_v1beta)",
+        "f(api_key=settings.OPENAI_API_KEY_V2)",
+        "f(token=self.config.oauth2_authentication_token)",
+        "boto3.client(\"s3\", api_key=settings.AWS_S3_ACCESS_KEY_ID)",
+        "jwt.encode(payload, secret=settings.JWT_HS256_SIGNING_SECRET)",
+        "token=oauth2_session.fetch_access_token_v2()",
+        "hmac.new(secret=config.HMAC_SHA256_SECRET_KEY)",
+        "api_key=settings.OPENAI_API_KEY_V2_PRODUCTION, x",
+        "token=self.config.get_oauth2_installation_token();",
     ] {
         assert_clear(&m, code);
     }
