@@ -2531,3 +2531,8 @@ kept and now cites BUILD-PROMPT section 5, since B3 no longer carries it.
 
 - **Size report, PRD-12** (`wc -l` on integration): rig code under `scripts/pad/` is 3,295 lines (check.py 803, pad 769, pad-run 1,113, table 193, selftest 188, sbx.mjs 133, exec/ 96); tests (`test_pad.py`) 779; 4,074 together against the PRD-00 row of about 1,350 to 1,450 with its tests (about 2.9 times). The slice added about 74 source and 84 test lines. Overage on an owner estimate is reported, not cut; carry to the end-of-build report with the other overages.
 - **Gate effect:** none on order or seams. The C3 INCONCLUSIVE "not exercised" case and nits A12 and B10 are noted in the PRD-12 Amendments. No locked ledger item is touched.
+
+### 2026-11-01, note from the PRD-17 slice 8 merge (822c5b77)
+
+- **Size report, PRD-17** (`wc -l` on integration): the eight `crates/goalcup/tests/lessons_*.rs` files total 4,345 lines (connect 510, decode 547, hosts 181, http1 978, launch 504, pipeline 104, tls 412, ws 1,109), unchanged by this slice, against the 3,000 line row shared with PRD-14 in PRD-00 "Size budget" (45% over). PRD-17 has no src row (0). Reported, not cut; carry to the end-of-build report. PRD-14 must keep its own tests small enough that the Rust test total stays near the 14,200 line.
+- **Gate effect:** the deletion gate fails on one check-1 name, `pipeline_stall.rs` (PRD-02, in progress). Order: PRD-02 lands it, then one more PRD-17 slice repoints L-R2 and reruns the gate, then PRD-13 deletes. The gate full row (L-C7) remains the other blocker. No locked ledger item is touched.

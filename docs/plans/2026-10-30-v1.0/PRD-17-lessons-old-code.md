@@ -1095,3 +1095,10 @@ Names for `LESSONS.md` (the lessons lane writes them; judge 14:56Z, 15:13Z):
 
 - **On integration now:** `watchdog_restart.rs`, `cli_continue.rs`, `cli_recover.rs` and `cli_commands::second_start_on_one_home_refuses`; rows L-C12, L-P1, L-P2, L-HF4, L-HF6 and L-SC4 are repointed in `LESSONS.md` and read `green`. Not on integration: `pipeline_stall.rs` (PRD-02).
 - **Gate not passed, check 1: L-R2.** Counts, check verdicts, the PRD-02 proposal and the open thin-guard rows are in `LESSONS.md`, section "Gate run of 2026-11-01". PRD-13 may not delete yet. No Rust added; no locked ledger item touched.
+
+### 2026-11-01, replan after the PRD-17 slice 8 merge (822c5b77)
+
+- **Merged:** the gate repoint and run record in `LESSONS.md` (section "Gate run of 2026-11-01"); the review fixes A1 to A3, B1 and B2-first-half are in. No Rust changed: the eight `lessons_*.rs` files are still 4,345 lines against the 3,000 shared with PRD-14 (see the slice 6 note), and no further growth is allowed.
+- **The only gate blocker left is `pipeline_stall.rs` (L-R2, check 1).** PRD-02 has started it (lane log, 07:26Z) and it is the last item in PRD-02's slice C part 2. When it is on integration, the next PRD-17 slice repoints L-R2, reruns the four checks and records the result; until then PRD-13 may not delete. The other gate blocker, the gate full row (L-C7), is unchanged.
+- **Doc nits queued for the next LESSONS.md upkeep (docs only, no box job):** A4, the check 1 bullet lists five `;` cells and names L-R2, but the diff changed four (L-C5, L-W4, L-R6, L-SC2), so say four cells and drop L-R2; A5, the "Open rows with a thin guard" bullet still lists nine ids and misdescribes L-VR1 and L-T9, so cut it to a pointer at the `open` rows in the table; B2, the "What blocks the gate" list may drop its two restating bullets. A4 and A5 are wording only; B2 is taste.
+- No locked ledger item is touched.
