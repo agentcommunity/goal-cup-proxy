@@ -1630,3 +1630,9 @@ The PRD-17 deletion gate (PRD-13) waits on tests that this PRD is asked to land 
 - **Carried to PRD-14 (nit B1, declined here):** `tests/cli_approve.rs` keeps a small spy (about 65 lines) to read the open body,
   because `tests/common/` belongs to PRD-14 and PRD-08. When the FakeWorker records the open body, the spy goes.
 - Open nit B3 (cosmetic) is accepted. `text.rs` size is reported and accepted (see PRD-16). No locked ledger item is touched.
+
+### 2026-11-01, amendment: wording for a pinned host
+
+- A GAP `pinned` host is not a refusal. Rows 347 and 450 and acceptance 3 now read: the status line is `Not recorded: <host> (the host list pins it). Its traffic passed through unread.`, and `gap_words("pinned")` is "the host list pins it". Acceptance 3 passes when status shows that line during the run. `tls_refused` and `ca_refused` keep "refused the recorder".
+- Ask to PRD-15: `docs/PARTICIPANT-GUIDE.md` (about line 479) still pairs `tls_refused, pinned` with "the program refused the recorder"; split `pinned` out with the wording above. That file is outside PRD-10's ownership.
+- No locked ledger item is touched.

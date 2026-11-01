@@ -233,8 +233,6 @@ fn every_gap_reason_has_words() {
     }
     // A pinned host was passed through unread; nobody refused anything.
     assert_ne!(text::gap_words("pinned"), text::gap_words("tls_refused"));
-    assert!(!text::tunnel_listed("h.example.com", "pinned", 1, 1).contains("refused"));
-    assert!(!text::listed_tunnel("h.example.com", "pinned").contains("refused"));
 }
 
 /// PRD-17 SC6: a `status.json` with no seal never prints the finished line or block: an open

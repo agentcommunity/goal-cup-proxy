@@ -1277,7 +1277,7 @@ pub fn recover_support(run: &str, log: &std::path::Path) -> String {
 
 pub fn recover_late(name: &str, part: usize) -> String {
     format!(
-        "goalcup is restarting recording for part {part} of your run with {name}, but it has not said it is ready yet. {name} was not restarted. When {name} exits no message appears in this terminal; goalcup status (or goalcup seal) shows the final counts. Check with: goalcup status"
+        "goalcup is restarting recording for part {part} of your run with {name}, but it has not said it is ready yet. {name} was not restarted. When {name} exits no message appears in this terminal; goalcup status (or goalcup seal) shows the final counts."
     )
 }
 
