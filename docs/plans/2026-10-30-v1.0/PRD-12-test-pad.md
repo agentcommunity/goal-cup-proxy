@@ -2039,3 +2039,8 @@ taken; "rejected" says why. Fixes for other files are made by those files' owner
   ties to the planted file (the earlier "run_secret is the exercise proof" text is withdrawn). Exercise evidence is a
   MASK of a planted shape, a `masked_key` MASK for an upstream-redacting harness, or with exact values off a plain hit.
   `PAD_SECRET_PLAIN` stays the exact-value canary: a plain hit of it with exact values on is a FAIL.
+
+### 2026-11-01, owner answer on the C3 stated loss, gateway rates
+
+- **C3 stated loss (owner answer, supersedes the owner question above).** A shape hit found only in joined streamed replies, with 0 known hits, is C3 PASS with the note "stated loss: shape in streamed reply". A known hit, a big MASK or any other shape still fails. A planted kind with no MASK stays open as before.
+- **Rates.** `pad.toml` prices the two gateway models of the 1 Nov gateway rows at the gateway list price of that day: the Anthropic one at its tier up to 100k input per call (0.1 in, 0.01 cached, 0.5 out per M; 0.5 and 2.5 above), and the DeepSeek one at 0.3, 0.007 cached, 1.2. The Codex gateway preset names the Anthropic model run in those rows. The Hermes gateway preset has been run (gateway smoke, 1 Nov). No locked ledger item is touched.

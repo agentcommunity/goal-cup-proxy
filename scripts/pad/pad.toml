@@ -29,3 +29,5 @@ gateway = "AI_GATEWAY_API_KEY"
 "deepseek-flash" = { key = "deepseek", input = 0.3, cached = 0.006, output = 1.2 }
 "gemini-4-argon" = { key = "gemini", input = 2, cached = 0.1, output = 10 }  # doubles from 1 Dec 2026
 "openai/gpt-6-astra" = { key = "gateway", input = 10, cached = 1, cache_write = 12.5, output = 50 }
+"anthropic/claude-haiku-5.5" = { key = "gateway", input = 0.1, cached = 0.01, output = 0.5 }  # gateway list price up to 100k input per call (0.5 / 2.5 above), 1 Nov 2026
+"deepseek/deepseek-v4.1-flash" = { key = "gateway", input = 0.3, cached = 0.007, output = 1.2 }  # gateway list price, 1 Nov 2026

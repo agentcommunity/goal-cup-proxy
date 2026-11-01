@@ -1,6 +1,6 @@
 # Codex through Vercel AI Gateway, as https://vercel.com/docs/ai-gateway/coding-agents/openai-codex writes it.
 model_provider = "vercel"
-model = "openai/gpt-6-astra"
+model = "anthropic/claude-haiku-5.5"
 
 [model_providers.vercel]
 name = "Vercel AI Gateway"

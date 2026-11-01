@@ -465,8 +465,8 @@ def scan(r, name, where):
     """One C3 scan: hits fail; no scan (None) is INCONCLUSIVE, never a PASS."""
     n = r.hits(name)
     loss = r.stated_loss() if name == "secrets" else None
-    if loss:  # never a PASS: the report cannot show the shape crosses a delta edge (a masker miss reads the same), so C3 stays open
-        return r.mark("C3", "INCONCLUSIVE", "shape only in joined streamed replies (not verified): %s in %s"
+    if loss:  # owner answer: a stated loss with 0 known hits is a PASS with a note; a known hit makes loss None, so it still fails
+        return r.mark("C3", "PASS", "stated loss: shape in streamed reply: %s in %s"
                       % (", ".join(loss[0]), ", ".join(loss[1])))
     r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
 
@@ -507,7 +507,7 @@ def secrets(r):
     # values off the plain-value hit (expected there, not a leak). A run_secret MASK is none of these: the harness env or an
     # auth header can produce it, so it never ties to the planted file.
     evidence = bool((up and masks.get("masked_key")) or (not exact and plain))
-    clean = up and hit == 0 and not loss and (plain == 0 or not exact) and evidence
+    clean = up and hit == 0 and (plain == 0 or not exact) and evidence
     bare = [" or ".join(k) for k in PLANTED if not any(masks.get(x) for x in k)]
     if not (evidence or len(bare) < len(PLANTED)):
         return r.mark("C3", "INCONCLUSIVE", "secret exercise not done: no MASK of a planted shape%s"
@@ -523,7 +523,7 @@ def secrets(r):
     for name in pending:
         why = "not exercised"
         if loss:
-            why += "; %s only in joined streamed replies (not verified)" % ("hit" if set(name.split(" or ")) & set(loss[0]) else "shape")
+            why += "; %s only in joined streamed replies (stated loss)" % ("hit" if set(name.split(" or ")) & set(loss[0]) else "shape")
         r.mark("C3", "FAIL" if hit else "INCONCLUSIVE", "%s of %s: no MASK" % ("hits" if hit else why, name))
     if clean and len(pending) < len(bare) and r.v["C3"] == "PASS":
         r.upstream_pass = True

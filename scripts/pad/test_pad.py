@@ -492,12 +492,12 @@ class StatedLoss(unittest.TestCase):
                          "verify/secrets-conductor.json": {"hits": 0},
                          "verify/exits.json": {"secrets": 2 if shapes else 0, "secrets-out": 0, "secrets-plain": 0}})
 
-    def test_deltas_only_shape_is_open_not_a_fail_and_never_a_pass(self):
+    def test_deltas_only_shape_is_a_pass_with_the_stated_loss_note(self):  # owner answer D1
         row = self.run_row(shapes=[self.DELTAS])
-        self.assertEqual(row["checks"]["C3"], "INCONCLUSIVE")
+        self.assertEqual(row["checks"]["C3"], "PASS", row["why"])
+        self.assertTrue(any("stated loss: shape in streamed reply" in w for w in row["why"]), row["why"])
         self.assertNotEqual(row["faults"], "FAIL")
         self.assertNotEqual(row["result"], "FAIL")
-        self.assertNotEqual(row["result"], "PASS")
 
     def test_stated_loss_does_not_hide_an_unexplained_gap(self):
         gaps = {"s6_gaps": {"memory_guard": 1}}
@@ -577,9 +577,9 @@ class UpstreamRedaction(unittest.TestCase):
     def test_a_known_hit_still_fails(self):
         self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN]), "FAIL")
 
-    def test_deltas_only_shape_is_open_not_a_fail(self):
-        self.assertEqual(self.c3(True, SecretCheck.PLANTED, shapes=[self.DELTAS]), "INCONCLUSIVE")
-        self.assertEqual(self.c3(True, {}, shapes=[self.DELTAS]), "INCONCLUSIVE")
+    def test_deltas_only_shape_is_a_stated_loss_not_a_fail(self):
+        self.assertEqual(self.c3(True, SecretCheck.PLANTED, shapes=[self.DELTAS]), "PASS")
+        self.assertEqual(self.c3(True, {}, shapes=[self.DELTAS]), "INCONCLUSIVE")  # still no exercise evidence
 
 
 class SecretCheck(unittest.TestCase):
