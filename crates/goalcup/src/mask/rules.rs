@@ -905,7 +905,10 @@ mod tests {
     /// whole regex from the byte after every glued start), on text dense with glued prefixes.
     #[test]
     fn the_head_search_finds_what_the_plain_search_finds() {
-        const PIECES: [&[u8]; 14] = [
+        const PIECES: [&[u8]; 17] = [
+            b"AQ.",
+            b"gsk_",
+            b"fk-",
             b"task-",
             b"sk-",
             b"x",
@@ -928,7 +931,7 @@ mod tests {
             .filter(|r| r.guard)
             .filter_map(|r| Pattern::shared(&r))
             .collect();
-        assert_eq!(guarded.len(), 14);
+        assert_eq!(guarded.len(), 22);
         assert!(guarded.iter().all(|p| p.head.is_some()));
         for _ in 0..3000 {
             let text: Vec<u8> = (0..below(60))

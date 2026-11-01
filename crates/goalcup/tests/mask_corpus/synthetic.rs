@@ -100,6 +100,17 @@ pub fn planted_values() -> Vec<(&'static str, String)> {
         ),
         ("pem", pem),
         ("plain_key", r.chars(ALNUM, 32)),
+        ("google_auth", ["A", "Q.", &r.chars(B64URL, 50)].concat()),
+        (
+            "dotted",
+            [r.chars(ALNUM, 8), r.chars(B64URL, 24), r.chars(ALNUM, 6)].join("."),
+        ),
+        ("groq", ["gs", "k_", &r.chars(ALNUM, 52)].concat()),
+        ("cerebras", ["cs", "k-", &r.chars(ALNUM, 48)].concat()),
+        ("fireworks", ["f", "w_", &r.chars(ALNUM, 24)].concat()),
+        ("together", ["tgp", "_v1_", &r.chars(B64URL, 43)].concat()),
+        ("amp", ["sga", "mp_", &r.chars(HEX, 40)].concat()),
+        ("factory", ["f", "k-", &r.chars(ALNUM, 40)].concat()),
     ]
 }
 

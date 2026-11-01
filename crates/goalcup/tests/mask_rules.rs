@@ -12,7 +12,7 @@ use common::{ALNUM, Rng, keys, only_spans_changed, run, shape_rows, starred};
 /// The literal kinds in `shapes.tsv` order. The JSON literal (10) and the shell literal (11)
 /// are fixed indexes the stream relies on; `url_password` (12) took the slot `email` left. The
 /// pad's C3 reads these names and this order (PRD-05 amendments).
-const KINDS: [&str; 20] = [
+const KINDS: [&str; 28] = [
     "anthropic_key",
     "openai_key",
     "masked_key",
@@ -33,6 +33,14 @@ const KINDS: [&str; 20] = [
     "stripe_key",
     "gitlab_token",
     "digitalocean_token",
+    "google_auth_key",
+    "groq_key",
+    "cerebras_key",
+    "fireworks_key",
+    "vercel_gateway_key",
+    "together_key",
+    "amp_key",
+    "factory_key",
 ];
 
 #[test]
@@ -50,7 +58,8 @@ fn shapes_tsv_is_the_shared_list() {
         .filter(|(_, r)| r[1] == "1")
         .map(|(i, _)| i)
         .collect();
-    assert_eq!(guarded, [0, 1, 3, 4, 5, 7, 9, 13, 14, 15, 16, 17, 18, 19]);
+    let late: Vec<usize> = (13..28).collect();
+    assert_eq!(guarded, [&[0, 1, 3, 4, 5, 7, 9][..], &late].concat());
 }
 
 // ── the masker over whole inputs (PRD-05 sections 2 to 5) ─────────────────────────────────
@@ -97,7 +106,7 @@ fn mask_rules_lists_kinds_then_connectors_then_run_secret_then_fail_closed() -> 
             want.push(kind.to_string());
         }
     }
-    assert_eq!(want.len(), 18);
+    assert_eq!(want.len(), 26);
     let plain: Vec<String> = [want.clone(), vec!["run_secret".into(), FAIL_CLOSED.into()]].concat();
     assert_eq!(masker()?.mask_rules(), plain);
 
@@ -395,5 +404,189 @@ fn a_connector_field_rule_masks_its_value() -> Res {
         String::from_utf8(out.bytes)?,
         format!(r#"{{"x-codex-turn-state": "{}"}}"#, "*".repeat(state.len()))
     );
+    Ok(())
+}
+
+// ── the point 4 leak fix: Google `AQ.` keys, dotted shell values, provider prefixes ──────
+
+/// `[A-Za-z0-9_\-]`, the class of the new literals and of a shell value.
+const TOKEN: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+
+/// A fake Google authentication key: `AQ.` and 50 more, built at run time.
+fn aq_key(seed: usize) -> String {
+    ["A", "Q.", &run(TOKEN, 50, seed)].concat()
+}
+
+/// One fake key per provider literal, `sk-` providers included, and the kind that masks it.
+fn provider_keys() -> Vec<(&'static str, String)> {
+    let hex = b"0123456789abcdef";
+    vec![
+        ("openai_key", ["s", "k-", &run(ALNUM, 32, 60)].concat()), // DeepSeek
+        ("openai_key", ["s", "k-", &run(ALNUM, 48, 61)].concat()), // Moonshot / Kimi
+        ("openai_key", ["s", "k-", &run(hex, 32, 62)].concat()),   // DashScope
+        (
+            "openai_key",
+            ["s", "k-or-", "v1-", &run(hex, 64, 63)].concat(),
+        ), // OpenRouter
+        ("groq_key", ["gs", "k_", &run(ALNUM, 52, 64)].concat()),
+        ("cerebras_key", ["cs", "k-", &run(ALNUM, 48, 65)].concat()),
+        ("cerebras_key", ["cs", "k_", &run(ALNUM, 48, 66)].concat()),
+        ("fireworks_key", ["f", "w_", &run(ALNUM, 24, 67)].concat()),
+        (
+            "vercel_gateway_key",
+            ["vc", "k_", &run(ALNUM, 56, 68)].concat(),
+        ),
+        (
+            "together_key",
+            ["tgp", "_v1_", &run(TOKEN, 43, 69)].concat(),
+        ),
+        ("amp_key", ["sga", "mp_", &run(ALNUM, 40, 70)].concat()),
+        ("factory_key", ["f", "k-", &run(ALNUM, 40, 71)].concat()),
+    ]
+}
+
+/// The leaked case: a Google `AQ.` key bare, after `GEMINI_API_KEY=`, and inside the
+/// JSON-escaped output of `env | sort` in the next request, whole and streamed. Glued after a
+/// letter the guard drops it (PRD-05 section 4).
+#[test]
+fn a_google_aq_key_is_masked_where_it_leaked() -> Res {
+    let m = masker()?;
+    let key = aq_key(80);
+    let out = m.mask_whole(format!("key {key} end").as_bytes());
+    assert_eq!(kinds(&m, &out), ["google_auth_key"]);
+    assert_masks(&m, &format!("key {key} end"), &key);
+    assert_masks(&m, &format!("GEMINI_API_KEY={key}\n"), &key);
+    let dump = format!("HOME=/home/u\nGEMINI_API_KEY={key}\nGEMINI_CLI=1\nPATH=/usr/bin\n");
+    let body = serde_json::json!({"contents": [{"role": "user", "parts": [
+        {"functionResponse": {"name": "run_shell_command", "response": {"output": dump}}}
+    ]}]})
+    .to_string();
+    assert!(body.contains(r"\nGEMINI_API_KEY=AQ."));
+    assert_masks(&m, &body, &key);
+    let whole = m.mask_whole(body.as_bytes());
+    let mut rng = Rng(0xA0);
+    for max in [1, 7, 64] {
+        let cuts = common::random_cuts(&mut rng, body.len(), max);
+        let got = common::stream_in(
+            &m,
+            goalcup_format::StreamKind::HttpReq,
+            body.as_bytes(),
+            &cuts,
+        );
+        assert!(got == whole, "cuts {cuts:?}");
+    }
+    let out = m.mask_whole(format!("x{key} end").as_bytes());
+    assert_eq!(
+        &out.bytes[1..1 + key.len()],
+        key.as_bytes(),
+        "glued, dropped"
+    );
+    Ok(())
+}
+
+/// A shell, TOML or form value with dots is starred through to its end, length kept.
+#[test]
+fn dotted_assignment_values_are_masked_whole() -> Res {
+    let m = masker()?;
+    let (a, b, c) = (run(TOKEN, 20, 81), run(TOKEN, 20, 82), run(TOKEN, 9, 83));
+    for (input, value) in [
+        (format!("GEMINI_API_KEY={}", aq_key(84)), aq_key(84)),
+        (format!("token: ab.{a}"), format!("ab.{a}")),
+        (format!("SECRET={a}.{b}.{c}\n"), format!("{a}.{b}.{c}")),
+        (format!("token={a}.{b} x"), format!("{a}.{b}")),
+        (
+            format!("password = \"{c}.{a}.{c}\""),
+            format!("{c}.{a}.{c}"),
+        ),
+        (
+            format!("api_key: '{c}.{c}.{c}.{c}.{c}.{a}.{c}'"),
+            format!("{c}.{c}.{c}.{c}.{c}.{a}.{c}"),
+        ),
+    ] {
+        assert_masks(&m, &input, &value);
+        assert_eq!(m.mask_whole(input.as_bytes()).bytes.len(), input.len());
+    }
+    for code in [
+        "token = self.config.auth_token",
+        "api_key=os.environ.get(\"X\")",
+        "password: user.password",
+        "secret = a.b.c",
+        "let token = entry.keys.signing_key",
+        "token: a.b.c.d.e.f.g.h.i.j.k.l",
+    ] {
+        assert_clear(&m, code);
+    }
+    Ok(())
+}
+
+/// The widened shell literal matches, at every start where the old one matched, at least as
+/// far: no input it masked before is masked shorter now.
+#[test]
+fn the_shell_literal_never_matches_shorter_than_before() -> Res {
+    let new = shape_rows()[11][2];
+    let (head, rest) = new.split_once("(?:=(?:").ok_or("the shell literal")?;
+    let arms = &rest[..rest.rfind(r"|\s*[=:]").ok_or("the dotted arm")?];
+    let old_first = r#"\s*[=:]\s*(?:\\{0,7}['"])?[A-Za-z0-9_\-]{16,}"#;
+    let old = format!("^(?:{head}(?:{old_first}|=(?:{arms}))");
+    let (old, new) = (
+        regex::bytes::Regex::new(&old)?,
+        regex::bytes::Regex::new(&format!("^(?:{new})"))?,
+    );
+    const PIECES: [&str; 22] = [
+        "token",
+        "secret",
+        "api_key",
+        "password",
+        "=",
+        ":",
+        " ",
+        "'",
+        "\"",
+        "\\",
+        ".",
+        "%2F",
+        "%",
+        "1.",
+        "abcdefghijklmnop",
+        "ab",
+        "/",
+        "~",
+        "+",
+        "-",
+        "_",
+        "Q",
+    ];
+    let mut rng = Rng(0x0D07);
+    let mut checked = 0;
+    for _ in 0..80_000 {
+        let text: String = (0..1 + rng.below(16))
+            .map(|_| PIECES[rng.below(PIECES.len())])
+            .collect();
+        let text = text.as_bytes();
+        for p in 0..text.len() {
+            if let Some(o) = old.find(&text[p..]) {
+                let n = new.find(&text[p..]).map_or(0, |n| n.end());
+                assert!(n >= o.end(), "{:?} at {p}", String::from_utf8_lossy(text));
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 500, "{checked}");
+    Ok(())
+}
+
+/// Each provider literal masks its key, and the `sk-` providers are `openai_key`; glued after a
+/// letter the key is left alone.
+#[test]
+fn provider_and_gateway_keys_are_masked() -> Res {
+    let m = masker()?;
+    for (kind, key) in provider_keys() {
+        let input = format!("key {key} end");
+        let out = m.mask_whole(input.as_bytes());
+        assert_eq!(kinds(&m, &out), [kind], "{kind}");
+        assert_masks(&m, &input, &key);
+        let out = m.mask_whole(format!("z{key} end").as_bytes());
+        assert_eq!(&out.bytes[1..1 + key.len()], key.as_bytes(), "{kind} glued");
+    }
     Ok(())
 }

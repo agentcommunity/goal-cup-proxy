@@ -91,7 +91,58 @@ fn planted() -> Vec<Vec<u8>> {
     bad.extend(b"\xe2\x80");
     out.push(bad);
     out.push(format!("\x1b[32m{gh}\x1b[0m \\\\u001b[1m{gh} xx{gh} %3D{gh}").into_bytes());
+    let aq = aq_key(31);
+    let (a, c) = (run(TOKEN, 20, 32), run(TOKEN, 9, 33));
+    out.push(
+        format!(
+            "{{\"output\":\"HOME=/h\\nGEMINI_API_KEY={aq}\\nGEMINI_CLI=1\\n\"}}\nGEMINI_API_KEY={aq}\ntoken: ab.{a}\nSECRET={a}.{a}.{c}\ntoken={a}.{a} x\nsecret = a.b.c\n"
+        )
+        .into_bytes(),
+    );
+    let mut line = Vec::new();
+    for (_, key, _) in provider_keys() {
+        line.extend(format!("{{\"k\":\"{key}\"}} ").bytes());
+    }
+    out.push(line);
     out
+}
+
+/// `[A-Za-z0-9_\-]`
+const TOKEN: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-";
+
+/// A fake Google authentication key: `AQ.` and 50 more, built at run time.
+fn aq_key(seed: usize) -> String {
+    ["A", "Q.", &run(TOKEN, 50, seed)].concat()
+}
+
+/// One fake key per literal added for the point 4 leak fix, with its fixed prefix length.
+fn provider_keys() -> Vec<(&'static str, String, usize)> {
+    vec![
+        ("google_auth_key", aq_key(34), 3),
+        ("groq_key", ["gs", "k_", &run(ALNUM, 52, 35)].concat(), 4),
+        (
+            "cerebras_key",
+            ["cs", "k-", &run(ALNUM, 48, 36)].concat(),
+            4,
+        ),
+        (
+            "fireworks_key",
+            ["f", "w_", &run(ALNUM, 24, 37)].concat(),
+            3,
+        ),
+        (
+            "vercel_gateway_key",
+            ["vc", "k_", &run(ALNUM, 56, 38)].concat(),
+            4,
+        ),
+        (
+            "together_key",
+            ["tgp", "_v1_", &run(TOKEN, 43, 39)].concat(),
+            7,
+        ),
+        ("amp_key", ["sga", "mp_", &run(ALNUM, 40, 40)].concat(), 6),
+        ("factory_key", ["f", "k-", &run(ALNUM, 40, 41)].concat(), 3),
+    ]
 }
 
 /// K1: at every split point and over seeded random chunkings, the stream equals `mask_whole`,
@@ -174,7 +225,7 @@ fn never_less_past_the_hold() -> Res {
 #[test]
 fn a_gap_or_boundary_never_releases_a_secret_prefix_raw() -> Res {
     let m = masker()?;
-    for (_, key, prefix) in keys() {
+    for (_, key, prefix) in keys().into_iter().chain(provider_keys()) {
         let input = format!("{{\"k\":\"{key}\"}}");
         let at = input.find(&key).unwrap_or(0);
         for k in at..=at + key.len() {
@@ -193,6 +244,19 @@ fn a_gap_or_boundary_never_releases_a_secret_prefix_raw() -> Res {
                 m.mask_whole(&input.as_bytes()[..k]),
                 "{key} message cut at {k}"
             );
+        }
+    }
+    // A held shell value is starred at a gap, dots included.
+    for input in [
+        format!("token={}", aq_key(42)),
+        format!("token: ab.{}", aq_key(43)),
+    ] {
+        let at = input.find(['=', ':']).unwrap_or(0) + 1;
+        for k in at + 2..=input.len() {
+            let mut s = m.stream(StreamKind::Native);
+            let mut out = s.push(&input.as_bytes()[..k]);
+            append(&mut out, s.gap());
+            assert!(starred(&out, at + 1..k), "{input} cut at {k}");
         }
     }
     Ok(())
