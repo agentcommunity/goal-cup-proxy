@@ -1,8 +1,9 @@
 //! PRD-06 "Automated tests", `upload_manual.rs` (section 9, `goalcup upload`): it gives up on 401,
 //! 404, 410 and `stuck` with that reason, and on a 401 past `upload_by` says the run is closed; it
 //! refuses while a recorder holds `rec/lock` and never holds `rec/lock` after it returns; the final
-//! heartbeat carries the counts of `counts.jsonl`; an entry with no seal in `status.json` is not
-//! sent as sealed; a sealed entry with bytes left ends sealed with the server holding
+//! heartbeat carries the counts of `counts.jsonl`; a dead entry (no seal anywhere, no recorder) is
+//! closed with the `recovered` seal and sent whole, and is left alone while a recorder holds
+//! `rec/lock` (U8); a sealed entry with bytes left ends sealed with the server holding
 //! `cat rec-*.gcr.zst` and the parts pruned; an entry the position already calls sealed is not
 //! sent again, and is pruned even with `upload.json` lost.
 
@@ -26,6 +27,12 @@ use std::path::{Path, PathBuf};
 /// and the run's `server.json` naming `fake` with `deadline`. Returns the entry folder and the
 /// bytes of `cat rec-*.gcr.zst`.
 fn sealed(run: &Path, fake: &FakeWorker, deadline: &str) -> (PathBuf, Vec<u8>) {
+    entry(run, fake, deadline, true)
+}
+
+/// As [`sealed`], or with `seal` false a dead entry: no seal, the writer dropped after its last
+/// LINK, a `status.json` that is not sealed and an unheld `rec/lock`.
+fn entry(run: &Path, fake: &FakeWorker, deadline: &str, seal: bool) -> (PathBuf, Vec<u8>) {
     let entry = run.join(ENTRY);
     let rec = entry.join("rec");
     fs::create_dir_all(&rec).unwrap();
@@ -35,6 +42,7 @@ fn sealed(run: &Path, fake: &FakeWorker, deadline: &str) -> (PathBuf, Vec<u8>) {
         rotate_after_ns: u64::MAX,
     };
     let mut w = PartWriter::open(&rec, opts, ENTRY, BOOT_ID, at(0)).unwrap();
+    let mut last = 0;
     for n in 1..=6u64 {
         // Bytes that do not compress, so the parts rotate.
         let mut x = n.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
@@ -52,24 +60,36 @@ fn sealed(run: &Path, fake: &FakeWorker, deadline: &str) -> (PathBuf, Vec<u8>) {
             json,
         })
         .unwrap();
-        w.link(at(n)).unwrap();
+        last = w.link(at(n)).unwrap().seq;
         // Not after the last LINK, so the last part holds index lines.
         if n < 6 {
             w.rotate_if_due(at(n)).unwrap();
         }
     }
-    w.seal(at(7)).unwrap();
-    // The boot's totals as `counts.jsonl` keeps them; the part files hold no COUNT event.
-    let count = json!({"seq": 1, "count": {"ev": "count", "boot": 0, "http_post": 42}, "spans": 0});
-    fs::write(entry.join("counts.jsonl"), format!("{count}\n")).unwrap();
-    let seal = SealStatus {
-        reason: SealReason::HarnessExit,
-        workspace_head: None,
+    // A dead boot's line is at its last LINK, which its recovery frame takes.
+    let seq = match seal {
+        true => {
+            w.seal(at(7)).unwrap();
+            1
+        }
+        false => {
+            drop(w);
+            last
+        }
     };
-    let status = Status {
-        mode: Mode::Sealed,
-        seal: Some(seal),
-        ..Status::default()
+    // The boot's totals as `counts.jsonl` keeps them; the part files hold no COUNT event.
+    let count = json!({"seq": seq, "count": {"ev": "count", "boot": 0, "http_post": 42}, "spans": 0});
+    fs::write(entry.join("counts.jsonl"), format!("{count}\n")).unwrap();
+    let status = match seal {
+        true => Status {
+            mode: Mode::Sealed,
+            seal: Some(SealStatus {
+                reason: SealReason::HarnessExit,
+                workspace_head: None,
+            }),
+            ..Status::default()
+        },
+        false => Status::default(),
     };
     fs::write(
         cli::status_json(&entry),
@@ -201,17 +221,44 @@ fn it_refuses_while_a_recorder_holds_rec_lock() {
     assert!(fake.chunks().is_empty() && fake.heartbeats().is_empty());
 }
 
-/// An entry `status.json` does not call sealed is never sealed on the server, even when its last
-/// line on disk is an `E` line (a rotation, or a recovery `R`, before a crash).
+fn parts(entry: &Path) -> Vec<Vec<u8>> {
+    let rec = part_files(&entry.join("rec")).unwrap();
+    rec.iter().map(|p| fs::read(p).unwrap()).collect()
+}
+
+/// U8: a dead entry is closed with the `recovered` seal under `upload.lock`, its final heartbeat
+/// goes first and says `gaps` with the counts of `counts.jsonl`, and it is sent whole.
 #[test]
-fn an_entry_with_no_seal_is_not_sent_as_sealed() {
+fn a_dead_entry_is_closed_recovered_and_sent_whole() {
     let fake = FakeWorker::start();
     let dir = tempfile::tempdir().unwrap();
-    let (entry, _) = sealed(dir.path(), &fake, DEADLINE);
-    let status = serde_json::to_vec(&Status::default()).unwrap();
-    fs::write(cli::status_json(&entry), status).unwrap();
-    assert_eq!(upload(dir.path(), &entry, false), Outcome::NotClosed);
+    let (entry, _) = entry(dir.path(), &fake, DEADLINE, false);
+    assert!(part_files(&entry.join("rec")).unwrap().len() >= 3);
+    assert_eq!(upload(dir.path(), &entry, true), Outcome::Done);
+    let status: Status = serde_json::from_slice(&fs::read(cli::status_json(&entry)).unwrap()).unwrap();
+    assert_eq!(status.mode, Mode::Sealed);
+    assert_eq!(status.seal.unwrap().reason, SealReason::Recovered);
+    let beats = fake.heartbeats();
+    assert_eq!(beats[0]["final"], true);
+    assert_eq!(beats[0]["recording"], "gaps");
+    assert_eq!(beats[0]["counts"]["http_post"], 42, "counts from counts.jsonl");
+    assert_eq!(beats[0]["model_requests"], 42);
+    assert_eq!(state::read(&entry).unwrap().final_, Final::Sealed);
+    assert_eq!(fake.stream(ENTRY), parts(&entry).concat(), "cat rec-*.gcr.zst");
+}
+
+/// A dead entry while a recorder holds `rec/lock`: nothing is sent and no recovery frame written.
+#[test]
+fn a_dead_entry_a_recorder_holds_is_left_alone() {
+    let fake = FakeWorker::start();
+    let dir = tempfile::tempdir().unwrap();
+    let (entry, _) = entry(dir.path(), &fake, DEADLINE, false);
+    let before = parts(&entry);
+    let held = File::open(entry.join("rec/lock")).unwrap();
+    held.try_lock().unwrap();
+    assert_eq!(upload(dir.path(), &entry, false), Outcome::StillRecording);
     assert!(fake.chunks().is_empty() && fake.heartbeats().is_empty());
+    assert_eq!(parts(&entry), before, "no part file changed");
 }
 
 /// `upload.json` is a cache: with it lost, an entry the server holds sealed is confirmed from the

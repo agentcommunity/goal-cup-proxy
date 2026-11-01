@@ -33,7 +33,7 @@ pub enum Outcome {
     AlreadyThere,
     /// A recorder holds `rec/lock`: the entry sends itself.
     StillRecording,
-    /// The entry has no seal and no recorder: `pipeline::close_dead_entry` (PRD-02 9.4) closes it.
+    /// The dead-entry close failed (an I/O error, in `goalcup.log`).
     NotClosed,
     /// The run has no server.
     Local,
@@ -50,10 +50,11 @@ pub enum Outcome {
 /// Sends the entry in `entry_dir` of the run in `run_dir`. Says `StillRecording` at once while a
 /// recorder holds `rec/lock`, checked before `upload.lock` and on every 1 s tick spent waiting for
 /// another uploader to let `upload.lock` go. An entry is sealed when `status.json` says `sealed`
-/// with its seal, or `upload.json` says the server sealed it; any other is `NotClosed`. A sealed
-/// entry with nothing left on disk to check against (every part pruned and `upload.json` lost) is
-/// decided by the server: `AlreadyThere` when it holds the entry sealed, `Stuck` otherwise, so a
-/// sealed entry is never handed to `pipeline::close_dead_entry`.
+/// with its seal, or `upload.json` says the server sealed it. Only an entry with no seal anywhere
+/// is handed to `pipeline::close_dead_entry` (section 9 step 2), under `upload.lock`, and then
+/// sent with the `recovered` seal; a failed close is `NotClosed`. A sealed entry with nothing left
+/// on disk to check against (every part pruned and `upload.json` lost) is decided by the server:
+/// `AlreadyThere` when it holds the entry sealed, `Stuck` otherwise.
 pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> Outcome {
     let held = loop {
         if recording(entry_dir) {
@@ -68,17 +69,24 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
         return Outcome::StillRecording;
     }
     let old = state::read(entry_dir).unwrap_or_default();
-    let seal = sealed(entry_dir).and_then(|s| s.seal);
     let stored = old.final_ == Final::Sealed;
-    if seal.is_none() && !stored {
-        return Outcome::NotClosed;
+    let (mut status, mut closed) = (sealed(entry_dir), None);
+    if status.is_none() && !stored {
+        // No seal anywhere: the entry is dead, closed here while `upload.lock` is held.
+        match pipeline::close_dead_entry(entry_dir) {
+            Err(_) => return Outcome::StillRecording,
+            Ok(pipeline::Closed::Sealed(f)) => closed = Some(f),
+            Ok(pipeline::Closed::AlreadySealed) => status = sealed(entry_dir),
+            Ok(pipeline::Closed::Failed(_)) => return Outcome::NotClosed,
+        }
     }
+    let seal = status.and_then(|s| s.seal);
     let link = seal_link(&entry_dir.join("rec"));
     // Every part pruned: the confirmed end of an entry the server sealed stands for the seal LINK.
     let kept = old.confirmed.clone().filter(|_| stored);
     let end = link.map(|l| (l.raw_end, l.seq, hex(&l.hash)));
     let end = end.or(kept.map(|c| (c.raw, c.seq, c.hash)));
-    if end.is_none() && seal.is_none() {
+    if end.is_none() && seal.is_none() && closed.is_none() {
         return Outcome::NotClosed;
     }
     let keep = keep || old.keep;
@@ -98,8 +106,8 @@ pub fn run(entry_dir: &Path, run_dir: &Path, ids: (&str, &str), keep: bool) -> O
         }
         (Ok(_), Some(_), Some(point)) => {
             // A separate process: the totals may decode the part files (`counts.jsonl` for pruned
-            // boots).
-            let seal = facts(seal, pipeline::entry_totals(entry_dir));
+            // boots). A close here gave its own.
+            let seal = closed.unwrap_or_else(|| facts(seal, pipeline::entry_totals(entry_dir)));
             let mut e = Entry::new(entry_dir, client, ids, point, seal, (j, file));
             e.held = Some(held);
             // Dropping `e` writes `upload.json`.
