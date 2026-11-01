@@ -555,8 +555,8 @@ def recorder_kills(r, kinds):
             r.flag(not 0 <= late <= 2, "faults", "FAIL",
                    "gap ended %.1f s after the kill (limit 2 s); gap length %s ms" % (late, ms))
             long = ms is None or ms >= 2000
-            r.flag(long and k not in quiet, "faults", "FAIL", "a recorder_down gap of %s ms, not under 2 s" % ms)
-            r.flag(long and k in quiet, "faults", "INCONCLUSIVE", "quiet kill: gap of %s ms, length not shown" % ms)
+            r.flag(long, "faults", "INCONCLUSIVE" if k in quiet else "FAIL",
+                   ("quiet kill: gap of %s ms, length not shown" if k in quiet else "a recorder_down gap of %s ms, not under 2 s") % ms)
     r.flag(kills and dig(r.local, "s6_exit") != 1, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def near(gap, fault):

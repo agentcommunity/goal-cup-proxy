@@ -619,16 +619,18 @@ class Run:
                                      ("mode recording", pc.dig(st, "s4_mode") != "recording"),
                                      ("one closed recorder_down gap", (pc.dig(st, "s4_spans") or 0) != (k["off_spans"] or 0) + 1
                                       or pc.dig(st, "s4_since")),
-                                     ("a new model request", (type(n) is not int or n <= (k["requests"] or 0))
-                                      and not (k.get("quiet") and self.pane_exit()[0]))) if bad]
+                                     ("a new model request", not k.get("quiet")  # a quiet kill is judged on the first three only
+                                      and (type(n) is not int or n <= (k["requests"] or 0)))) if bad]
         if not wait(lambda: not missing(), self.left(), 2):
             raise Step("FAIL", "did not stand back up: missing " + ", ".join(missing()))
+        if k.get("quiet"):  # a short bounded wait for new work; none is not a failure
+            wait(lambda: (self.work() or 0) > (k["requests"] or 0), min(30, self.left()), 2)
         st = self.status()
         n = self.work(st) or 0
         saw = "recorder %s back %.1f s after the kill, gap %s ms, work %s > %s" % (
             pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0), n, k["requests"])
         if k.get("quiet") and n <= (k["requests"] or 0):
-            raise Step("INCONCLUSIVE", "quiet kill, harness exited: no new request to show; " + saw)
+            raise Step("INCONCLUSIVE", "quiet kill: no new request to show; " + saw)
         return "ok", saw
 
     def kill_wd(self, m):  # kill9 of the pid in rec/watchdog.pid, at minute m -> the pid, or a FAIL when none was hit

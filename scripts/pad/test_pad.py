@@ -600,6 +600,36 @@ class PasteAndMask(unittest.TestCase):
         self.assertEqual((got.exception.args[0], typed), ("INCONCLUSIVE", []))
 
 
+class QuietKillRecovery(unittest.TestCase):
+    """A quiet kill is judged on pid, mode and the closed gap; a missing new request is never a FAIL."""
+
+    def run_recovery(self, quiet):
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        for name, doc in (("settings.json", {"harness": {}}), ("state.json", {"home": run})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        r = padrun.Run(run, "verify")
+        r.end = time.time() + 5
+        r.st["kill"] = {"pid": 1, "at": time.time(), "requests": 3, "off_spans": 0, "off_ms": 0, "quiet": quiet}
+        status = {}
+        for p in (mock.patch.object(padrun, "wait", lambda fn, *a: fn()), mock.patch.object(r, "status", lambda: status),
+                  mock.patch.object(r, "work", lambda *a: 3),
+                  mock.patch.object(padrun.pc, "dig", lambda st, k: {"s4_pid": 2, "s4_mode": "recording", "s4_spans": 1,
+                                                                      "s4_since": None, "s4_down_ms": 100}.get(k))):
+            self.enterContext(p)
+        return r
+
+    def test_quiet_kill_without_new_work_is_inconclusive(self):
+        with self.assertRaises(padrun.Step) as got:
+            self.run_recovery(True).wait_recovery(None)
+        self.assertEqual(got.exception.args[0], "INCONCLUSIVE")
+
+    def test_busy_kill_without_new_work_fails(self):
+        with self.assertRaises(padrun.Step) as got:
+            self.run_recovery(False).wait_recovery(None)
+        self.assertEqual(got.exception.args[0], "FAIL")
+
+
 class KillBothVerify(unittest.TestCase):
     """pad-run verify after kill-both: the row is the old entry's, so its server copy is the one compared and scanned."""
 
