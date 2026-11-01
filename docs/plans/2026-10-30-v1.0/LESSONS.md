@@ -75,7 +75,7 @@ lessons lane (PRD-17); read by the deletion gate (PRD-17 Acceptance, checks 1 to
 | L-W1 | 2.5 | A: proxy_ws.rs (PRD-03); R: RR1 | PRD-03 | green | 7e620577 |
 | L-W2 | 2.5 | A: lessons_ws::negotiation_accepts_only_rfc7692 (parser half); A: lessons_ws::unknown_extension_relays_inside_a_named_loss (parser); A: lessons_ws::unknown_extension_through_serve (relay half, with the conn GAP and its `lost`) | PRD-17 | green | c39737d9 |
 | L-W3 | 2.5 | A: lessons_ws::server_max_window_bits_10_decodes | PRD-17 | green | 0fa43715 |
-| L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (no case drops a record: the guard drop is structural, the inflater is fed by the decoder and never by the recorder, see the test comment); R: RR1 | PRD-17 | green | 8dc99969 |
+| L-W4 | 2.5 | A: lessons_ws::takeover_history_carries_between_messages (no case drops a record: `StreamHandle::ws` returns nothing, so the parser cannot know a piece was dropped and keeps inflating; the guard's own GAP is in pipeline_guard.rs); R: RR1 | PRD-17 | green | 8dc99969 |
 | L-W5 | 2.5 | A: lessons_ws::bfinal_ends_takeover_history | PRD-17 | green | 0fa43715 |
 | L-W6 | 2.5 | A: lessons_ws::one_byte_reads_decode_the_same | PRD-17 | green | 0fa43715 |
 | L-W7 | 2.5 | A: lessons_ws::violations_are_named_and_relaying_goes_on (parser); A: lessons_ws::violations_through_serve (relay half, with the 5a GAP) | PRD-17 | green | c39737d9 |
