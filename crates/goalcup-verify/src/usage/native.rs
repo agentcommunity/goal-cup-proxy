@@ -238,7 +238,11 @@ impl Native {
                     };
                     // Depth is known only for a main (0) and a child of a main (1).
                     let main = parent.as_ref().and_then(hit);
-                    let depth = if parent.is_none() { Some(0) } else { main.as_ref().map(|_| 1) };
+                    let depth = if parent.is_none() {
+                        Some(0)
+                    } else {
+                        main.as_ref().map(|_| 1)
+                    };
                     (id, main.or(parent), depth, None)
                 }
                 None => {
