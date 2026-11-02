@@ -181,7 +181,7 @@ integration commit, PRD-00 "Where the build runs"; with `where = "here"`, the `g
 `goalcup start --hosts`, S16; PRD-11's acceptance 3 passes one with a host removed; the dodger case makes
 its own copy, section 2; both work in test and practice runs only, PRD-00 owner question 4), `keep`
 (default true; false leaves `GOALCUP_KEEP_PARTS` unset, only for K8 and PRD-06's U5, and such a row can
-never give a tier, C4) and `keep_going` (idle minutes before "keep going", default 1). An unknown key is a
+never give a tier, C4) and `keep_going` (idle minutes before "keep going", default 1). `cap_usd`, `box_extra_minutes` and `box_vcpus` replace the `pad.toml` value for this row only. An unknown key is a
 usage error, so a typo never runs the wrong test quietly. There is no server address setting: the rig
 knows only the staging Worker and loopback, so production is always refused (ledger B4; the allowlist
 of `scripts/matrix.sh:253-258`, `:559-600`, without its production flag).

@@ -78,6 +78,42 @@ class Settings(unittest.TestCase):
             pad.load_settings(dict(BASE, key="cf"), PADCFG)
 
 
+class RowOverrides(unittest.TestCase):
+    """Wave 1: a row may set cap_usd, box_extra_minutes and box_vcpus; pad.toml stays the default."""
+
+    def test_row_values_replace_pad_toml(self):
+        s = pad.load_settings(dict(BASE, cap_usd=3, box_extra_minutes=10, box_vcpus=2), PADCFG)
+        got = pad.row_pad(s, dict(PADCFG, cap_usd=10, box_extra_minutes=30, box_vcpus=4))
+        self.assertEqual((got["cap_usd"], got["box_extra_minutes"], got["box_vcpus"]), (3, 10, 2))
+        self.assertEqual(got["keys"], PADCFG["keys"])
+
+    def test_absent_keeps_pad_toml(self):
+        s = pad.load_settings(dict(BASE), PADCFG)
+        self.assertEqual(pad.row_pad(s, dict(PADCFG, cap_usd=10))["cap_usd"], 10)
+
+    def test_bad_values_are_usage(self):
+        for k, v in (("cap_usd", 0), ("cap_usd", "3"), ("cap_usd", True), ("box_vcpus", 3), ("box_vcpus", 2.5),
+                     ("box_extra_minutes", -1), ("box_extra_minutes", 2.5)):
+            with self.assertRaises(pad.Usage, msg=(k, v)):
+                pad.load_settings(dict(BASE, **{k: v}), PADCFG)
+
+    def test_main_passes_row_values_to_every_run(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        f = os.path.join(d, "s.toml")
+        with open(f, "w") as fh:
+            fh.write('harness = "codex-cli"\nkey = "openai"\nmode = "micro"\ncase = "all"\ncap_usd = 3\nbox_vcpus = 2\n')
+        seen = []
+        with mock.patch.object(pad, "run_all", lambda s, p, h, o, c: seen.append((p, c)) or [("PASS", "")] * len(c)):
+            pad.main(["pad", f])
+        p, cases = seen[0]
+        self.assertEqual((p["cap_usd"], p["box_vcpus"]), (3, 2))
+        self.assertEqual(cases, ["direct", "gateway", "dodger"])
+
+    def test_mini_template_loads(self):
+        s = pad.load_settings(pad.read_toml(os.path.join(HERE, "runs", "mini.toml")), pad.read_toml(os.path.join(HERE, "pad.toml")))
+        self.assertEqual((s["mode"], s["minutes"], s["server"], s["steps"], s["cap_usd"]), ("micro", 10, "staging", ["keep-going"], 3))
+
+
 class NotVerified(unittest.TestCase):
     """PRD-12 section 9: a stated reason means nothing runs, exit 3, and the table shows that reason."""
 
