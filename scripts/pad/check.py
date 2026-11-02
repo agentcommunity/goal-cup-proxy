@@ -232,20 +232,29 @@ class Run:
         """Known-value hits of the plain scan only: a shape hit there is not a planted .env value (None when no scan)."""
         doc = load(self.folder, "verify/secrets-plain.json")
         if isinstance(doc, dict) and any(k in doc for k in SECRET_HITS):
-            return count(doc.get("known_hits"))
+            return sum(1 for h in doc.get("known_hits") or []
+                       if isinstance(h, dict) and not str(h.get("in")).endswith("/deltas"))  # a deltas-only echo is the stated loss
         return self.hits("secrets-plain")
 
     def stated_loss(self):
-        """Shape kinds and streams when every secret hit is a shape in a joined SSE deltas body (PRD-05 Risks "Model echo": JSON
-        framing sits between the pieces, a stated loss), else None. A hit with no stream path, a known value, a big MASK or
+        """Kinds and streams when every secret hit (known or shape) is in a joined SSE deltas body (PRD-05 Risks "Model echo":
+        JSON framing sits between the pieces, and a known value split across stream events cannot be masked: a stated loss,
+        owner answer 2 Nov), else None. A hit with no stream path, in a request body or a contiguous stream, a big MASK or
         any other location is not this."""
         doc = load(self.folder, "verify/secrets.json")
         shapes = doc.get("shape_hits") if isinstance(doc, dict) else None
-        if not isinstance(shapes, list) or not shapes or any(count(doc.get(k)) for k in ("hits", "known_hits", "big_masks")):
+        known = doc.get("known_hits") if isinstance(doc, dict) else None
+        shapes, known = shapes if isinstance(shapes, list) else [], known if isinstance(known, list) else []
+        if not (shapes or known) or any(count(doc.get(k)) for k in ("hits", "big_masks")):
             return None
-        if not all(isinstance(h, dict) and str(h.get("in")).endswith("/deltas") for h in shapes):
+        if not all(isinstance(h, dict) and str(h.get("in")).endswith("/deltas") for h in shapes + known):
             return None
-        return sorted({str(h.get("kind")) for h in shapes}), sorted({str(h["in"]) for h in shapes})
+        return (sorted({str(h.get("kind")) for h in shapes}), sorted({str(h["in"]) for h in shapes + known}))
+
+    def loss_known(self):
+        """Known-value hits that are the stated loss (0 when none)."""
+        doc = load(self.folder, "verify/secrets.json")
+        return count(doc.get("known_hits")) if self.stated_loss() and isinstance(doc, dict) else 0
 
     def loss_exit(self, code):
         """True when exit 2 comes from the stated loss alone, the verifier's only failed check."""
@@ -486,6 +495,9 @@ def scan(r, name, where):
     n = r.hits(name)
     loss = r.stated_loss() if name == "secrets" else None
     if loss:  # owner answer: a stated loss with 0 known hits is a PASS with a note; a known hit makes loss None, so it still fails
+        if r.loss_known():
+            return r.mark("C3", "PASS", "stated loss: known value split in streamed reply (masking cannot see a value split across "
+                          "stream events; future improvement): %s known hits in %s" % (r.loss_known(), ", ".join(loss[1])))
         return r.mark("C3", "PASS", "stated loss: shape in streamed reply: %s in %s"
                       % (", ".join(loss[0]), ", ".join(loss[1])))
     r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
@@ -846,6 +858,7 @@ def facts(r):
             "subagents": sum(1 for t in threads if dig(t, "t_parent")), "gaps": r.gaps()[1], "off_ms": dig(e, "s6_off"),
             "provider_errors": dict(kn for en in r.entries for kn in items(dig(en, "s6_errors"))),
             "secret_hits": r.hits("secrets"), "masks": r.masks() or {}, "plain_hits": r.hits("secrets-plain"),
+            "stated_loss_known_hits": r.loss_known(),
             "screen_known": m.get("screen_known"), "canary": "not planted", "tokens": dig(u, "s7_tokens"),
             "models": [x.get("model") for x in dig(u, "s7_models") or [] if isinstance(x, dict)],
             "pinned_model": m.get("pinned_model"),
