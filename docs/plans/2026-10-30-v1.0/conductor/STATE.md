@@ -1,6 +1,6 @@
-# Conductor state, Monday 2 November 2026, 01:20 UTC
+# Conductor state, Monday 2 November 2026, 01:24 UTC
 
-Deadline Friday 6 November. Proposed freeze Tuesday 3 November 18:00 UTC (owner to confirm, ask 6 below). This page is only the position; `FINISH-PLAN.md` has the wave plan, `ledger/integrator.log` the history (last line copied here is 01:15Z).
+Deadline Friday 6 November. Proposed freeze Tuesday 3 November 18:00 UTC (owner to confirm, ask 6 below). This page is only the position; `FINISH-PLAN.md` has the wave plan, `ledger/integrator.log` the history (the committed copy ends at 23:12Z; the live log is ahead of it until the handover refreshes the copy).
 
 Written by the conductor session `https://claude.ai/code/session_01V2hUmHs6BvBcJ15LjVdEnY`. The code-wave lanes are running as this page is written (see the table below). A new session takes over from here and writes `Conductor resumed in a new session at <time>Z on <head>.` as its first ledger line.
 
@@ -12,7 +12,7 @@ The handover branch `v1.0/conductor-handover` is still being finished (tasks 9 a
 
 ## Merged since 31 October
 
-84 merge lines in `ledger/integrator.log`, each after gate fast PASS (a few docs-only ones). Count of merges by package: PRD-12 pad rig 16; PRD-08 verifier, PRD-10 CLI and PRD-17 lessons 10 each; PRD-15 docs 8; PRD-11 connectors and PRD-02 recorder core 6 each; PRD-06 uploader 4; PRD-03 proxy 3; PRD-14 tests and PRD-05 masking 2 each; one each for PRD-01 format, PRD-07 Worker, PRD-09 usage, PRD-13 cut (763 paths, `d7759fdc`), PRD-16 post-cut slice, the interim morning note and the handover. The model-pin slice for pad runs is `9e5306ac`; the Hermes `state.db` drop is `88329c47`. Take exact lists from `ledger/integrator.log` (lines with `| merge |`).
+The committed `ledger/integrator.log` has 83 merge lines (the live log had 84 at 01:15Z), each after gate fast PASS (a few docs-only ones). Count of merges by package: PRD-12 pad rig 16; PRD-08 verifier, PRD-10 CLI and PRD-17 lessons 10 each; PRD-15 docs 8; PRD-11 connectors and PRD-02 recorder core 6 each; PRD-06 uploader 4; PRD-03 proxy 3; PRD-14 tests and PRD-05 masking 2 each; one each for PRD-01 format, PRD-07 Worker, PRD-09 usage, PRD-13 cut (763 paths, `d7759fdc`), PRD-16 post-cut slice, the interim morning note and the handover. The model-pin slice for pad runs is `9e5306ac`; the Hermes `state.db` drop is `88329c47`. Take exact lists from `ledger/integrator.log` (lines with `| merge |`).
 
 ## Code wave and open branches
 

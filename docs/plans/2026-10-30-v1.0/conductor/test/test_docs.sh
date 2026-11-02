@@ -7,7 +7,7 @@ grep -n $'\xe2\x80\x94' $P && fail t_no_em_dash "" || ok t_no_em_dash
 grep -nEi 'claude-(haiku|opus|sonnet)|haiku|opus|sonnet|gpt-[0-9]|deepseek-v[0-9]|gemini-[0-9]' "$C/STATE.md" "$C/SECRETS.md" "$C/NEW-SESSION-PROMPT.md" "$C/reports/README.md" "$C/handoff-head.md" && fail t_no_model_ids "" || ok t_no_model_ids
 # t_secrets_match_keyscan
 want=$(python3 -c "import sys;sys.path.insert(0,'$C');import keyscan;print('\n'.join(sorted(keyscan.NAMES)))")
-got=$(grep -oE '^- `[A-Z_]+`' "$C/SECRETS.md" | tr -d '`- ' | sort)
+got=$(grep -oE '^- `[A-Z_]+`' "$C/SECRETS.md" | sed -E 's/^- `([A-Z_]+)`$/\1/' | sort)
 [ "$want" = "$got" ] && ok t_secrets_match_keyscan || fail t_secrets_match_keyscan "$(diff <(echo "$want") <(echo "$got"))"
 # t_draft_cites_ledger: every draft line's time is in the ledger copy (checked after Task 10 adds ledger/)
 for t in $(grep -oE '[0-9]{2}:[0-9]{2}Z' "$C/owner-decisions-draft.md" | sort -u); do grep -q "^$t" "$C/ledger/integrator.log" 2>/dev/null || [ ! -d "$C/ledger" ] || fail t_draft_cites_ledger "$t"; done; ok t_draft_cites_ledger
