@@ -1210,5 +1210,38 @@ class SelftestOfflineC3(unittest.TestCase):
         self.assertEqual(st.run_offline_controls()["C3-body"]["state"], "FAIL")
 
 
+class CleanupListCoversIndexBox(unittest.TestCase):
+    """The cleanup list must confirm the index box (pad-dbf-<id>) gone too, not only the run box."""
+
+    def cleanup(self, idx_status):
+        with tempfile.TemporaryDirectory() as out:
+            s = pad.load_settings(dict(BASE, mode="micro"), PADCFG)
+            s["where"] = "sandbox"
+            r = pad.Run(s, "direct", PADCFG, Walk.HARNESS, out)
+            self.addCleanup(shutil.rmtree, r.tmp, True)
+            r.tried = True
+            idx = "pad-dbf-" + r.name[len("pad-"):]
+
+            def fake(argv, timeout=None, env=None):
+                out_ = ""
+                if argv[2] == "list":
+                    rows = [{"name": r.name, "status": "stopped"}, {"name": idx, "status": idx_status}]
+                    out_ = "\n".join(json.dumps(x) for x in rows)
+                return subprocess.CompletedProcess(argv, 0, out_, "")
+            with mock.patch.object(pad, "call", fake):
+                res, saw = r.step_cleanup()
+        return res, saw, idx
+
+    def test_live_index_box_is_left_and_named(self):
+        res, saw, idx = self.cleanup("running")
+        self.assertEqual(res, "left", saw)
+        self.assertIn("left: " + idx, saw)
+
+    def test_stopped_index_box_is_gone(self):
+        res, saw, _ = self.cleanup("stopped")
+        self.assertEqual(res, "ok", saw)
+        self.assertIn("list shows no live box", saw)
+
+
 if __name__ == "__main__":
     unittest.main()
