@@ -1190,5 +1190,25 @@ class ExitKeys(unittest.TestCase):
         self.assertEqual(h["gateway"]["model"], cfg["model"])  # owner rule 19:17Z, conductor note 22:00Z, gw3 PASS 20:27Z
 
 
+class SelftestOfflineC3(unittest.TestCase):
+    """The selftest must prove a known-value hit maps to C3 FAIL and a deltas-only one to the stated-loss PASS, offline."""
+
+    def test_selftest_has_the_two_offline_c3_controls_and_they_read_as_wanted(self):
+        st = load("padselftest", "selftest")
+        labels = [c[0] for c in st.OFFLINE]
+        self.assertEqual(labels, ["C3-body", "C3-deltas"])
+        got = st.run_offline_controls()
+        self.assertEqual(got["C3-body"]["state"], "PASS", got["C3-body"])  # control passes = C3 read FAIL as wanted
+        self.assertEqual(got["C3-deltas"]["state"], "PASS", got["C3-deltas"])
+        self.assertIn("C3 FAIL", got["C3-body"]["saw"])
+        self.assertIn("C3 PASS", got["C3-deltas"]["saw"])
+        self.assertIn("split in streamed reply", got["C3-deltas"]["saw"])
+
+    def test_an_offline_control_that_reads_wrong_is_a_fail(self):
+        st = load("padselftest2", "selftest")
+        st.OFFLINE[:] = [("C3-body", st.OFFLINE[0][1], "PASS", None)]  # wanted PASS, but a request-body hit reads FAIL
+        self.assertEqual(st.run_offline_controls()["C3-body"]["state"], "FAIL")
+
+
 if __name__ == "__main__":
     unittest.main()
