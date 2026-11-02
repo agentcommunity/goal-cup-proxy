@@ -1308,3 +1308,36 @@ pub fn recover_on_again(name: &str, part: usize, span: &str, from: &str, to: &st
          The final counts are shown by: goalcup status (or goalcup seal)"
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn not_masked_counts_and_grammar() {
+        assert_eq!(not_masked(0), None);
+        assert_eq!(
+            not_masked(1).as_deref(),
+            Some("1 key value was not added to masking.")
+        );
+        assert_eq!(
+            not_masked(3).as_deref(),
+            Some("3 key values were not added to masking.")
+        );
+    }
+
+    #[test]
+    fn masking_text_names_known_key_values() {
+        let t = masking(None);
+        assert!(t.contains("values of known keys"));
+        assert!(t.contains("held in memory only"));
+    }
+
+    #[test]
+    fn hermes_line_matches_the_verifier() {
+        assert_eq!(
+            HERMES_SUBAGENTS,
+            "Subagents are shown by their task logs, not tied to individual calls."
+        );
+    }
+}
