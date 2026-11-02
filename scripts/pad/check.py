@@ -291,6 +291,9 @@ def cause(r):
         return "provider_refused: 401 or 403 from the model host"
     return None
 
+WORK_REQUESTS = 10  # model requests that show work without a commit
+
+
 def judge(r):
     seen = dig(r.status, "s4_requests") if r.reqs is None else r.reqs  # None: no count in the folder
     if ("pre", REFUSES) in watchers(r.meta):
@@ -300,8 +303,8 @@ def judge(r):
         stale(r)  # whatever else happened, as C3
     pin = r.meta.get("model_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
     tunnels = (r.hosts("s6_tunnel_hosts") or {}).get(pin, 0)  # section 2: a dodger's calls ride `pinned` tunnels
-    work = (seen or tunnels or r.native or dig(r.usage, "s7_native")) and (r.meta.get("commits_since_start") or 0) >= 1
-    idle = "the harness did no work (commits since start %s, model requests %s)" % (r.meta.get("commits_since_start"), seen)
+    work = (seen or tunnels or r.native or dig(r.usage, "s7_native")) and ((r.meta.get("commits_since_start") or 0) >= 1 or (seen or 0) >= WORK_REQUESTS)  # W2: a young Paynest row commits nothing yet
+    idle = "the harness did no work (commits since start %s, model requests %s; work is a commit or %d model requests)" % (r.meta.get("commits_since_start"), seen, WORK_REQUESTS)
     stop = cause(r) or (None if work else ("the harness lost its terminal; " if lost_terminal(r) else "") + idle)
     if stop:
         for c in ("C1", "C2", "C4", "C5", "C6", "faults"):

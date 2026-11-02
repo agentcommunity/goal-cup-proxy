@@ -18,7 +18,7 @@ key_file = "{home}/.gemini/.env"
 key_line = "GEMINI_API_KEY={key}"
 # Pad data for the dodger copy only (section 2): the Gemini API key route calls this host.
 model_host = "generativelanguage.googleapis.com"
-# The tool-approval default is a per-session choice: Ctrl+Y turns YOLO on, as a participant would (keyboard-shortcuts page).
+# Unattended approvals (geminicli.com/docs/reference/configuration/, read 2 Nov 2026): general.defaultApprovalMode "auto_edit" and tools.allowed in the settings file; YOLO is a launch flag only, and the Ctrl+Y key below did not hold (0.66.0 stopped at "Apply this change?").
 pre_keys = '\031'
 exit_keys = '/quit\r'
 keep_going = true
