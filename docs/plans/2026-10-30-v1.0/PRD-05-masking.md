@@ -559,7 +559,7 @@ tracker per stream, is deferred to after 1.0; it runs only if the one-hour runs 
 falling behind (the masking backlog grows through the hour, or a hold or candidate bound trips
 `fail_closed`) and the ratio above is below 0.8. It is 0.42 today.
 
-**Memory of the compiled forms (measured, same release box).** The masker's peak resident memory was
+**Memory of the old per-form matcher (history; superseded by the 2026-11-01 and 2026-11-02 paragraphs above, where the trie peaks at about 38 MB with 32 values of 256 bytes).** The old masker's peak resident memory was
 about 39 MB with 8 values of 100 bytes, 104 MB with 32 of 100 and 238 MB with 32 of 256. That memory
 is the compiled exact-value forms; it stays resident in the recorder for the whole run, and PRD-02's
 memory guard does not count it (the guard counts held bytes). It is a stated cost, not a cap: the
@@ -568,8 +568,8 @@ literals alone.
 
 Seam note for PRD-14: its by-hand load notes should carry these numbers beside A5's, name the
 start-up time with 32 long values as the one cost the participant sees (a slower `start`), and name
-the resident memory of the compiled forms (up to about 240 MB with 32 long values) beside the
-recorder's own figure.
+the resident memory of the compiled forms (about 38 MB with 32 long values in the trie; the 240 MB
+figure was the removed per-form regexes) beside the recorder's own figure.
 
 ### 12. Participant text (for PRD-10 and PRD-15)
 
