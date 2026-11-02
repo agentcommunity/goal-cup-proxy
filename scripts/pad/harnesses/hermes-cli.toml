@@ -28,6 +28,8 @@ model_host = "api.deepseek.com"
 redacts_tool_output = true
 # The planted kinds the vendor rule above names (sk- and ghp_ shapes); only these can pass as masked upstream.
 redacts_kinds = ["openai_key", "github_token"]
+# Hermes child threads come from the task-log reader: shown by their logs, not tied to calls (owner, 1 Nov 2026).
+subagents_by_task_log = true
 ready_text = "Type your message or /help"
 ready_wait = 120
 exit_keys = '/exit\r'

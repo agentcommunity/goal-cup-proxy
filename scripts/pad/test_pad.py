@@ -521,6 +521,7 @@ class StatedLoss(unittest.TestCase):
     DELTAS = {"kind": "generic_secret_assignment", "in": "e1/1.3/deltas", "sha12": "a" * 12, "n": 1}
     PLAIN = {"kind": "generic_secret_assignment", "in": "e1/1.3", "sha12": "a" * 12, "n": 1}
     KNOWN = {"form": "raw", "in": "e1/1.3/deltas", "sha12": "b" * 12, "n": 1}
+    KNOWN_BODY = {"form": "raw", "in": "e1/1.3", "sha12": "b" * 12, "n": 1}  # a request body or a contiguous response stream
 
     def run_row(self, known=(), shapes=(), code=2):
         extra = {"verify/secrets.json": {"known_hits": list(known), "shape_hits": list(shapes), "big_masks": [],
@@ -559,7 +560,7 @@ class StatedLoss(unittest.TestCase):
             self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
 
     def test_any_other_hit_still_fails(self):
-        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),
+        for known, shapes in (([self.KNOWN_BODY], [self.DELTAS]), ([self.KNOWN, self.KNOWN_BODY], []), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),
                               ([], [dict(self.DELTAS, **{"in": None})])):
             row = self.run_row(known, shapes)
             self.assertEqual((row["checks"]["C3"], row["faults"]), ("FAIL", "FAIL"), (known, shapes))
@@ -579,8 +580,16 @@ class StatedLoss(unittest.TestCase):
 
     def test_known_or_pathless_hit_with_a_planted_kind_unmasked_still_fails(self):
         masks = dict(SecretCheck.PLANTED, jwt=0)
-        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN])):
+        for known, shapes in (([self.KNOWN_BODY], [self.DELTAS]), ([], [self.PLAIN])):
             self.assertEqual(self.planted_row(known, shapes, masks)["checks"]["C3"], "FAIL", (known, shapes))
+
+    def test_known_value_only_in_streamed_reply_is_a_stated_loss_pass(self):  # T8, owner answer 2 Nov (split-echo gap)
+        for known, shapes in (([self.KNOWN], []), ([self.KNOWN], [self.DELTAS])):
+            row = self.run_row(known, shapes)
+            self.assertEqual(row["checks"]["C3"], "PASS", row["why"])
+            self.assertTrue(any("known value split in streamed reply" in w for w in row["why"]), row["why"])
+            self.assertEqual(row["facts"]["stated_loss_known_hits"], 1)
+        self.assertEqual(self.run_row([self.KNOWN_BODY], [self.DELTAS])["checks"]["C3"], "FAIL")  # same hit in a request body
 
     def test_exit_2_without_a_stated_loss_still_fails(self):
         self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
@@ -622,7 +631,7 @@ class UpstreamRedaction(unittest.TestCase):
         self.assertEqual(self.c3(False, {}), "INCONCLUSIVE")
 
     def test_a_known_hit_still_fails(self):
-        self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN]), "FAIL")
+        self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN_BODY]), "FAIL")
 
     def test_deltas_only_shape_is_a_stated_loss_not_a_fail(self):
         self.assertEqual(self.c3(True, SecretCheck.PLANTED, shapes=[self.DELTAS]), "PASS")
@@ -1048,6 +1057,56 @@ class PinnedModel(unittest.TestCase):
     def test_no_models_read_or_no_pin_says_nothing(self):
         for pin, recorded, read in (("claude-haiku-5-5", [], True), ("claude-haiku-5-5", [], False), (None, ["claude-opus-5-5"], True)):
             self.assertNotIn("pinned", " ".join(self.row(pin, recorded, read=read)["why"]), (pin, recorded, read))
+
+
+class MiniFixRound(unittest.TestCase):
+    """Mini-wave fixes: goose plain count, task-log subagents, OpenClaw redaction data, setup script without provider keys."""
+
+    def test_shape_only_plain_hit_does_not_undo_the_stated_loss(self):  # T3
+        shape = {"kind": "generic_secret_assignment", "in": "e1/1.3/deltas", "sha12": "a" * 12, "n": 1}
+        row = evaluate({"meta.json": {"connector": "goose-cli", "case": "direct", "known_box": True, "entry": "e1",
+                                      "mask_values": {"workspace": 2, "env": 0, "harness": 0, "skipped": 0}},  # exact values on: the old plain count of a shape hit failed here
+                        "verify/secrets.json": {"known_hits": [], "shape_hits": [shape], "big_masks": [], "masks": dict(SecretCheck.PLANTED)},
+                        "verify/secrets-plain.json": {"known_hits": [], "shape_hits": [shape], "big_masks": []},
+                        "verify/secrets-conductor.json": {"hits": 0},
+                        "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 2}})
+        self.assertEqual(row["checks"]["C3"], "PASS", row["why"])
+
+    def usage_row(self, flag, harness="hermes-cli"):
+        use = {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
+               "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3}, {"parent": "t0", "models": {}, "wire_calls": 0}]}
+        meta = {"connector": harness, "case": "direct", "known_box": True, "entry": "e1", "commits_since_start": 1}
+        if flag:
+            meta["subagents_by_task_log"] = True
+        return evaluate({"meta.json": meta, "verify/usage/e1.json": use,
+                         "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "counts": {"model_requests": 5}, "checks": []}]}})
+
+    def test_task_log_subagents_need_no_calls(self):  # T4
+        row = self.usage_row(True)
+        self.assertNotEqual(row["checks"]["C2"], "FAIL", row["why"])
+        self.assertNotEqual(row["checks"]["C5"], "FAIL", row["why"])
+        self.assertTrue(any("subagents shown by their task logs, not tied to calls" in w for w in row["why"]), row["why"])
+        other = self.usage_row(False, "gemini-cli")  # the rule stays for every other harness
+        self.assertEqual(other["checks"]["C2"], "FAIL")
+        self.assertEqual(other["checks"]["C5"], "FAIL")
+
+    def test_pad_copies_the_task_log_flag_and_openclaw_claims_no_redaction(self):  # T4, T1
+        import tomllib
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "harnesses")
+        with open(os.path.join(here, "hermes-cli.toml"), "rb") as f:
+            self.assertIs(tomllib.load(f).get("subagents_by_task_log"), True)
+        with open(os.path.join(here, "openclaw-cli.toml"), "rb") as f:
+            oc = tomllib.load(f)
+        self.assertFalse(oc.get("redacts_kinds"))  # no kind passes C3 on an inference
+
+    def test_setup_script_never_prints_the_environment(self):  # T7
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "prompts", "pad-setup-check.sh")) as f:
+            code = [ln for ln in f.read().splitlines() if not ln.lstrip().startswith("#")]
+        text = "\n".join(code)
+        for bad in ("env", "printenv", "set", "export", "declare", "API_KEY", "/proc/"):
+            self.assertNotRegex(text, r"(^|[\s|;&(])%s($|[\s|;&)=])" % bad if bad.isalpha() else bad, bad)
+        self.assertIn(".env.local", text)
 
 
 class PromptVariant(unittest.TestCase):

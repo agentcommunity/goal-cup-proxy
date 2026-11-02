@@ -17,6 +17,8 @@ key_route = "login"
 login = "bash -lc 'openclaw plugins install @openclaw/deepseek-provider && umask 077 && mkdir -p \"$OPENCLAW_HOME/.openclaw\" && { printf DEEPSEEK_API_KEY=; cat; } > \"$OPENCLAW_HOME/.openclaw/.env\"'"
 # Pad data for the dodger copy only (section 2): provider deepseek calls https://api.deepseek.com.
 model_host = "api.deepseek.com"
+# OpenClaw redacts some of its own tool output (masked_key 212 times on row pad-1f8274), but no per-kind evidence exists, so
+# no redacts_kinds is claimed: C3 stays INCONCLUSIVE on kinds the model did not print, rather than passing on an inference.
 exit_keys = '/exit\r'
 keep_going = true
 # No daemon: PRD-11 names none for OpenClaw. Its subagents need a Gateway that 1.0 does not start (PRD-11 ledger OW-10).

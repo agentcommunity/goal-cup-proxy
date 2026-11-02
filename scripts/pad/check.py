@@ -231,17 +231,33 @@ class Run:
         code = self.exits.get(name)
         return {0: 0, 1: 0, 2: 1}.get(code) if isinstance(code, int) else None  # 1: incomplete, never a hit
 
+    def plain_hits(self):
+        """Known-value hits of the plain scan only: a shape hit there is not a planted .env value (None when no scan)."""
+        doc = load(self.folder, "verify/secrets-plain.json")
+        if isinstance(doc, dict) and any(k in doc for k in SECRET_HITS):
+            return sum(1 for h in doc.get("known_hits") or []
+                       if isinstance(h, dict) and not str(h.get("in")).endswith("/deltas"))  # a deltas-only echo is the stated loss
+        return self.hits("secrets-plain")
+
     def stated_loss(self):
-        """Shape kinds and streams when every secret hit is a shape in a joined SSE deltas body (PRD-05 Risks "Model echo": JSON
-        framing sits between the pieces, a stated loss), else None. A hit with no stream path, a known value, a big MASK or
+        """Kinds and streams when every secret hit (known or shape) is in a joined SSE deltas body (PRD-05 Risks "Model echo":
+        JSON framing sits between the pieces, and a known value split across stream events cannot be masked: a stated loss,
+        owner answer 2 Nov), else None. A hit with no stream path, in a request body or a contiguous stream, a big MASK or
         any other location is not this."""
         doc = load(self.folder, "verify/secrets.json")
         shapes = doc.get("shape_hits") if isinstance(doc, dict) else None
-        if not isinstance(shapes, list) or not shapes or any(count(doc.get(k)) for k in ("hits", "known_hits", "big_masks")):
+        known = doc.get("known_hits") if isinstance(doc, dict) else None
+        shapes, known = shapes if isinstance(shapes, list) else [], known if isinstance(known, list) else []
+        if not (shapes or known) or any(count(doc.get(k)) for k in ("hits", "big_masks")):
             return None
-        if not all(isinstance(h, dict) and str(h.get("in")).endswith("/deltas") for h in shapes):
+        if not all(isinstance(h, dict) and str(h.get("in")).endswith("/deltas") for h in shapes + known):
             return None
-        return sorted({str(h.get("kind")) for h in shapes}), sorted({str(h["in"]) for h in shapes})
+        return (sorted({str(h.get("kind")) for h in shapes}), sorted({str(h["in"]) for h in shapes + known}))
+
+    def loss_known(self):
+        """Known-value hits that are the stated loss (0 when none)."""
+        doc = load(self.folder, "verify/secrets.json")
+        return count(doc.get("known_hits")) if self.stated_loss() and isinstance(doc, dict) else 0
 
     def loss_exit(self, code):
         """True when exit 2 comes from the stated loss alone, the verifier's only failed check."""
@@ -454,7 +470,12 @@ def usage_checks(r, few):
     threads = [t for t in dig(r.usage, "s7_threads") or [] if isinstance(t, dict)]
     unread = r.meta.get("case") == "dodger" and dig(r.usage, "s7_readable") is not True  # section 2: it claims no thread
     r.flag(not unread and not any(dig(t, "t_parent") for t in threads), "C2", "INCONCLUSIVE", "no thread with a parent")
-    r.flag(any(not (dig(t, "t_wire") or dig(t, "t_native")) for t in threads), "C2", "FAIL",
+    # Harness data flag: its subagents are shown by their task logs, not tied to calls, so a child thread has no calls by design.
+    logs = r.meta.get("subagents_by_task_log") is True
+    bound = [t for t in threads if not (logs and dig(t, "t_parent"))]
+    if logs and len(bound) < len(threads):
+        r.why.append("subagents shown by their task logs, not tied to calls")
+    r.flag(any(not (dig(t, "t_wire") or dig(t, "t_native")) for t in bound), "C2", "FAIL",
            "a thread with no wire calls and no native stream")
     sub = r.check("subagents_present")
     r.flag(read(r) and sub not in ("pass", "named"), "C2", "FAIL" if sub else "INCONCLUSIVE",
@@ -468,7 +489,7 @@ def usage_checks(r, few):
     tok = dict(items(dig(r.usage, "s7_tokens")))
     native = r.meta.get("case") != "dodger" or dig(r.usage, "s7_readable") is True  # a dodger's tokens are native only
     r.flag(native and (tok.get("input") or 0) + (tok.get("output") or 0) <= 0, "C5", "FAIL", "merged input plus output tokens are 0")
-    r.flag(any(not dig(t, "t_models") or not (dig(t, "t_wire") or dig(t, "t_native")) for t in threads), "C5", "FAIL",
+    r.flag(any(not dig(t, "t_models") or not (dig(t, "t_wire") or dig(t, "t_native")) for t in bound), "C5", "FAIL",
            "a thread with no model or no calls")
     r.flag(dig(r.usage, "s7_unattributed") != 0, "C5", "FAIL", "coverage.unattributed %s" % dig(r.usage, "s7_unattributed"))
 
@@ -477,6 +498,9 @@ def scan(r, name, where):
     n = r.hits(name)
     loss = r.stated_loss() if name == "secrets" else None
     if loss:  # owner answer: a stated loss with 0 known hits is a PASS with a note; a known hit makes loss None, so it still fails
+        if r.loss_known():
+            return r.mark("C3", "PASS", "stated loss: known value split in streamed reply (masking cannot see a value split across "
+                          "stream events; future improvement): %s known hits in %s" % (r.loss_known(), ", ".join(loss[1])))
         return r.mark("C3", "PASS", "stated loss: shape in streamed reply: %s in %s"
                       % (", ".join(loss[0]), ", ".join(loss[1])))
     r.flag(n != 0, "C3", "FAIL" if n else "INCONCLUSIVE", "%s hits in %s" % (n, where) if n else "no scan of " + where)
@@ -508,7 +532,7 @@ def secrets(r):
     # values on the run_secret MASK. No evidence stays INCONCLUSIVE.
     up = r.meta.get("redacts_tool_output") is True
     loss = r.stated_loss()  # the only hit being the stated loss (scan() reports it) is not a real hit
-    hit, plain, mv = 0 if loss else r.hits("secrets"), r.hits("secrets-plain"), r.exact_values()
+    hit, plain, mv = 0 if loss else r.hits("secrets"), r.plain_hits(), r.exact_values()
     exact = mv is not None
     if exact and (mv.get("skipped") or 0) > 0:  # a stated cut: the planted value may be one of the skipped ones
         r.mark("C3", "INCONCLUSIVE", "exact values skipped %s; the planted value may be cut" % mv.get("skipped"))
@@ -837,6 +861,7 @@ def facts(r):
             "subagents": sum(1 for t in threads if dig(t, "t_parent")), "gaps": r.gaps()[1], "off_ms": dig(e, "s6_off"),
             "provider_errors": dict(kn for en in r.entries for kn in items(dig(en, "s6_errors"))),
             "secret_hits": r.hits("secrets"), "masks": r.masks() or {}, "plain_hits": r.hits("secrets-plain"),
+            "stated_loss_known_hits": r.loss_known(),
             "screen_known": m.get("screen_known"), "canary": "not planted", "tokens": dig(u, "s7_tokens"),
             "models": [x.get("model") for x in dig(u, "s7_models") or [] if isinstance(x, dict)],
             "pinned_model": m.get("pinned_model"),
