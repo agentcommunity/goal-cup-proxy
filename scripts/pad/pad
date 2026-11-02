@@ -10,7 +10,7 @@ NODE_PATH or beside itself), box steps through `pad-run`. The pad never reads a 
 INCONCLUSIVE and no FAIL (also a harness with no key: nothing was run), 2 usage error. Needs Python 3.11 or later; an older python3 re-runs it.
 """
 import concurrent.futures, datetime, fcntl, glob, hashlib, json, math, os, re, secrets, shutil, signal, stat  # noqa: E401
-import subprocess, sys, tarfile, tempfile, threading, time, urllib.parse, urllib.request  # noqa: E401
+import platform, subprocess, sys, tarfile, tempfile, threading, time, urllib.parse, urllib.request  # noqa: E401
 
 if sys.version_info < (3, 11) and __name__ == "__main__":  # the node22 image and many Macs give 3.9
     for exe in ("python3.14", "python3.13", "python3.12", "python3.11"):
@@ -69,6 +69,45 @@ def pinned_model(harness, case):
     """The main model the harness toml pins for this case (the dodger case uses the direct section), or None."""
     got = (harness.get("gateway" if case == "gateway" else "direct") or {}).get("model")
     return got if isinstance(got, str) and got else None
+
+def build_commit(build_dir):
+    """The 40-hex commit in `<build_dir>/commit`, or None. A folder named like a short commit (7 to 40 hex) must be
+    a prefix of it: a stale file never lets a row claim a commit it did not run."""
+    try:
+        with open(os.path.join(build_dir, "commit")) as f:
+            got = f.readline().strip()
+    except OSError:
+        return None
+    if not re.fullmatch(r"[0-9a-f]{40}", got):
+        return None
+    name = os.path.basename(os.path.normpath(build_dir))
+    return got if not re.fullmatch(r"[0-9a-f]{7,40}", name) or got.startswith(name) else None
+
+
+def goalcup_id(repo, commit):
+    """`<version>+<commit>`, the version from the first `version = "..."` line of Cargo.toml at that commit, or None."""
+    if not commit:
+        return None
+    try:
+        r = subprocess.run(["git", "-C", repo, "show", commit + ":Cargo.toml"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    got = re.search(r'^version = "(.*)"$', r.stdout, re.M) if r.returncode == 0 else None
+    return got.group(1) + "+" + commit if got else None
+
+
+def os_id(where):
+    """The OS a row ran on: the box image for `sandbox`, else this machine."""
+    return "linux-x86_64" if where == "sandbox" else platform.system().lower() + "-" + platform.machine()
+
+
+def head_commit(repo):
+    try:
+        r = subprocess.run(["git", "-C", repo, "rev-parse", "HEAD"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return r.stdout.strip() if r.returncode == 0 and r.stdout.strip() else None
+
 
 def hidden():
     """The values the pad never shows: the conductor's organizer secrets and the parts of DATABASE_URL (host, user,
@@ -463,6 +502,7 @@ class Run:
         self.name, self.lines, self.meta, self.row = "pad-" + secrets.token_hex(3), [], {}, None
         self.stray = []  # index boxes whose rm did not go
         self.fetched, self.kept = set(), {}  # entries whose server copy is here; entries rec/ was tried for: True, or why not
+        self.build, self.pad_commit = None, head_commit(REPO)  # the build folder step_setup used; the pad's own commit
         self.tmp = tempfile.mkdtemp(prefix="pad-")  # box scripts; never in the run folder
         self.box_dir = None  # pad-run's run folder: here, or staged and pushed to the box's ~/run
         self.t0, self.out_root, self.over_cap, self.spender = time.time(), out_root, False, None
@@ -598,6 +638,7 @@ class Run:
             if r.returncode:
                 raise Refused(said("box not created", r))
             build = os.path.join(REPO, s.get("build") or self.pad.get("build", "pad-out/build"))
+            self.build = build
             bins = [b for b in ("goalcup", "goalcup-verify") if os.path.isfile(os.path.join(build, b))]  # none: "no goalcup build"
             for verb, args in [("push-dir", (HERE, "~/pad")), ("push-dir", (stage, "~/run"))] + [
                     ("put", ("~/bin/" + b, "--file", os.path.join(build, b), "--mode", "755")) for b in bins]:
@@ -836,7 +877,9 @@ class Run:
             json.dump(dict(self.meta, spend_usd_est=self.usd, priced_high=self.high, over_cap=self.over_cap, connector=s["harness"],
                            case=self.case, mode=s["mode"], prompt=s["prompt"], variant=self.variant(), where=s["where"],
                            server=s["server"], keep=s["keep"], minutes=s["minutes"],
-                           started=at, push="not tested", pad_trusted_at=None, steps=[list(ln) for ln in self.lines],
+                           started=at, push="not tested", pad_trusted_at=None, pad_commit=self.pad_commit,
+                           goalcup=goalcup_id(REPO, build_commit(self.build)) if self.build else None,
+                           os=os_id(s["where"]), steps=[list(ln) for ln in self.lines],
                            hosts_sha256=self.hosts_sha, model_host=self.harness.get("model_host"),
                            pinned_model=pinned_model(self.harness, self.case),
                            redacts_tool_output=self.harness.get("redacts_tool_output") is True,
