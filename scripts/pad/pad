@@ -46,7 +46,9 @@ MODES = {"micro": {"server": "off", "prompt": "micro", "minutes": 3, "calls": 2}
 LIMITS = {"setup": 5, "pre": 3, "start": 3, "wait-calls": 4, "look": 1, "wait-recovery": 3,
           "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
 KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
-        "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going"}
+        "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going",
+        "cap_usd", "box_extra_minutes", "box_vcpus"}
+OVERRIDES = ("cap_usd", "box_extra_minutes", "box_vcpus")  # a row may replace these pad.toml values for itself
 FAULTS, SPAN = pc.FAULTS, pc.SPAN  # section 3.1: kind to the minutes it lasts by default; the kinds that take +<minutes>
 # pad-run's box steps: the faults of section 3.1, the watcher steps, and the mode's own
 BOX_STEPS = {"pre", "start", "wait-calls", "look", "seal", "wait-upload", "wait-recovery", "keep-going", "exec"} | set(FAULTS)
@@ -307,6 +309,12 @@ def load_settings(raw, pad):
             raise Usage("%s is a number above 0" % k)
     if not isinstance(s["keep"], bool):
         raise Usage("keep is true or false")
+    if "cap_usd" in s and (type(s["cap_usd"]) not in (int, float) or s["cap_usd"] <= 0):
+        raise Usage("cap_usd is a number above 0")
+    if "box_extra_minutes" in s and (type(s["box_extra_minutes"]) is not int or s["box_extra_minutes"] < 0):
+        raise Usage("box_extra_minutes is a whole number, 0 or more")
+    if "box_vcpus" in s and (type(s["box_vcpus"]) is not int or s["box_vcpus"] not in (1, 2, 4, 8)):
+        raise Usage("box_vcpus is 1, 2, 4 or 8")
     for k in ("version", "build", "connector", "hosts"):
         if k in s and not isinstance(s[k], str):
             raise Usage("%s is a string" % k)
@@ -321,6 +329,11 @@ def load_settings(raw, pad):
             if r.startswith(("kill-watchdog", "kill-both@")) and (m <= 4 or "recover" in r):
                 raise Usage("step %r does not fit cycle's own crash at minute 3" % r)
     return s
+
+
+def row_pad(s, pad):
+    """A copy of pad.toml's values with the row's own cap_usd, box_extra_minutes and box_vcpus where it names them."""
+    return dict(pad, **{k: s[k] for k in OVERRIDES if k in s})
 
 
 KILL_PAIR = (8, 10)  # section 3.1: the kill-recorder pair a settings file names; a harness file's kill_minutes replaces it
@@ -957,6 +970,7 @@ def main(argv):
             print("%s: not verified: %s" % (s["harness"], harness.get("not_verified") or "no key"))
             return 3  # nothing proven: the INCONCLUSIVE exit, never "every row PASS"
         apply_kill_minutes(s, harness)
+        pad = row_pad(s, pad)
         if not (harness.get("version") and harness.get("version_cmd")):
             raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])
         if s["case"] in ("dodger", "all") and not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(harness.get("model_host"))):

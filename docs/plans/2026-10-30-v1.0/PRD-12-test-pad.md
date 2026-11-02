@@ -181,7 +181,7 @@ integration commit, PRD-00 "Where the build runs"; with `where = "here"`, the `g
 `goalcup start --hosts`, S16; PRD-11's acceptance 3 passes one with a host removed; the dodger case makes
 its own copy, section 2; both work in test and practice runs only, PRD-00 owner question 4), `keep`
 (default true; false leaves `GOALCUP_KEEP_PARTS` unset, only for K8 and PRD-06's U5, and such a row can
-never give a tier, C4) and `keep_going` (idle minutes before "keep going", default 1). An unknown key is a
+never give a tier, C4) and `keep_going` (idle minutes before "keep going", default 1). `cap_usd`, `box_extra_minutes` and `box_vcpus` replace the `pad.toml` value for this row only. An unknown key is a
 usage error, so a typo never runs the wrong test quietly. There is no server address setting: the rig
 knows only the staging Worker and loopback, so production is always refused (ledger B4; the allowlist
 of `scripts/matrix.sh:253-258`, `:559-600`, without its production flag).
@@ -509,19 +509,19 @@ install = "npm i -g @openai/codex@<pinned version>"
 key_kind = "openai"                       # which --key the harness takes
 key_route = "login"                       # how the key reaches the harness, as its docs say: "login", "file" or "env"
 login = "codex login --with-api-key"      # "login": run with HOME and CODEX_HOME of the isolated home; the key file goes to stdin, never an argument
-key_file = ""                             # "file": a path in the isolated home, e.g. "{home}/.gemini/.env"; written 0600
+key_file = ""                             # "file": a path in the isolated home, e.g. "{home}/.gemini/.env"; written 0600, beside any rows `goalcup setup` wrote there (the pad's value wins a same key)
 key_line = ""                             # "file": the line written there, e.g. "GEMINI_API_KEY={key}"
 key_env = ""                              # "env": e.g. "ANTHROPIC_API_KEY"; the launch shell runs export NAME="$(cat <file>)" just before goalcup start, never echoed, never in argv, a log or a row
 ready_text = ""                           # text on screen when the harness can take input; empty: wait ready_wait seconds
 ready_wait = 30                           # seconds to wait for ready_text, or for nothing when it is empty
 pre_keys = ""                             # printf format, for a first-run dialog (matrix.sh:123-129)
-exit_keys = "/exit\r"                    # printf format that ends the harness (kill-watchdog, kill-both)
+exit_keys = "/exit\r"                    # printf format, or a list of items sent one by one exit_pause seconds apart, that ends the harness (kill-watchdog, kill-both)
 daemon = ""                               # command stale-gateway.sh starts, e.g. "hermes gateway"
 submit_delay = 2
 subagent_word = "sub-agent"
 keep_going = true                         # cycle mode types "keep going" for this harness (a few, where it makes sense)
 [direct]
-files = { }                               # provider and model config copied into the isolated home, as a participant writes it
+files = { }                               # provider and model config copied into the isolated home, as a participant writes it; {home} and {workspace} are filled
 env = { }                                 # non-secret values exported in the launch shell before goalcup start, as a participant does
 [gateway]                                 # absent: the gateway case is n/a
 pre_keys = ""                             # optional; a [gateway] or [dodger] section may carry its own pre_keys, which wins over the top-level one
