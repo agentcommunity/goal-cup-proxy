@@ -1017,7 +1017,8 @@ class MiniFixRound(unittest.TestCase):
 
     def test_shape_only_plain_hit_does_not_undo_the_stated_loss(self):  # T3
         shape = {"kind": "generic_secret_assignment", "in": "e1/1.3/deltas", "sha12": "a" * 12, "n": 1}
-        row = evaluate({"meta.json": {"connector": "goose-cli", "case": "direct", "known_box": True, "entry": "e1"},
+        row = evaluate({"meta.json": {"connector": "goose-cli", "case": "direct", "known_box": True, "entry": "e1",
+                                      "mask_values": {"workspace": 2, "env": 0, "harness": 0, "skipped": 0}},  # exact values on: the old plain count of a shape hit failed here
                         "verify/secrets.json": {"known_hits": [], "shape_hits": [shape], "big_masks": [], "masks": dict(SecretCheck.PLANTED)},
                         "verify/secrets-plain.json": {"known_hits": [], "shape_hits": [shape], "big_masks": []},
                         "verify/secrets-conductor.json": {"hits": 0},
