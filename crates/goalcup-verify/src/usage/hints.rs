@@ -8,8 +8,10 @@ use serde_json::Value;
 /// database copies (snapshot streams), Gemini CLI's `chats:**/*.jsonl` session files (calls,
 /// threads and parent links), Qwen Code's `chats:**/*.jsonl` session files (threads, links and
 /// calls), Hermes's delegation files: `task-<n>.log` plain-text logs (read by path only, never
-/// parsed) and the `manifest.json` snapshots (delegation id and task indexes), and Kimi Code's
-/// `wire:**/agents/<name>/wire.jsonl` agent files (one per agent).
+/// parsed) and the `manifest.json` snapshots (delegation id and task indexes), Kimi Code's
+/// `wire:**/agents/<name>/wire.jsonl` agent files (one per agent), and the session database copies
+/// of Crush (`db:crush.db*`) and Goose (`sessions:sessions.db*`), read for ids and parent ids
+/// only, as [`thread_db`] says.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reader {
     CodexRollout,
@@ -21,6 +23,7 @@ pub(super) enum Reader {
     HermesTask,
     HermesManifest,
     KimiWire,
+    ThreadDb,
 }
 
 /// The reader of a native or snapshot stream by its connector and `meta.path` (`<row>:<rel>`).
@@ -41,6 +44,8 @@ pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
         ("gemini-cli", "chats", true) => Reader::GeminiChat,
         ("qwen-cli", "chats", true) => Reader::QwenChat,
         ("kimi-code-cli", "wire", true) if file == "wire.jsonl" => Reader::KimiWire,
+        ("crush-cli", "db", _) if file.starts_with("crush.db") => Reader::ThreadDb,
+        ("goose-cli", "sessions", _) if file.starts_with("sessions.db") => Reader::ThreadDb,
         _ => return None,
     })
 }
@@ -48,7 +53,8 @@ pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
 /// Where a connector's wire requests name their calling thread and its parent: (connector,
 /// thread keys, parent keys), the first key present wins. A key is a request header name (any
 /// case), or a `/`-led JSON pointer into a WebSocket `response.create`. Only Codex also has a
-/// native reader; the others' threads and parent links come from the wire alone.
+/// native reader; the others' threads and parent links come from the wire alone, except Crush's
+/// and Goose's parent links, which come from their [`thread_db`].
 const WIRE_IDS: &[(&str, &[&str], &[&str])] = &[
     (
         "codex-cli",
@@ -97,6 +103,34 @@ pub(super) fn reads_native(connector: Option<&str>) -> bool {
         "kimi-code-cli",
     ];
     connector.is_some_and(|c| READ.contains(&c))
+}
+
+/// A session database that gives parent links only, never calls: its table, its id and parent
+/// columns, and whether the wire names a session by the xxh3-64 of its id (16 lowercase hex
+/// digits) rather than by the id. No other column is read.
+pub(super) struct ThreadDb {
+    pub(super) table: &'static str,
+    pub(super) id: &'static str,
+    pub(super) parent: &'static str,
+    pub(super) hash: bool,
+}
+
+/// The [`ThreadDb`] of a connector. Crush 0.99.0 (`internal/db/migrations`, `session.HashID`):
+/// `sessions(id, parent_session_id)`, its `X-Session-Id` header the xxh3-64 of the id. Goose
+/// 1.57.0 (`session_manager.rs`): `sessions(id, parent_session_id)`, its `agent-session-id`
+/// header the id itself.
+pub(super) fn thread_db(connector: Option<&str>) -> Option<ThreadDb> {
+    let hash = match connector? {
+        "crush-cli" => true,
+        "goose-cli" => false,
+        _ => return None,
+    };
+    Some(ThreadDb {
+        table: "sessions",
+        id: "id",
+        parent: "parent_session_id",
+        hash,
+    })
 }
 
 /// The thread a wire request names and its parent, by the connector's [`WIRE_IDS`]: from the

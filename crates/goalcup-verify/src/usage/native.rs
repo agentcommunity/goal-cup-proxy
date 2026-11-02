@@ -38,6 +38,8 @@ pub(super) struct NativeLeg {
     pub(super) unreadable: bool,
     /// The Hermes database copy that was read.
     pub(super) set: Option<Used>,
+    /// A thread database's session id to its parent id, as the wire names them (Crush, Goose).
+    pub(super) parents: BTreeMap<String, String>,
 }
 
 /// A Claude Code call: its row, usage counts (largest per member) and `requestId`.
@@ -59,7 +61,7 @@ pub(super) struct Native {
     gemini: BTreeMap<String, CallRow>,
     /// Claude Code agent id to its session and the last `agentType` a meta snapshot gave.
     agents: BTreeMap<String, (String, Option<String>)>,
-    /// Hermes database copies.
+    /// Hermes database copies, or a thread database's (a connector has one or the other).
     sets: Sets,
     /// Hermes delegation task log paths (plain text, never parsed), and the task indexes each
     /// delegation manifest names, by delegation id.
@@ -128,7 +130,7 @@ impl Native {
                     (StreamKind::Snapshot, Some(Reader::ClaudeMeta | Reader::HermesManifest)) => {
                         Src::Snap(file.0, Some(Vec::new()))
                     }
-                    (StreamKind::Snapshot, Some(Reader::HermesDb)) => {
+                    (StreamKind::Snapshot, Some(Reader::HermesDb | Reader::ThreadDb)) => {
                         return self.sets.open(key(sid), &m);
                     }
                     (
@@ -243,7 +245,13 @@ impl Native {
     /// The native rows, threads and children of the entry. A file that names no thread keeps its
     /// rows, with `thread` `None`, so no native call leaves the count.
     pub(super) fn finish(self, ctx: &Ctx) -> NativeLeg {
-        let h = (self.sets.finish(&ctx.entry, ctx.first, ctx.segment > 0)).unwrap_or_default();
+        let (h, parents) = match hints::thread_db(ctx.connector.as_deref()) {
+            Some(spec) => (Default::default(), self.sets.links(&spec)),
+            None => {
+                let h = self.sets.finish(&ctx.entry, ctx.first, ctx.segment > 0);
+                (h.unwrap_or_default(), BTreeMap::new())
+            }
+        };
         let (mut owner, mut threads) = (HashMap::new(), BTreeMap::new());
         let mut kids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let (mut repeats_skipped, mut copied_skipped) = (0, 0);
@@ -400,6 +408,7 @@ impl Native {
             totals: h.totals,
             unreadable: h.unreadable,
             set: h.set,
+            parents,
         }
     }
 }
