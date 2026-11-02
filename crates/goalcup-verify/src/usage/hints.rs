@@ -39,30 +39,75 @@ pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
     })
 }
 
-/// For a connector this build has a native reader for: (its wire requests carry their thread, as
-/// Codex's do; native calls join the wire by the reply's request id, as Claude Code's do). Hermes
-/// has neither: its calls join the entry's wire calls by time alone. Gemini has no native call
-/// rows (the chat file's per-call shape is unmeasured), so its wire calls stay `WireOnly`; the
-/// reader is here for the threads and parent links of its chat files.
+/// Where a connector's wire requests name their calling thread and its parent: (connector,
+/// thread keys, parent keys), the first key present wins. A key is a request header name (any
+/// case), or a `/`-led JSON pointer into a WebSocket `response.create`. Only Codex also has a
+/// native reader; the others' threads and parent links come from the wire alone.
+const WIRE_IDS: &[(&str, &[&str], &[&str])] = &[
+    (
+        "codex-cli",
+        &["thread-id", "/client_metadata/thread_id"],
+        &["x-codex-parent-thread-id", "/client_metadata/x-codex-parent-thread-id"],
+    ),
+    (
+        "opencode-cli",
+        &["x-opencode-session-id", "x-session-id"],
+        &["x-opencode-parent-session-id", "x-parent-session-id"],
+    ),
+    (
+        "opencode2-cli",
+        &["x-opencode-session-id", "x-session-id"],
+        &["x-opencode-parent-session-id", "x-parent-session-id"],
+    ),
+    ("kilo-cli", &["x-session-id"], &["x-parent-session-id"]),
+    ("goose-cli", &["agent-session-id"], &[]),
+    ("crush-cli", &["x-session-id"], &[]),
+];
+
+/// For a connector this build reads threads for: (its wire requests carry their thread, as
+/// [`WIRE_IDS`] says; native calls join the wire by the reply's request id, as Claude Code's do).
+/// Hermes has neither: its calls join the entry's wire calls by time alone. Gemini has no native
+/// call rows (the chat file's per-call shape is unmeasured), so its wire calls stay `WireOnly`;
+/// the reader is here for the threads and parent links of its chat files.
 pub(super) fn join_of(connector: Option<&str>) -> Option<(bool, bool)> {
     match connector? {
-        "codex-cli" => Some((true, false)),
         "claude-code-cli" => Some((false, true)),
         "hermes-cli" | "gemini-cli" => Some((false, false)),
-        _ => None,
+        c => WIRE_IDS.iter().any(|w| w.0 == c).then_some((true, false)),
     }
 }
 
-/// The thread a wire request names: Codex's `thread-id` header (HTTP), else
-/// `client_metadata.thread_id` of a WebSocket `response.create`.
-pub(super) fn wire_thread(
+/// True when this build has a native reader for the connector (an arm in [`reader`]); a
+/// connector with only [`WIRE_IDS`] keeps [`super::Reason::NoReader`].
+pub(super) fn reads_native(connector: Option<&str>) -> bool {
+    matches!(connector, Some("codex-cli" | "claude-code-cli" | "hermes-cli" | "gemini-cli"))
+}
+
+/// The thread a wire request names and its parent, by the connector's [`WIRE_IDS`]: from the
+/// request headers (HTTP), else from the WebSocket `response.create` body. A parent equal to the
+/// thread is dropped.
+pub(super) fn wire_ids(
     connector: Option<&str>,
     headers: Option<&Value>,
     body: Option<&Value>,
-) -> Option<String> {
-    let body = || id(body?.pointer("/client_metadata/thread_id")?.as_str()?);
-    let hint = join_of(connector).is_some_and(|j| j.0);
-    hint.then(|| header(headers, "thread-id").or_else(body))?
+) -> (Option<String>, Option<String>) {
+    let Some(&(_, thread, parent)) = WIRE_IDS.iter().find(|w| Some(w.0) == connector) else {
+        return (None, None);
+    };
+    let thread = first(thread, headers, body);
+    let parent = first(parent, headers, body).filter(|p| Some(p) != thread.as_ref());
+    (thread, parent)
+}
+
+/// The first of these keys present, as a header or a `/`-led body pointer.
+fn first(keys: &[&str], headers: Option<&Value>, body: Option<&Value>) -> Option<String> {
+    keys.iter().find_map(|k| {
+        if k.starts_with('/') {
+            id(body?.pointer(k)?.as_str()?)
+        } else {
+            header(headers, k)
+        }
+    })
 }
 
 /// The reply's `request-id` header; Claude Code's native `requestId` equals it.

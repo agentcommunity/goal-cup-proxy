@@ -14,7 +14,7 @@ mod sqlite;
 mod sse;
 mod wire;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
@@ -517,11 +517,13 @@ impl Calls {
         // Zero native calls is not a readable leg when the wire had calls, or when native streams
         // were read (threads) or a model host was named not on the wire.
         let seen = rows.iter().any(ok) || !leg.threads.is_empty() || !base.not_on_wire.is_empty();
+        // A connector with wire ids only has no native reader at all.
         let none = (nat.is_empty() && seen).then_some(Reason::NoNative);
-        let reason = leg
-            .unreadable
-            .then_some(Reason::SnapshotUnreadable)
-            .or(none);
+        let reason = match leg.unreadable {
+            _ if !hints::reads_native(c) => Some(Reason::NoReader),
+            true => Some(Reason::SnapshotUnreadable),
+            false => none,
+        };
         let mut threads = leg.threads;
         let mut per: HashMap<&str, (u64, u64)> = HashMap::new();
         for x in &nat {
@@ -534,9 +536,22 @@ impl Calls {
             (t.native_calls, t.native_only) = per.get(t.id.as_str()).copied().unwrap_or_default();
         }
         let known: HashSet<String> = threads.iter().map(|t| t.id.clone()).collect();
-        let wire_only: BTreeSet<&String> = rows.iter().filter_map(|r| r.thread.as_ref()).collect();
-        for id in wire_only.into_iter().filter(|id| !known.contains(*id)) {
+        // A thread only the wire names takes the parent of its first row that names one; a parent
+        // the wire names that is no thread is pushed as a wire-only thread too.
+        let mut wire_only: BTreeMap<&String, Option<&String>> = BTreeMap::new();
+        for r in &rows {
+            if let Some(id) = r.thread.as_ref() {
+                let p = wire_only.entry(id).or_default();
+                *p = p.or(r.parent.as_ref());
+            }
+        }
+        let named: Vec<&String> = wire_only.values().flatten().copied().collect();
+        for p in named {
+            wire_only.entry(p).or_default();
+        }
+        for (id, parent) in wire_only.into_iter().filter(|(id, _)| !known.contains(*id)) {
             threads.push(Thread {
+                parent: parent.cloned(),
                 reason,
                 ..Thread::new(id)
             });
@@ -555,10 +570,11 @@ impl Calls {
         }
         let (db_set, native_until, harness_exited) =
             (leg.set).map_or((None, None, None), |u| (Some(u.id), u.until, u.exited));
+        let children = leg.children.or_else(|| wire_kids(&threads));
         CallTable {
             rows,
             threads,
-            children: leg.children,
+            children,
             task_logs: leg.task_logs,
             reason,
             native_form: reason.map_or(
@@ -578,6 +594,17 @@ impl Calls {
             ..base
         }
     }
+}
+
+/// Parent thread id to its child ids, from the threads that name a parent; `None` when none does.
+fn wire_kids(threads: &[Thread]) -> Option<BTreeMap<String, Vec<String>>> {
+    let mut kids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for t in threads {
+        if let Some(p) = &t.parent {
+            kids.entry(p.clone()).or_default().push(t.id.clone());
+        }
+    }
+    (!kids.is_empty()).then_some(kids)
 }
 
 #[derive(Parser)]

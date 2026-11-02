@@ -230,7 +230,8 @@ impl Wire {
                 let i = self.row(ctx, (k.1, None), (conn, &c), kind, Via::Http, t);
                 let r = &mut self.rows[i];
                 (r.row.shape, r.up) = (shape, Some((k.1, 0, u64::MAX)));
-                r.row.thread = hints::wire_thread(ctx.connector.as_deref(), m.get("headers"), None);
+                let ids = hints::wire_ids(ctx.connector.as_deref(), m.get("headers"), None);
+                (r.row.thread, r.row.parent) = ids;
                 self.calls.insert(k, i);
                 let (path, body) = (path.to_string(), Buf::default());
                 self.reqs.insert(k, Req { row: i, path, body });
@@ -439,7 +440,8 @@ impl Wire {
             r.row.shape = Some(Shape::Responses);
             let q = shapes::request(Shape::Responses, "", v.as_ref());
             (r.row.model_requested, r.row.effort) = (q.model, q.effort);
-            r.row.thread = hints::wire_thread(ctx.connector.as_deref(), None, v.as_ref());
+            let ids = hints::wire_ids(ctx.connector.as_deref(), None, v.as_ref());
+            (r.row.thread, r.row.parent) = ids;
             s.pending.push_back((i, prev));
             return;
         }
