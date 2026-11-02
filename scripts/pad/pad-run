@@ -565,6 +565,11 @@ class Run:
             except subprocess.TimeoutExpired:
                 self.fault("seal", exit="timeout")
         ok = wait(self.sealed, self.left() - 30, 5)
+        if ok and not out:  # a dead watchdog prints no end screen into the pane: status on a sealed part shows it (status.rs)
+            try:
+                out = sh([tool("goalcup"), "status"], env=self.env, cwd=self.project, timeout=max(1, min(60, self.left() - 5))).stdout
+            except subprocess.TimeoutExpired:
+                pass
         values = self.known()
         if out:  # the number is read only from files in the output folder: keep the seal's own words, masked
             self.pane(tag="s", text=out)
