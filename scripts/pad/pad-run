@@ -1197,7 +1197,16 @@ def main(argv):
     mark = attempt and os.path.join(argv[1], "attempts", attempt)
     if mark and os.path.isdir(argv[1]):
         os.makedirs(os.path.dirname(mark), exist_ok=True)
-        write(mark + ".begin", "", 0o600)
+        try:  # the box refuses a repeated id: a resend never runs a kill twice, whatever the timing
+            os.close(os.open(mark + ".begin", os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+        except FileExistsError:
+            try:
+                with open(mark + ".json") as f:
+                    line = f.read()
+            except OSError:
+                line = json.dumps({"result": "error", "saw": "attempt already began"})
+            print("PADSTEP " + line)
+            return 0
     run, extra = None, {}
     try:
         run = Run(argv[1], kind, m, arg if kind in TIMED else None)
@@ -1218,7 +1227,8 @@ def main(argv):
     ids.update(old)
     line = json.dumps(dict({k: v for k, v in ids.items() if v}, result=result, saw=saw, **extra))
     if mark and os.path.isdir(os.path.dirname(mark)):
-        write(mark + ".json", line, 0o600)
+        write(mark + ".json.tmp", line, 0o600)  # whole or absent: a probe never reads half
+        os.replace(mark + ".json.tmp", mark + ".json")
     print("PADSTEP " + line)
     return 0
 

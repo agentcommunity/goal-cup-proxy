@@ -723,8 +723,13 @@ class Run:
             r = self.sbx("exec", self.name, "--script", script, limit=60)
             if "PADNONE" in (r.stdout or ""):
                 return None
-            if "PADSTEP " in (r.stdout or ""):
-                return r.stdout
+            line = next((ln for ln in (r.stdout or "").splitlines() if ln.startswith("PADSTEP ")), None)
+            if line:
+                try:
+                    json.loads(line[len("PADSTEP "):])
+                    return r.stdout
+                except ValueError:
+                    pass  # began, the result not readable yet: ask again, never a result and never a resend
             time.sleep(EXEC_RETRY_WAIT)  # began and still running, or the box could not be asked
         return "PADSTEP " + json.dumps({"result": "error", "saw": "sbx exec response lost; the step began and no result could be read"})
 
