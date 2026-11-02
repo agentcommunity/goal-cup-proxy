@@ -1257,7 +1257,7 @@ class WorkEvidence(unittest.TestCase):
 
     def test_many_requests_without_commits_is_work(self):
         row = self.row(0, 380)
-        self.assertNotEqual(row["checks"]["C1"], "INCONCLUSIVE", row["why"])
+        self.assertFalse(any("did no work" in w for w in row["why"]), row["why"])  # the fixture has no S6 checks, so C1 stays INCONCLUSIVE for its own reason
 
     def test_many_requests_without_a_tool_turn_or_commit_is_no_work(self):  # chat only, or a permission-screen retry loop (W3)
         row = self.row(0, 380, native=0)
