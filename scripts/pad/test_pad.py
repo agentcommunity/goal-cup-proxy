@@ -1049,7 +1049,7 @@ class MiniFixRound(unittest.TestCase):
         text = "\n".join(code)
         for bad in ("env", "printenv", "set", "export", "declare", "API_KEY", "/proc/"):
             self.assertNotRegex(text, r"(^|[\s|;&(])%s($|[\s|;&)=])" % bad if bad.isalpha() else bad, bad)
-        self.assertIn("PAD_SECRET_PLAIN", text)
+        self.assertIn(".env.local", text)
 
 
 if __name__ == "__main__":
