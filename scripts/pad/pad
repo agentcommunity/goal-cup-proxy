@@ -43,7 +43,7 @@ NEEDS_LATER = "comes in a later slice"
 MODES = {"micro": {"server": "off", "prompt": "micro", "minutes": 3, "calls": 2},  # section 1a: defaults, wait-calls
          "cycle": {"server": "staging", "prompt": "full", "minutes": 8, "calls": 3},
          "full": {"server": "staging", "prompt": "full", "minutes": 20, "calls": 3}}
-LIMITS = {"setup": 5, "pre": 3, "start": 3, "wait-calls": 4, "look": 1, "wait-recovery": 3,
+LIMITS = {"setup": 5, "pre": 3, "start": 3, "wait-calls": 4, "look": 1, "wait-recovery": 5,
           "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
 KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
         "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going", "keep_going_count",
@@ -433,7 +433,7 @@ def runner_limits(s):
     longest = lambda k: 60 * max([lasts(r) for _, _, r in s["plan"] if r.startswith(k + "@")],  # noqa: E731
                                  default=FAULTS[k]) + 120  # the longest +n of the kind, then 2 minutes
     return dict(got, paste=got["start"], verify=step_limit(s, "check"), wipe=step_limit(s, "cleanup") // 3, spend=120,
-                **{"kill-recorder": 120, "kill-watchdog-recover": 240, "kill-watchdog": 330, "kill-both": 300, "fd-limit": 60,
+                **{"kill-recorder": 420, "kill-watchdog-recover": 240, "kill-watchdog": 330, "kill-both": 300, "fd-limit": 60,
                    "keep-going": run, "seal-now": 120, "watch": run + 1800, "exec": EXEC_LIMIT}, **{k: longest(k) for k in SPAN})
 
 

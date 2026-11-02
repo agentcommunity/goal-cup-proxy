@@ -222,6 +222,15 @@ class ExecRetry(unittest.TestCase):
         self.assertEqual(run.n, 9)  # one kill, eight questions, never a second kill
 
 
+class KillLimits(unittest.TestCase):
+    """The kill waits up to 5 min for work and a quiet kill's recovery up to 4 min (pad-run): the step limits hold both."""
+
+    def test_the_step_limits_cover_the_kill_and_recovery_waits(self):
+        got = pad.runner_limits({"minutes": 60, "plan": []})
+        self.assertGreaterEqual(got["kill-recorder"], 300 + 60)
+        self.assertGreaterEqual(got["wait-recovery"], 240 + 30)
+
+
 class AttemptBegin(unittest.TestCase):
     """The box refuses a repeated attempt id: a resend under the same id never runs the step twice."""
 
