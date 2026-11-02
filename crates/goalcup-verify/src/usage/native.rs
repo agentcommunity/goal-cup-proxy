@@ -191,7 +191,7 @@ impl Native {
                         } else if f.codex {
                             self.calls.extend(f.rollout(&v, at, row));
                         } else if f.qwen {
-                            self.calls.extend(qwen(&v, at, row));
+                            self.calls.extend(qwen(&v, row));
                         } else {
                             claude(&mut self.msgs, &v, at, row);
                         }
@@ -560,11 +560,11 @@ fn gemini(v: &Value, row: impl FnOnce() -> CallRow) -> Option<(String, CallRow)>
     Some((id, r))
 }
 
-/// One Qwen Code chat row timed `at`: an `assistant` row with `usageMetadata` is one call. The
+/// One Qwen Code chat row: an `assistant` row with `usageMetadata` is one call. The
 /// prompt count includes the cached part, which is taken out of `input`. Unlike the Gemini shape,
 /// `output` is `candidatesTokenCount` alone: Qwen copies the chat `completion_tokens`, reasoning
 /// included, into it (measured: total = prompt + candidates, candidates = wire output).
-fn qwen(v: &Value, at: Option<u64>, row: impl FnOnce() -> CallRow) -> Option<CallRow> {
+fn qwen(v: &Value, row: impl FnOnce() -> CallRow) -> Option<CallRow> {
     let u = (v["type"] == "assistant").then_some(&v["usageMetadata"])?;
     let (mut tokens, extra) = split(extra(u.as_object()?, &[]), QWEN);
     tokens.input = less(tokens.input, tokens.cached);
