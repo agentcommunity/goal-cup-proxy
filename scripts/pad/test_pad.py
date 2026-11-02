@@ -1039,5 +1039,18 @@ class PinnedModel(unittest.TestCase):
             self.assertNotIn("pinned", " ".join(self.row(pin, recorded, read=read)["why"]), (pin, recorded, read))
 
 
+class PromptVariant(unittest.TestCase):
+    """rung1x item 10, sweep2: opencode refused, qwen asked, copilot ran half the script. Same task, plants named as fake."""
+
+    def test_fixture_prompt_keeps_the_smoke_task(self):
+        path = os.path.join(HERE, "prompts", "smoke-fixture.txt")
+        text = open(path).read()
+        smoke = open(os.path.join(HERE, "prompts", "smoke.txt")).read()
+        for part in ("sh ./pad-setup-check.sh", "one subagent", "count.txt", "commit count.txt", "fake", "Do not stop to ask"):
+            self.assertIn(part, text)
+        self.assertIn(" ".join(smoke.split()), " ".join(text.split()))  # the smoke task word for word
+        self.assertEqual(pad.load_settings(dict(BASE, prompt=path), PADCFG)["prompt"], path)
+
+
 if __name__ == "__main__":
     unittest.main()
