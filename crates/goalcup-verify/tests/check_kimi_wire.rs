@@ -63,11 +63,16 @@ fn file(e: &mut Entry, path: &str, lines: &[Value]) {
 
 /// An `llm.request` and its `usage.record` for agent `agent`, at `at` epoch ms.
 fn call(agent: &str, at: u64, usage: Value) -> [Value; 2] {
+    call_until(agent, at, at + 400, usage)
+}
+
+/// The same, with the `usage.record` (the call's end) at `end` epoch ms.
+fn call_until(agent: &str, at: u64, end: u64, usage: Value) -> [Value; 2] {
     [
         json!({"type": "llm.request", "agentId": agent, "kind": "loop", "provider": "fake",
             "model": "fake-kimi", "messageCount": 1, "time": at}),
         json!({"type": "usage.record", "agentId": agent, "model": "fake-kimi", "usage": usage,
-            "usageScope": "turn", "time": at + 400}),
+            "usageScope": "turn", "time": end}),
     ]
 }
 
@@ -177,4 +182,40 @@ fn the_check_sees_a_thread_with_a_parent() {
     // With no nested spawn: a child with no file and no call is a missing subagent.
     let (_, v) = check(&entry("kw-check", false), &[]);
     assert_eq!(result(&v, "subagents_present"), "pass");
+}
+
+#[test]
+fn a_long_call_joins_its_own_wire_call_by_its_end() {
+    // The main call opens at 10 s and ends at 40 s; agent-0's call runs from 20 s to 22 s in
+    // between. Each wire reply ends just before its `usage.record`, so only the end time pairs
+    // each native call with its own wire call.
+    let mut e = Entry::new("kw-long");
+    e.idle(21_900);
+    chat(&mut e);
+    e.idle(17_900);
+    chat(&mut e);
+    let main = json!({"inputOther": 11, "output": 5});
+    file(&mut e, &path("main"), &call_until("main", ms(10), ms(40), main));
+    let kid = json!({"inputOther": 7, "output": 3});
+    file(&mut e, &path("agent-0"), &call_until("agent-0", ms(20), ms(22), kid));
+    e.count();
+    let dir = e.seal();
+    let set = |v: &mut Value| v["connector"] = "kimi-code-cli".into();
+    let t = call_table(&mutate(&dir, None, |r| edit_event(r, "start", 0, set)));
+    let mut wire = rows(&t, Leg::Wire);
+    assert_eq!(wire.len(), 2);
+    assert!(wire.iter().all(|r| r.join == Some(Join::Matched)));
+    wire.sort_by_key(|r| r.wall_end);
+    let threads: Vec<_> = wire.iter().map(|r| r.thread.as_deref()).collect();
+    assert_eq!(threads, [Some(KID), Some(MAIN)]);
+    assert_eq!(wire[0].parent.as_deref(), Some(MAIN));
+    let native = rows(&t, Leg::Native);
+    assert!(native.iter().all(|r| r.join == Some(Join::Matched)));
+    let main = native
+        .iter()
+        .find(|r| r.thread.as_deref() == Some(MAIN))
+        .expect("main call");
+    // Opened at the `llm.request`, ended at the `usage.record`.
+    let got = (main.wall_start, main.wall_end);
+    assert_eq!(got, (Some(ms(10) * 1_000_000), Some(ms(40) * 1_000_000)));
 }
