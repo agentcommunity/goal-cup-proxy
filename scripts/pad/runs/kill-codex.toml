@@ -1,0 +1,7 @@
+# kill-codex.toml: fallback only (plan Task 8 Step 2): Codex direct full with the recorder killed twice
+# The pair 8 and 10 is moved to 3 and 5 by kill_minutes in harnesses/codex-cli.toml.
+harness = "codex-cli"
+key = "openai"
+case = "direct"
+mode = "full"
+steps = ["kill-recorder@8", "kill-recorder@10"]

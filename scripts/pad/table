@@ -84,7 +84,8 @@ def tier_for(cid, rows):
     reasons += [(4, "no harness version on a case row")] * ("" in versions)  # P7: a named version
     if reasons:
         return ("not verified", "", min(reasons, key=lambda x: x[0])[1])
-    return ("verified", versions.pop(), "")
+    note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
+    return ("verified", versions.pop(), note[0] if note else "")
 
 def cell(v):
     return "-" if v in (None, "", [], {}) else str(v).replace("|", "/").replace("\n", " ")
@@ -109,7 +110,8 @@ def results_md(rows, tiers):
         groups.setdefault("opencode" if cid.startswith("opencode") else cid, []).append(cid)
     summary, body = [], []
     for h, cids in sorted(groups.items()):
-        tier = [t if t == "verified" else "%s: %s" % (t, why) for t, _, why in (tiers[c] for c in cids)]
+        tier = [("verified with a note: " + why if why else t) if t == "verified" else "%s: %s" % (t, why)
+                for t, _, why in (tiers[c] for c in cids)]
         last = latest(rows, lambda r: r.get("connector") in cids)
         kill = latest(rows, lambda r: r.get("connector") in cids and kills(r)) if h in CORE else None
         summary.append([h, " / ".join(dict.fromkeys(tier)), " / ".join(dict.fromkeys(tiers[c][1] for c in cids))]

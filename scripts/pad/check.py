@@ -7,7 +7,10 @@ import datetime
 import json
 import os
 import re
+import subprocess
 import sys
+
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Every key read from another PRD's seam, so a seam change is a one-line edit here. S6: PRD-08 section 4
 # (s6_ keys per entry). S7: PRD-09 section 7 (t_ keys per thread). S13: PRD-07 section 7 fetch.json.
@@ -864,6 +867,25 @@ def verdict(folder, script):
         return "pending"
     return words[0] if words and words[0] in ("PASS", "FAIL") else "pending"
 
+def trusted_at(repo, pad_commit):
+    """The commit the pad was trusted at, or None. Needs a passing, complete selftest, a trust note naming the same
+    commit with a non-empty read, and no change to scripts/pad or crates/goalcup-verify since."""
+    try:
+        with open(os.path.join(repo, "pad-out", "selftest.json")) as f:
+            st = json.load(f)
+        with open(os.path.join(repo, "pad-out", "trust.json")) as f:
+            tr = json.load(f)
+        at = st["commit"]
+        ok = (st["exit"] == 0 and st["all_ran"] is True and tr["commit"] == at and isinstance(tr["read"], str)
+              and tr["read"] != "" and isinstance(at, str) and at and pad_commit)
+        if not ok:
+            return None
+        r = subprocess.run(["git", "-C", repo, "diff", "--quiet", at, pad_commit, "--", "scripts/pad", "crates/goalcup-verify"],
+                           capture_output=True, timeout=30)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
+        return None
+    return at if r.returncode == 0 else None
+
 def evaluate(folder):
     meta = load(folder, "meta.json")
     if not isinstance(meta, dict):
@@ -874,8 +896,8 @@ def evaluate(folder):
     fault = r.v["faults"] if judged else None
     got = [r.v[c] for c in CHECKS] + ([fault] if fault else [])
     row = {k: meta.get(k) for k in ("connector", "harness_version", "case", "mode", "prompt", "variant", "where",
-                                    "server", "image", "run", "entry", "started", "minutes", "pad_trusted_at")}
-    row.update(os=None, goalcup=None, checks={c: r.v[c] for c in CHECKS}, faults=fault, why=r.why,
+                                    "server", "image", "run", "entry", "started", "minutes")}
+    row.update(os=meta.get("os"), goalcup=meta.get("goalcup"), pad_trusted_at=trusted_at(REPO, meta.get("pad_commit")), checks={c: r.v[c] for c in CHECKS}, faults=fault, why=r.why,
                exec={s: verdict(folder, s) for _, s in watchers(meta) if s not in JUDGED}, notes=owner_notes(r),
                result="FAIL" if "FAIL" in got else "PASS" if set(got) == {"PASS"} else "INCONCLUSIVE", facts=facts(r))
     return row
