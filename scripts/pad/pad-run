@@ -576,9 +576,22 @@ class Run:
         return ("ok", "sealed %s, %s model requests written" % (why, pc.dig(self.status(), "s4_requests"))
                 ) if ok else ("timeout", "%s, not sealed within the step's limit after goalcup seal" % why)
 
-    def exit_harness(self):  # the harness file's exit_keys (printf format); after 30 s SIGTERM to harness.pid if it lives
+    def exit_harness(self):  # the harness file's exit_keys: a printf string, or a list sent one item at a time; after 30 s SIGTERM to harness.pid if it lives
         if not self.dead():
-            keys = str(self.h.get("exit_keys", "")).encode().decode("unicode_escape")
+            keys = self.h.get("exit_keys", "")
+            if isinstance(keys, list):  # one send-keys per item, exit_pause seconds apart; an item "\r" is the Enter key; a gone harness gets no more keys
+                for i, item in enumerate(keys):
+                    if i:
+                        time.sleep(float(self.h.get("exit_pause", 1)))
+                        if self.dead():
+                            break
+                    item = str(item).encode().decode("unicode_escape")
+                    if item == "\r":
+                        sh(["tmux", "send-keys", "-t", self.tmux, "Enter"])
+                    elif item:
+                        sh(["tmux", "send-keys", "-t", self.tmux, "-l", item])
+                keys = ""
+            keys = str(keys).encode().decode("unicode_escape")
             if keys.endswith("\r"):  # a fast burst then Enter is a newline in some TUIs (paste burst): send Enter apart, as keep_going does
                 if keys[:-1]:
                     sh(["tmux", "send-keys", "-t", self.tmux, "-l", keys[:-1]])
