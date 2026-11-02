@@ -1087,5 +1087,38 @@ class SnippetFill(unittest.TestCase):
             self.assertIn("model", d["agents"]["defaults"], case)  # the model pin is kept beside it
 
 
+class ExitKeys(unittest.TestCase):
+    def sent(self, keys, dies_after=None):
+        r = object.__new__(padrun.Run)
+        r.h, r.tmux, r.fault, r.status = {"exit_keys": keys}, "t", lambda *a, **k: None, lambda: {}
+        sent, sleeps = [], []
+        r.dead = lambda: dies_after is not None and len(sent) >= dies_after
+        def sh(cmd, *a, **k):
+            if "send-keys" in cmd:
+                sent.append(cmd[-1])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        with mock.patch.object(padrun, "sh", sh), mock.patch.object(padrun.time, "sleep", sleeps.append):
+            r.exit_harness()
+        return sent, sleeps
+
+    def test_list_items_go_one_by_one_with_a_pause(self):
+        sent, sleeps = self.sent(["/quit", "\\r"])
+        self.assertEqual(sent, ["/quit", "Enter"])
+        self.assertIn(1.0, sleeps)
+
+    def test_string_form_is_unchanged(self):
+        self.assertEqual(self.sent("/exit\\r")[0], ["/exit", "Enter"])
+        self.assertEqual(self.sent("\\003\\003")[0], ["\x03\x03"])
+
+    def test_harness_gone_mid_list_gets_no_more_keys(self):
+        self.assertEqual(self.sent(["/quit", "\\r"], dies_after=1)[0], ["/quit"])
+
+    def test_codex_data(self):
+        h = pad.read_toml(os.path.join(HERE, "harnesses", "codex-cli.toml"))
+        self.assertEqual(h["exit_keys"], ["/quit", "\\r"])
+        cfg = pad.read_toml(os.path.join(HERE, "harnesses", "gateway", "codex-config.toml"))
+        self.assertEqual(h["gateway"]["model"], cfg["model"])  # owner rule 19:17Z, conductor note 22:00Z, gw3 PASS 20:27Z
+
+
 if __name__ == "__main__":
     unittest.main()
