@@ -141,6 +141,10 @@ def env_without(hide=NEVER_IN_BOX):
     return {k: v for k, v in os.environ.items() if k not in hide}
 
 
+EXEC_RETRY_WAIT = 5
+TRANSPORT = re.compile(r"fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|network error", re.I)
+
+
 def call(argv, timeout=None, env=None):
     """The one place the pad runs a command."""
     return subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout, env=env)
@@ -686,7 +690,12 @@ class Run:
             fd, script = tempfile.mkstemp(suffix=".sh", dir=self.tmp)  # its own file: the spend check runs beside a step
             with os.fdopen(fd, "w") as f:
                 f.write("exec python3.11 ~/pad/pad-run ~/run %s\n" % step)
-            r = self.sbx("exec", self.name, "--script", script, limit=limit)
+            for attempt in range(3):  # a transport error with no PADSTEP line is retried; a step that printed one never is
+                r = self.sbx("exec", self.name, "--script", script, limit=limit)
+                if ("%s " % tag) in (r.stdout or "") or not TRANSPORT.search((r.stdout or "") + (r.stderr or "")) or attempt == 2:
+                    break
+                self.log("sbx exec %s retry %d: transport error, no %s line" % (self.name, attempt + 1, tag))
+                time.sleep(EXEC_RETRY_WAIT)
         else:
             r = call(argv or [sys.executable, os.path.join(HERE, "pad-run"), self.box_dir] + step.split(), timeout=limit,
                      env=env_without())  # here is the box, and check.py needs no organizer secret either

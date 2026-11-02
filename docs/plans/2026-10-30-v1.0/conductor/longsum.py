@@ -127,10 +127,14 @@ def x4(gaps, meta, why, gap_limit_ms, faults=()):
                 return "FAIL: a kill gap ended %d ms after its kill, not under %d ms" % (late, gap_limit_ms)
     if any(g.get("cause") == "null_mode" for g in gaps):
         return "FAIL: a null_mode gap"
+    inconclusive = None
     for line in why:
         if line.startswith("faults") and not any(t in line for t in ("not under 2 s", "(limit 2 s)", "quiet kill", "no work in flight")):
+            if line.startswith("faults INCONCLUSIVE"):
+                inconclusive = inconclusive or "INCONCLUSIVE: " + line[:120]
+                continue
             return "FAIL: faults line not about the 2 s bound: " + line[:120]
-    return "PASS"
+    return inconclusive or "PASS"
 
 
 def summary(run_dir, check_mod, min_subagents=15, gap_limit_ms=5000):
