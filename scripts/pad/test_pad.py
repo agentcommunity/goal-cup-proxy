@@ -1028,10 +1028,11 @@ class MiniFixRound(unittest.TestCase):
     def usage_row(self, flag, harness="hermes-cli"):
         use = {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
                "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3}, {"parent": "t0", "models": {}, "wire_calls": 0}]}
-        meta = {"connector": harness, "case": "direct", "known_box": True, "entry": "e1"}
+        meta = {"connector": harness, "case": "direct", "known_box": True, "entry": "e1", "commits_since_start": 1}
         if flag:
             meta["subagents_by_task_log"] = True
-        return evaluate({"meta.json": meta, "verify/usage/e1.json": use})
+        return evaluate({"meta.json": meta, "verify/usage/e1.json": use,
+                         "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "counts": {"model_requests": 5}, "checks": []}]}})
 
     def test_task_log_subagents_need_no_calls(self):  # T4
         row = self.usage_row(True)
