@@ -21,8 +21,8 @@ hits=$(grep -rnE '/root/|/home/user' "$H/gc-tools" --exclude-dir=node_modules --
 echo "PASS no machine paths"
 L=$H/gc-night/lanes
 [ -f "$L/integrator.log" ] || { echo "FAIL integrator.log not restored"; exit 1; }
-cmp -s "$L/integrator.log" "$C/ledger/integrator.log" || { echo "FAIL integrator.log differs"; exit 1; }
+diff -q "$L/integrator.log" "$C/ledger/integrator.log" >/dev/null || { echo "FAIL integrator.log differs"; exit 1; }
 if [ -f "$C/ledger/integrator.log.scribed" ]; then
-  cmp -s "$L/integrator.log.scribed" "$C/ledger/integrator.log.scribed" || { echo "FAIL .scribed differs"; exit 1; }
+  diff -q "$L/integrator.log.scribed" "$C/ledger/integrator.log.scribed" >/dev/null || { echo "FAIL .scribed differs"; exit 1; }
 fi
 echo "PASS ledger restored"
