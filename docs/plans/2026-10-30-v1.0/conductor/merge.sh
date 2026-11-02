@@ -6,14 +6,16 @@
 # Exit: 0 merged, 1 gate FAIL, 3 merge conflict, 4 push refused, 2 usage.
 # The caller has already checked ownership and the reviewers; this script does not judge.
 set -u
+. "$(dirname "$0")/lib.sh"
+TRAILER=$(gc_trailer) || exit 2
+gc_need_repo
 BR=${1:?branch}; MSG=${2:?message}; shift 2
 REFRESH=0; DRY=0
 for a in "$@"; do case $a in --refresh-lock) REFRESH=1;; --dry) DRY=1;; esac; done
-REPO=/home/user/goal-cup-proxy
-NIGHT=/root/gc-night
+REPO=$GC_REPO
+NIGHT=$GC_NIGHT
 WT=$NIGHT/merge-wt
 mkdir -p "$NIGHT/gate-logs"
-TRAILER=$'\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>\nClaude-Session: https://claude.ai/code/session_01V2hUmG4Ccnfp953KQMAUS6'
 log() { echo "$(date -u +%H:%M)Z | integrator merger $BR | $1 | $2" >> "$NIGHT/lanes/integrator.log"; echo "$1: $2"; }
 
 exec 9>"$NIGHT/integration.lock"
@@ -38,7 +40,7 @@ set -e
 cargo update -w -q || cargo generate-lockfile -q
 cargo fetch --locked -q
 EOF
-  node /root/gc-tools/box.mjs run --repo "$WT" --ref "$TAG" --script "$JOB" --minutes 30 --out "Cargo.lock:$WT/Cargo.lock" > "$NIGHT/gate-logs/lock.log" 2>&1 || { log stop "lock refresh failed, see gate-logs/lock.log"; exit 1; }
+  node "$GC_TOOLS/box.mjs" run --repo "$WT" --ref "$TAG" --script "$JOB" --minutes 30 --out "Cargo.lock:$WT/Cargo.lock" > "$NIGHT/gate-logs/lock.log" 2>&1 || { log stop "lock refresh failed, see gate-logs/lock.log"; exit 1; }
   if ! git diff --quiet Cargo.lock; then git add Cargo.lock; git commit -q --amend --no-edit; git branch -f "$TAG" HEAD; fi
 fi
 cat > "$JOB" <<'EOF'
@@ -47,7 +49,7 @@ cargo fetch --locked -q 2>/dev/null || cargo fetch -q
 sh scripts/gate.sh fast
 EOF
 GL="$NIGHT/gate-logs/$(echo "$BR" | tr / _)-$(date -u +%H%M).log"
-node /root/gc-tools/box.mjs run --repo "$WT" --ref "$TAG" --script "$JOB" --minutes 60 > "$GL" 2>&1
+node "$GC_TOOLS/box.mjs" run --repo "$WT" --ref "$TAG" --script "$JOB" --minutes 60 > "$GL" 2>&1
 LAST=$(grep -E '^gate fast: ' "$GL" | tail -1)
 rm -f "$JOB"
 if [[ "$LAST" != *PASS* ]]; then
