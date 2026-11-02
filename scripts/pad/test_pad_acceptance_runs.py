@@ -45,8 +45,8 @@ class AcceptanceRuns(unittest.TestCase):
     def test_composite_runs(self):
         for name in ("a2.toml", "a3.toml", "a5.toml"):
             s = plan(name)
-            self.assertEqual((kills(s), s["minutes"], s["cap_usd"], s["keep_going"], s["box_extra_minutes"]),
-                             ([10, 30], 60, 15, 3, 15), name)
+            self.assertEqual((kills(s), s["minutes"], s["cap_usd"], s["keep_going"], s["keep_going_count"], s["box_extra_minutes"]),
+                             ([10, 30], 60, 15, 2, 12, 15), name)
             self.assertIn("kill-watchdog-recover@45", s["steps"])
             self.assertTrue(s["prompt"].endswith("many-subagents.txt"))
 
