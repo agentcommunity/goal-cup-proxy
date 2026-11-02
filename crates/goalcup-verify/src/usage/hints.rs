@@ -7,8 +7,9 @@ use serde_json::Value;
 /// `transcripts:**/*.jsonl`, the `meta:**/*.meta.json` snapshots, and Hermes's `state:state.db*`
 /// database copies (snapshot streams), Gemini CLI's `chats:**/*.jsonl` session files (calls,
 /// threads and parent links), Qwen Code's `chats:**/*.jsonl` session files (threads, links and
-/// calls), and Hermes's delegation files: `task-<n>.log` plain-text logs (read by path only, never
-/// parsed) and the `manifest.json` snapshots (delegation id and task indexes).
+/// calls), Hermes's delegation files: `task-<n>.log` plain-text logs (read by path only, never
+/// parsed) and the `manifest.json` snapshots (delegation id and task indexes), and Kimi Code's
+/// `wire:**/agents/<name>/wire.jsonl` agent files (one per agent).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reader {
     CodexRollout,
@@ -19,6 +20,7 @@ pub(super) enum Reader {
     QwenChat,
     HermesTask,
     HermesManifest,
+    KimiWire,
 }
 
 /// The reader of a native or snapshot stream by its connector and `meta.path` (`<row>:<rel>`).
@@ -38,6 +40,7 @@ pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
         }
         ("gemini-cli", "chats", true) => Reader::GeminiChat,
         ("qwen-cli", "chats", true) => Reader::QwenChat,
+        ("kimi-code-cli", "wire", true) if file == "wire.jsonl" => Reader::KimiWire,
         _ => return None,
     })
 }
@@ -69,14 +72,15 @@ const WIRE_IDS: &[(&str, &[&str], &[&str])] = &[
 
 /// For a connector this build reads threads for: (its wire requests carry their thread, as
 /// [`WIRE_IDS`] says; native calls join the wire by the reply's request id, as Claude Code's do).
-/// Hermes, Gemini and Qwen Code have neither: their calls join the entry's wire calls by time, a
-/// wire call whose usage equals the native call's first (Gemini's chat `tokens` equal the reply's
-/// `usageMetadata`, and Qwen's chat counts equal the wire's). A wire call no file holds (a Gemini
-/// utility call, a Qwen memory extractor call) stays `WireOnly`.
+/// Hermes, Gemini, Qwen Code and Kimi Code have neither: their calls join the entry's wire calls
+/// by time, a wire call whose usage equals the native call's first (Gemini's chat `tokens` equal
+/// the reply's `usageMetadata`, and Qwen's chat counts equal the wire's). Kimi's
+/// `prompt_cache_key` names only the session, which main and subagents share. A wire call no file
+/// holds (a Gemini utility call, a Qwen memory extractor call) stays `WireOnly`.
 pub(super) fn join_of(connector: Option<&str>) -> Option<(bool, bool)> {
     match connector? {
         "claude-code-cli" => Some((false, true)),
-        "hermes-cli" | "gemini-cli" | "qwen-cli" => Some((false, false)),
+        "hermes-cli" | "gemini-cli" | "qwen-cli" | "kimi-code-cli" => Some((false, false)),
         c => WIRE_IDS.iter().any(|w| w.0 == c).then_some((true, false)),
     }
 }
@@ -84,10 +88,15 @@ pub(super) fn join_of(connector: Option<&str>) -> Option<(bool, bool)> {
 /// True when this build has a native reader for the connector (an arm in [`reader`]); a
 /// connector with only [`WIRE_IDS`] keeps [`super::Reason::NoReader`].
 pub(super) fn reads_native(connector: Option<&str>) -> bool {
-    matches!(
-        connector,
-        Some("codex-cli" | "claude-code-cli" | "hermes-cli" | "gemini-cli" | "qwen-cli")
-    )
+    const READ: [&str; 6] = [
+        "codex-cli",
+        "claude-code-cli",
+        "hermes-cli",
+        "gemini-cli",
+        "qwen-cli",
+        "kimi-code-cli",
+    ];
+    connector.is_some_and(|c| READ.contains(&c))
 }
 
 /// The thread a wire request names and its parent, by the connector's [`WIRE_IDS`]: from the
