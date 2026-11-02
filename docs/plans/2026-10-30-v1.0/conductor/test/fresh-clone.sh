@@ -20,9 +20,10 @@ hits=$(grep -rnE '/root/|/home/user' "$H/gc-tools" --exclude-dir=node_modules --
 [ -z "$hits" ] || { echo "FAIL machine paths:"; echo "$hits"; exit 1; }
 echo "PASS no machine paths"
 L=$H/gc-night/lanes
+same() { python3 -c 'import filecmp, sys; sys.exit(0 if filecmp.cmp(sys.argv[1], sys.argv[2], shallow=False) else 1)' "$1" "$2"; }
 [ -f "$L/integrator.log" ] || { echo "FAIL integrator.log not restored"; exit 1; }
-diff -q "$L/integrator.log" "$C/ledger/integrator.log" >/dev/null || { echo "FAIL integrator.log differs"; exit 1; }
+same "$L/integrator.log" "$C/ledger/integrator.log" || { echo "FAIL integrator.log differs"; exit 1; }
 if [ -f "$C/ledger/integrator.log.scribed" ]; then
-  diff -q "$L/integrator.log.scribed" "$C/ledger/integrator.log.scribed" >/dev/null || { echo "FAIL .scribed differs"; exit 1; }
+  same "$L/integrator.log.scribed" "$C/ledger/integrator.log.scribed" || { echo "FAIL .scribed differs"; exit 1; }
 fi
 echo "PASS ledger restored"
