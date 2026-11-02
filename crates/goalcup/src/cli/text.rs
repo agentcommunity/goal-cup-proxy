@@ -571,7 +571,11 @@ pub fn harness_line(name: &str, alive: bool, exit: Option<Exit>, started: bool) 
 pub fn written_line(requests: u64, hosts: &[(&str, u64)], whole: u64, holes: u64) -> String {
     let mut line = format!(
         "Written so far: {}",
-        plural(requests, "request to model hosts", "requests to model hosts")
+        plural(
+            requests,
+            "request to model hosts",
+            "requests to model hosts"
+        )
     );
     if !hosts.is_empty() {
         line += &format!(" ({})", host_list(hosts));
@@ -1320,7 +1324,9 @@ mod tests {
             written_line(3, &hosts, 3, 0),
             "Written so far: 3 requests to model hosts (api.anthropic.com 3)"
         );
-        assert!(written_line(1, &hosts, 1, 0).starts_with("Written so far: 1 request to model hosts"));
+        assert!(
+            written_line(1, &hosts, 1, 0).starts_with("Written so far: 1 request to model hosts")
+        );
         assert_eq!(
             requests_written(3, &hosts),
             "3 requests to model hosts written: api.anthropic.com 3."
