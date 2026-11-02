@@ -4,7 +4,7 @@ Written Monday 2 November 2026 at about 10:10 UTC for the owner. The conductor f
 
 **Not ready: no release blocker set passes on one frozen head yet. Hermes has no PASS row, and no one-hour run is a PASS (best is INCONCLUSIVE).**
 
-Acceptance line: A2, A3 and A5 have each run twice. The first pass failed on all three. The second pass is INCONCLUSIVE on all three, with C1 to C6 mostly PASS. A third A2 pass on the Paynest prompt (H6) is INCONCLUSIVE with C1 to C6 all PASS, 13 subagents, 12 at once. A1 and A4 run after the release.
+Acceptance line: A2, A3 and A5 have each run twice. The first pass failed on all three. The second pass is INCONCLUSIVE on all three, with C1 to C6 mostly PASS. Third and fourth A2 passes on the Paynest prompt (H6) are INCONCLUSIVE with C1 to C6 all PASS; pass 4 meets X2 with 15 subagents, 11 at once. A1 and A4 run after the release.
 
 ## Your decisions
 
@@ -89,7 +89,7 @@ Your calls today: 02:00 the key answer (W1: rotate Gemini and DeepSeek later, cl
 ## What is not proven
 
 - Hermes: no PASS row. C3 stays INCONCLUSIVE (ask 4). Its gateway C1 failure was a verifier defect, fixed and shown by replay only.
-- Any one-hour run as a PASS. X2 (15 subagents, 10 at once) is half reached: A2 pass 3 on the Paynest prompt had 12 at once but 13 subagents, with C1 to C6 all PASS. Best at once for Codex: 5. Hermes cannot show concurrency from task logs.
+- Any one-hour run as a PASS. X2 (15 subagents, 10 at once) is reached on A2 pass 4 (15 subagents, 11 at once, C1 to C6 all PASS); that row is still INCONCLUSIVE because its minute-30 kill was quiet. A pad bug (the watch exited at start, 06:07Z to 13:14Z) is fixed in `9a96b84e`. Best at once for Codex: 5. Hermes cannot show concurrency from task logs.
 - Kill-gap bound under load: PASS once in three runs.
 - Not verified: Gemini CLI (stalls on a build-file approval screen the settings do not skip), OpenClaw (no tool use in the 15-minute row), Copilot (subagents), Cline, Amp, Factory.
 - macOS, the newcomer docs run and the clean-up check: no result yet.

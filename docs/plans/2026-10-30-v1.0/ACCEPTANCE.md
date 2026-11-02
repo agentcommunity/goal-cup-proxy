@@ -104,23 +104,23 @@ The composite runs replace PRD-16's separate A2 and A3 lengths, and A5 stands in
 
 A2 is Claude Code direct. A5 is Codex direct. A3 is Hermes through the gateway. Figures are `longsum` output. "Run 1" was the earlier failed Codex run, for comparison.
 
-| Measure | A2 pass 1 (H2) | A2 pass 2 (H4) | A5 pass 1 | A5 pass 2 | A3 pass 1 | A3 pass 2 | Run 1 | A2 pass 3 (H6, Paynest) |
-|---|---|---|---|---|---|---|---|---|
-| Hours | 1.0 | 1.0 | 1.02 | 1.02 | 1.0 | 1.02 | 0.8 | 1.0 |
-| USD | 2.08 | 1.95 | 2.87 | 2.90 | 1.97 | 2.10 | not given | 3.65 |
-| Subagents | 6 | 6 | 9 | 6 | 12 | 15 | 42 (PRD-16) | 13 |
-| Most at once | 5 | 6 | 3 | 5 | 0 | 0 | not given | 12 |
-| Wire requests | 167 | 194 | 291 | 260 | 808 | 898 | not given | 309 |
-| Raw MB per hour | 25.3 | 30.6 | 214.9 | 128.6 | 749.2 | 1044.2 | 495.9 | 45.1 |
-| Compressed MB per hour | 2.3 | 2.9 | 6.1 | 6.5 | 10.8 | 18.6 | not given | 3.4 |
-| Recorder RSS peak MB | 62.9 | 64.5 | 178.7 | 110.9 | 170.6 | 179.3 | not given | not given |
-| Input tokens per hour | 48,044 | 40,626 | 329,559 | 283,806 | 1,116,961 | 1,257,886 | 143,755,102 | 132,782 |
-| Output tokens per hour | 347,164 | 327,854 | 93,099 | 94,522 | 808,191 | 854,750 | 502,776 | 649,756 |
-| X2 (subagents) | INC | INC | INC | INC | INC | INC | | INC |
-| X3 (no memory guard loss) | PASS | PASS | PASS | PASS | PASS | PASS | | PASS |
-| X4 (kill gaps) | FAIL | FAIL, line INC | FAIL | FAIL, line INC | FAIL | PASS | | FAIL, line INC |
-| C1 to C6 | C6 INC, rest PASS | all PASS | C6 INC, rest PASS | all PASS | C3 FAIL, C6 INC | C3 INC, rest PASS | | all PASS |
-| Row result | FAIL | INC | FAIL | INC | FAIL | INC | | INC |
+| Measure | A2 pass 1 (H2) | A2 pass 2 (H4) | A5 pass 1 | A5 pass 2 | A3 pass 1 | A3 pass 2 | Run 1 | A2 pass 3 (H6, Paynest) | A2 pass 4 (H6, Paynest, watch fixed) |
+|---|---|---|---|---|---|---|---|---|---|
+| Hours | 1.0 | 1.0 | 1.02 | 1.02 | 1.0 | 1.02 | 0.8 | 1.0 | 1.0 |
+| USD | 2.08 | 1.95 | 2.87 | 2.90 | 1.97 | 2.10 | not given | 3.65 | 4.97 |
+| Subagents | 6 | 6 | 9 | 6 | 12 | 15 | 42 (PRD-16) | 13 | 15 |
+| Most at once | 5 | 6 | 3 | 5 | 0 | 0 | not given | 12 | 11 |
+| Wire requests | 167 | 194 | 291 | 260 | 808 | 898 | not given | 309 | 463 |
+| Raw MB per hour | 25.3 | 30.6 | 214.9 | 128.6 | 749.2 | 1044.2 | 495.9 | 45.1 | 67.5 |
+| Compressed MB per hour | 2.3 | 2.9 | 6.1 | 6.5 | 10.8 | 18.6 | not given | 3.4 | 4.9 |
+| Recorder RSS peak MB | 62.9 | 64.5 | 178.7 | 110.9 | 170.6 | 179.3 | not given | not given | 86.8 |
+| Input tokens per hour | 48,044 | 40,626 | 329,559 | 283,806 | 1,116,961 | 1,257,886 | 143,755,102 | 132,782 | 170,429 |
+| Output tokens per hour | 347,164 | 327,854 | 93,099 | 94,522 | 808,191 | 854,750 | 502,776 | 649,756 | 755,182 |
+| X2 (subagents) | INC | INC | INC | INC | INC | INC | | INC | PASS |
+| X3 (no memory guard loss) | PASS | PASS | PASS | PASS | PASS | PASS | | PASS | PASS |
+| X4 (kill gaps) | FAIL | FAIL, line INC | FAIL | FAIL, line INC | FAIL | PASS | | FAIL, line INC | FAIL, line INC |
+| C1 to C6 | C6 INC, rest PASS | all PASS | C6 INC, rest PASS | all PASS | C3 FAIL, C6 INC | C3 INC, rest PASS | | all PASS | all PASS |
+| Row result | FAIL | INC | FAIL | INC | FAIL | INC | | INC | INC |
 
 What each pass shows:
 
@@ -129,7 +129,9 @@ What each pass shows:
 - A5 pass 2: OpenAI returned `credit_balance_exhausted` 7 times and `rate_limit_exceeded` 17 times, and spend stopped growing from about minute 25. The run still recorded 287 model requests and sealed.
 - Gaps in pass 2, in order: A2 killed 987 ms, killed 14,382 ms, watchdog_lost 115,296 ms. A5 killed 424 ms, killed 768 ms, watchdog_lost 77,991 ms. A3 killed 663 ms, killed 512 ms, watchdog_lost 61,512 ms. I read `watchdog_lost` as the deliberate span between the watchdog kill and the recover command, not harness-visible loss.
 - A2 pass 3 ran on H6 binaries (`284c2610`) with the Paynest prompt, cap 8 USD. C1 to C6 all PASS. 13 subagents, 12 at once: the 10-at-once target is met, the 15-subagent target is not (13). Gaps: killed 380 ms, killed 57,329 ms, watchdog_lost 119,788 ms. The 57 s gap is a quiet kill: no request was in flight, and the harness sent none until 57 s later, so it measures harness idle, not recorder downtime (recorder back in 2.4 s). Faults are INCONCLUSIVE because the pad took no status sample on both sides of each kill, a pad measurement gap, not a recorder fault. Keyscan: 0 hits. Evidence only, not a release row.
-- No `memory_guard` gap in any run (X3 PASS seven times).
+- The pad watch was not running on any row from about 06:07Z to 13:14Z on 2 November: after the exec retry merge it inherited the paste step's attempt id, took itself for a resend and exited. Those rows have no status samples and got no "keep going". That is why A2 pass 3 faults could not be judged. Fixed in `9a96b84e` (gate PASS). Rows in that window keep their C1 to C6 results, which do not need the watch.
+- A2 pass 4 ran on the same H6 binaries with the fixed pad. X2 PASS: 15 subagents, 11 at once. C1 to C6 all PASS (C3 with the stated loss for values split across streamed reply deltas). 363 status samples, "keep going" typed 8 times. Gaps: killed 176 ms, killed 47,331 ms, watchdog_lost 116,180 ms. Faults stay INCONCLUSIVE on one point: the minute-30 kill was quiet again (no request in flight, recorder back in 2.2 s, the harness sent nothing new for 47 s), so the pad could not watch a request recover. The minute-10 kill under load recovered with a 176 ms gap. Keyscan: 0 hits. Evidence only, not a release row.
+- No `memory_guard` gap in any run (X3 PASS eight times).
 - Recorder memory peak stayed under 180 MB in all six, inside the 260 MiB line of PRD-06 U7a. The framing share and the minute-60 rotation step (X9) are not in the `longsum` output.
 - Total spend of the six runs: 13.87 USD, against a cap of 15 USD each.
 
