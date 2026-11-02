@@ -678,7 +678,8 @@ def recorder_kills(r, kinds):
                    ("quiet kill: gap of %s ms, length not shown" if k in quiet else "a recorder_down gap of %s ms, not under 2 s") % ms)
     code = dig(r.local, "s6_exit")
     stated = r.loss_exit(code)  # C3's INCONCLUSIVE
-    r.flag(kills and code != 1 and not stated, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
+    leak = code == 2 and set(r.failed) == {"secrets"}  # C3 reports the leak; the kill row's exit is then the expected 1
+    r.flag(kills and code != 1 and not stated and not leak, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def near(gap, fault):
     """True when the gap ends between 1 s before the kill and CRASH_SLACK after it: only the gap end is timed (PRD-01)."""
