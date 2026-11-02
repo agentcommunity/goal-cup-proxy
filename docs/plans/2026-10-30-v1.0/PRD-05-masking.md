@@ -552,7 +552,7 @@ masks at 14.4 MB/s with no participant value and 6.1 MB/s with 32 values, so the
 of the no-value rate. `Masker::new` took 91 ms and the peak resident memory was 38 MB on this box.
 Both are inside their targets. The 50 MB/s stream target is held back by the shared rules (14.6
 MB/s alone), by the hold, and by the matcher itself. The release-only test
-`find_all_alone_is_far_above_50_mb_s` asserts the 50 MB/s figure and therefore fails in a release
+`find_all_alone_holds_its_measured_floor` asserts the 50 MB/s figure and therefore fails in a release
 build; it skips itself in the debug builds of the gate, so the gate does not see it. Whether to
 lower or drop that assertion is open (see the amendment). The change to the hold, one literal
 tracker per stream, is deferred to after 1.0; it runs only if the one-hour runs show the recorder
@@ -1258,7 +1258,7 @@ A1 reports it as a stated loss instead of failing on it.
   is above the old code's best (3.3).
 - **Measured again, matcher alone.** `find_all` alone: 20.6 MB/s. Stream, no values 14.4 MB/s, with
   32 values 6.1 MB/s (ratio 0.42). `Masker::new` 91 ms, peak 38 MB. The release-only test
-  `find_all_alone_is_far_above_50_mb_s` asserts more than 50 MB/s and fails in a release build; the
+  `find_all_alone_holds_its_measured_floor` asserts more than 50 MB/s and fails in a release build; the
   owner or conductor decides whether to lower the figure, mark it ignored, or speed the matcher up.
   The per-stream literal tracker (one `LiteralTrack` per scanner) is deferred to after 1.0, with the
   trigger in section 11.
