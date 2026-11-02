@@ -1,5 +1,7 @@
 # Goalcup 1.0 morning report
 
+**Update, 2 November evening.** Vercel Sandbox is no longer used, by owner rule. All further tests run on the owner's Mac, from a new local session: paste `LOCAL-SESSION-PROMPT.md` into it, and the plan is `MAC-TESTS.md`. The last cloud one-hour run (A2 pass 5) was void because the Claude key had no credit. The Claude, OpenAI and gateway keys need credit before their rows. A draft report for the Hermes team is in `HERMES-UPSTREAM-DRAFT.md` (not sent). The freeze default stays Tuesday 3 November 18:00 UTC.
+
 Written Monday 2 November 2026 at about 10:10 UTC for the owner. The conductor finalises it with the last rows. Full evidence is in `ACCEPTANCE.md`. The overnight log is `NIGHT-LOG.md`.
 
 **Not ready: no release blocker set passes on one frozen head yet. Hermes has no PASS row, and no one-hour run is a PASS (best is INCONCLUSIVE).**
