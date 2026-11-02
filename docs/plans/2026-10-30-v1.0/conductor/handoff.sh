@@ -1,17 +1,20 @@
 #!/bin/bash
 # Regenerate docs/plans/2026-10-30-v1.0/HANDOFF.md and the conductor/ tool copies on v1.0/integration.
 set -u
-NIGHT=/root/gc-night; REPO=/home/user/goal-cup-proxy; WT=$NIGHT/handoff-wt
+. "$(dirname "$0")/lib.sh"
+TRAILER=$(gc_trailer) || exit 2
+gc_need_repo
+NIGHT=$GC_NIGHT; REPO=$GC_REPO; WT=$NIGHT/handoff-wt
 D=docs/plans/2026-10-30-v1.0
 exec 9>"$NIGHT/integration.lock"; flock 9
 cd "$REPO" && git fetch -q origin
 git worktree remove --force "$WT" 2>/dev/null; rm -rf "$WT"
 git worktree add -q --detach "$WT" origin/v1.0/integration && cd "$WT"
 mkdir -p "$D/conductor"
-cp /root/gc-tools/box.mjs /root/gc-tools/merge.sh /root/gc-tools/mergeq.sh /root/gc-tools/scribe.sh /root/gc-tools/handoff.sh /root/gc-tools/handoff-head.md "$D/conductor/"
-cp /home/user/gc-scripts/gc-lane.js "$D/conductor/gc-lane.js"
+cp "$GC_TOOLS/box.mjs" "$GC_TOOLS/merge.sh" "$GC_TOOLS/mergeq.sh" "$GC_TOOLS/scribe.sh" "$GC_TOOLS/handoff.sh" "$GC_TOOLS/handoff-head.md" "$D/conductor/"
+cp "${GC_LANE:-$GC_TOOLS/gc-lane.js}" "$D/conductor/gc-lane.js"
 {
-  cat /root/gc-tools/handoff-head.md
+  cat "$GC_TOOLS/handoff-head.md"
   echo
   echo "## Branches ($(date -u '+%d %b %H:%MZ'), integration at $(git rev-parse --short origin/v1.0/integration))"
   echo
@@ -27,8 +30,5 @@ cp /home/user/gc-scripts/gc-lane.js "$D/conductor/gc-lane.js"
 } > "$D/HANDOFF.md"
 git add "$D/HANDOFF.md" "$D/conductor"
 if git diff --cached --quiet; then echo "handoff unchanged"; else
-  git commit -q -m "docs(plans): handoff ledger and conductor tool copies
-
-Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01V2hUmG4Ccnfp953KQMAUS6" && git push -q origin HEAD:v1.0/integration && echo "handoff pushed $(git rev-parse --short HEAD)"; fi
+  git commit -q -m "docs(plans): handoff ledger and conductor tool copies$TRAILER" && git push -q origin HEAD:v1.0/integration && echo "handoff pushed $(git rev-parse --short HEAD)"; fi
 cd "$REPO"; git worktree remove --force "$WT"

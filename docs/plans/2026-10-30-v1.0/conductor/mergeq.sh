@@ -1,11 +1,14 @@
 #!/bin/bash
 # Merge queue, driven by whoever waits on it (lane waiter agents), for at most $1 seconds (default 540).
-# Request: /root/gc-night/mrq/<id>.req, JSON {"branch", "message", "refresh_lock", "first"}.
+# Request: $GC_NIGHT/mrq/<id>.req, JSON {"branch", "message", "refresh_lock", "first"}.
 # Result:  <id>.res, JSON {"exit", "output", "gate_log"}; exit 0 merged, 1 gate FAIL, 3 conflict, 4 push refused.
 # A request is claimed by an atomic rename and its merge runs detached (setsid), so a waiter that stops
 # never loses a result. merge.sh holds the integration lock, so merges never overlap.
 # Requests wait until PRD-14's gate change is on integration, except one marked "first".
-Q=/root/gc-night/mrq; REPO=/home/user/goal-cup-proxy
+set -u
+. "$(dirname "$0")/lib.sh"
+gc_need_repo
+Q=$GC_NIGHT/mrq; REPO=$GC_REPO
 end=$(( $(date +%s) + ${1:-540} ))
 # A claim with no result after 90 minutes goes back to the queue.
 for c in "$Q"/*.claimed; do
@@ -24,11 +27,11 @@ while [ "$(date +%s)" -lt "$end" ]; do
     mv "$r" "$Q/$id.claimed" 2>/dev/null || continue
     flags=""; [ "$rl" = 1 ] && flags="--refresh-lock"
     setsid nohup bash -c '
-      out=$(/root/gc-tools/merge.sh "$1" "$2" $3 2>&1); code=$?
-      gl=$(ls -t /root/gc-night/gate-logs/*.log 2>/dev/null | head -1)
+      out=$("$6/merge.sh" "$1" "$2" $3 2>&1); code=$?
+      gl=$(ls -t "$7"/gate-logs/*.log 2>/dev/null | head -1)
       python3 -c "import json,sys;json.dump({\"exit\":int(sys.argv[2]),\"output\":sys.argv[3][-3000:],\"gate_log\":sys.argv[4]},open(sys.argv[1]+\".tmp\",\"w\"))" "$4/$5.res" "$code" "$out" "$gl"
       mv "$4/$5.res.tmp" "$4/$5.res"; mv "$4/$5.claimed" "$4/done/$5.req"
-    ' _ "$br" "$msg" "$flags" "$Q" "$id" >/dev/null 2>&1 < /dev/null &
+    ' _ "$br" "$msg" "$flags" "$Q" "$id" "$GC_TOOLS" "$GC_NIGHT" >/dev/null 2>&1 < /dev/null &
   done
   sleep 20
 done
