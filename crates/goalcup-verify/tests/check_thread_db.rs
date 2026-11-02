@@ -189,3 +189,18 @@ fn with_no_database_copy_the_wire_threads_stay_without_parents() {
     assert!(t.threads.iter().all(|x| x.parent.is_none()));
     assert_eq!(t.children, None);
 }
+
+#[test]
+fn an_empty_crush_parent_is_no_parent_not_the_hash_of_nothing() {
+    // xxh3-64 of "", which must never stand as a parent.
+    const EMPTY_HASH: &str = "2d06800538d394c2";
+    let rows = [(CRUSH_ROOT, Some("")), (CRUSH_KID, Some(CRUSH_ROOT))];
+    let files = db("crush.db", false, &rows);
+    let dir = entry("thread-db-crush-empty", "crush-cli", "db", &files, |e| {
+        chat(e, &[("x-session-id", ROOT_HASH)]);
+        chat(e, &[("x-session-id", KID_HASH)]);
+    });
+    let t = call_table(&dir);
+    linked(&t, ROOT_HASH, KID_HASH, 2);
+    assert!(!format!("{t:?}").contains(EMPTY_HASH));
+}
