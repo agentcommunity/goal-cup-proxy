@@ -449,6 +449,9 @@ class Run:
         os.remove(self.path("paste.txt"))
         time.sleep(float(h.get("submit_delay", 2)))
         sh(["tmux", "send-keys", "-t", t, "Enter"])
+        if h.get("resubmit_delay"):  # a TUI that collapses a long paste to a "[paste #1 N chars]" chip may take the first Enter as part of the paste (OpenClaw)
+            time.sleep(float(h["resubmit_delay"]))
+            sh(["tmux", "send-keys", "-t", t, "Enter"])
         self.st["pasted"] = time.time()
         self.pane()
         write(self.path("state.json"), json.dumps(self.st))  # the watch reads `pasted` from it
