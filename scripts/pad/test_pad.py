@@ -1248,16 +1248,21 @@ class MiniFixRound(unittest.TestCase):
 class WorkEvidence(unittest.TestCase):
     """A row that committed nothing yet but made many model requests did work; one with neither did not (W2)."""
 
-    def row(self, commits, reqs):
+    def row(self, commits, reqs, native=1):
         return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1",
                                        "commits_since_start": commits},
-                         "verify/check-local.json": {"exit": 0, "entries": [{"entry": "e1", "counts": {"model_requests": reqs},
+                         "verify/check-local.json": {"exit": 0, "entries": [{"entry": "e1", "counts": {"model_requests": reqs, "native_files": native},
                                                                               "checks": []}]},
                          "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0}})
 
     def test_many_requests_without_commits_is_work(self):
         row = self.row(0, 380)
         self.assertNotEqual(row["checks"]["C1"], "INCONCLUSIVE", row["why"])
+
+    def test_many_requests_without_a_tool_turn_or_commit_is_no_work(self):  # chat only, or a permission-screen retry loop (W3)
+        row = self.row(0, 380, native=0)
+        self.assertEqual(row["checks"]["C1"], "INCONCLUSIVE")
+        self.assertTrue(any("tool turn none" in w for w in row["why"]), row["why"])
 
     def test_few_requests_without_commits_is_no_work(self):
         row = self.row(0, 4)

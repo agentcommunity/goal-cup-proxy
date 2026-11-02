@@ -291,7 +291,7 @@ def cause(r):
         return "provider_refused: 401 or 403 from the model host"
     return None
 
-WORK_REQUESTS = 10  # model requests that show work without a commit
+WORK_REQUESTS = 10  # model requests that, with a tool-using turn, show work without a commit
 
 
 def judge(r):
@@ -303,8 +303,9 @@ def judge(r):
         stale(r)  # whatever else happened, as C3
     pin = r.meta.get("model_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
     tunnels = (r.hosts("s6_tunnel_hosts") or {}).get(pin, 0)  # section 2: a dodger's calls ride `pinned` tunnels
-    work = (seen or tunnels or r.native or dig(r.usage, "s7_native")) and ((r.meta.get("commits_since_start") or 0) >= 1 or (seen or 0) >= WORK_REQUESTS)  # W2: a young Paynest row commits nothing yet
-    idle = "the harness did no work (commits since start %s, model requests %s; work is a commit or %d model requests)" % (r.meta.get("commits_since_start"), seen, WORK_REQUESTS)
+    tool_turn = bool(r.native or dig(r.usage, "s7_native"))  # the harness's own stream shows a tool call
+    work = (seen or tunnels or tool_turn) and ((r.meta.get("commits_since_start") or 0) >= 1 or ((seen or 0) >= WORK_REQUESTS and tool_turn))  # W2: a young Paynest row commits nothing yet; chat or a retry loop is not work
+    idle = "the harness did no work (commits since start %s, model requests %s, tool turn %s; work is a commit, or %d model requests with a tool-using turn)" % (r.meta.get("commits_since_start"), seen, "seen" if tool_turn else "none", WORK_REQUESTS)
     stop = cause(r) or (None if work else ("the harness lost its terminal; " if lost_terminal(r) else "") + idle)
     if stop:
         for c in ("C1", "C2", "C4", "C5", "C6", "faults"):
