@@ -394,6 +394,10 @@ class CrashRows(unittest.TestCase):
             if quiet and not fails:
                 self.assertEqual(res, "INCONCLUSIVE", (start, end))
 
+    def test_short_gap_ending_just_after_the_kill_pairs(self):  # A2: killed, 969 ms
+        gap = {"cause": "killed", "start": "2026-10-30T10:01:59.431Z", "end": "2026-10-30T10:02:00.4Z", "ms": 969}
+        self.assertEqual(self.row("kill-recorder", gap)["faults"], "PASS")
+
     LOST = {"kind": "status", "exit": 0, "at": "2026-10-30T10:03:40+00:00",
             "said": "Problem. Recording is off since 10:02: goalcup is not running. To go on, run: goalcup continue r1"}
 
@@ -472,6 +476,16 @@ class FaultRows(unittest.TestCase):
         self.assertEqual(self.row(both, faults, [plain, own], counts={"recorder_down": 2}), "PASS")
         self.assertEqual(self.row(both, faults, [dict(plain, cause="null_mode"), own], counts={"recorder_down": 2}), "FAIL")
         self.assertEqual(self.row(both, faults, [own], counts={"recorder_down": 1}), "FAIL")  # the plain kill left no gap
+
+    def test_gap_pairs_to_a_kill_by_its_end(self):  # A2: the gap starts at the dead boot's last LINK, up to a minute before the kill
+        plain = {"cause": "killed", "start": "2026-10-30T10:00:08Z", "end": "2026-10-30T10:00:30.3Z", "ms": 22300}
+        own = {"cause": "watchdog_lost", "start": "2026-10-30T10:02:00Z", "end": "2026-10-30T10:03:00Z"}
+        faults = [{"kind": k, "exit": 0, "said": w, "at": at} for k, w, at in (
+            ("recover", check.RECOVER[0], "02:30"), ("recover", check.RECOVER[1], "04:00"), ("status", check.STATUS_RECOVER, "03:30"))]
+        faults += [{"kind": "kill-recorder", "pid": 9, "quiet": True, "at": "00:30"}, {"kind": "kill-watchdog", "pid": 9, "at": "02:00"},
+                   {"kind": "kill-recorder", "pid": 9, "at": "02:00"}, {"kind": "wait-recovery", "result": "ok", "at": "01:00"}]
+        both = ["kill-recorder@0", "kill-watchdog-recover@3"]
+        self.assertEqual(self.row(both, faults, [plain, own], counts={"recorder_down": 2}), "INCONCLUSIVE")  # quiet: length not shown
 
     def test_kill_both_abandoned_gap_may_start_a_minute_before_the_kill(self):  # it starts at the last LINK (PRD-01 section 10)
         both = [{"kind": "kill-both", "pid": 3, "watchdog": 4, "at": "05:00"}]
