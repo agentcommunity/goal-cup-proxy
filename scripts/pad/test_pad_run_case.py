@@ -113,6 +113,20 @@ class Recovery(unittest.TestCase):
         self.assertEqual(cm.exception.args[0], "INCONCLUSIVE")  # not FAIL: the first three held
 
 
+    def test_idle_harness_after_a_kill_is_inconclusive_not_fail(self):  # A2: recorder back in 44 ms, no new request follows
+        r = bare()
+        r.st["kill"] = dict(pid=1, at=padrun.time.time() - 0.1, requests=4, off_spans=0, off_ms=0, quiet=False)
+        r.status = lambda: {}
+        r.work = lambda s=None: 4
+        r.left = lambda: 5
+        dig = {"s4_pid": 2, "s4_mode": "recording", "s4_spans": 1, "s4_since": None, "s4_down_ms": 10}
+        with mock.patch.object(padrun.pc, "dig", lambda d, n: dig.get(n)), mock.patch.object(padrun, "wait", lambda ok, l, e: ok()):
+            with self.assertRaises(padrun.Step) as cm:
+                r.wait_recovery(None)
+        self.assertEqual(cm.exception.args[0], "INCONCLUSIVE")
+        self.assertRegex(cm.exception.args[1], r"back in 0\.\d s")
+
+
 class EarlyPane(unittest.TestCase):
     def test_pane_is_copied_before_recording_seen(self):
         d = tempfile.TemporaryDirectory()
