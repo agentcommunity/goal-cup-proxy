@@ -59,14 +59,20 @@ fn calls(t: &CallTable) -> Vec<&CallRow> {
 
 /// The children map of one parent with one child.
 fn kids(parent: &str, kid: &str) -> Option<BTreeMap<String, Vec<String>>> {
-    Some(BTreeMap::from([(parent.to_string(), vec![kid.to_string()])]))
+    Some(BTreeMap::from([(
+        parent.to_string(),
+        vec![kid.to_string()],
+    )]))
 }
 
 #[test]
 fn opencode_threads_and_parent_come_from_the_wire() {
     let dir = entry("wire-ids-opencode", "opencode-cli", |e| {
         chat(e, &[("x-opencode-session-id", MAIN)]);
-        let kid = [("x-opencode-session-id", KID), ("x-opencode-parent-session-id", MAIN)];
+        let kid = [
+            ("x-opencode-session-id", KID),
+            ("x-opencode-parent-session-id", MAIN),
+        ];
         chat(e, &kid);
     });
     let t = call_table(&dir);
@@ -111,7 +117,10 @@ fn a_connector_with_no_wire_ids_reads_no_threads() {
     assert_eq!(t.children, None);
     let rows = calls(&t);
     assert_eq!(rows.len(), 1);
-    assert_eq!((rows[0].thread.as_ref(), rows[0].parent.as_ref()), (None, None));
+    assert_eq!(
+        (rows[0].thread.as_ref(), rows[0].parent.as_ref()),
+        (None, None)
+    );
     assert_eq!(rows[0].join, Some(Join::WireOnly));
 }
 
@@ -132,8 +141,18 @@ fn codex_websocket_client_metadata_names_the_parent() {
         e.data(up, 0, 0x10 | FLAG_FIN, msg.as_bytes());
         let done = br#"{"type":"response.completed"}"#;
         e.data(down, 0, 0x10 | FLAG_FIN, done);
-        e.end(up, EndReason::Complete, msg.len() as u64, json!({"close_code": 1000}));
-        e.end(down, EndReason::Complete, done.len() as u64, json!({"close_code": 1000}));
+        e.end(
+            up,
+            EndReason::Complete,
+            msg.len() as u64,
+            json!({"close_code": 1000}),
+        );
+        e.end(
+            down,
+            EndReason::Complete,
+            done.len() as u64,
+            json!({"close_code": 1000}),
+        );
         e.end(c, EndReason::Complete, 0, json!({"up": 400, "down": 300}));
     });
     let t = call_table(&dir);

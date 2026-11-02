@@ -59,7 +59,10 @@ const WIRE_IDS: &[(&str, &[&str], &[&str])] = &[
     (
         "codex-cli",
         &["thread-id", "/client_metadata/thread_id"],
-        &["x-codex-parent-thread-id", "/client_metadata/x-codex-parent-thread-id"],
+        &[
+            "x-codex-parent-thread-id",
+            "/client_metadata/x-codex-parent-thread-id",
+        ],
     ),
     (
         "opencode-cli",

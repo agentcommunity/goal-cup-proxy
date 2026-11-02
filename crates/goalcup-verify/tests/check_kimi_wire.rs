@@ -195,9 +195,17 @@ fn a_long_call_joins_its_own_wire_call_by_its_end() {
     e.idle(17_900);
     chat(&mut e);
     let main = json!({"inputOther": 11, "output": 5});
-    file(&mut e, &path("main"), &call_until("main", ms(10), ms(40), main));
+    file(
+        &mut e,
+        &path("main"),
+        &call_until("main", ms(10), ms(40), main),
+    );
     let kid = json!({"inputOther": 7, "output": 3});
-    file(&mut e, &path("agent-0"), &call_until("agent-0", ms(20), ms(22), kid));
+    file(
+        &mut e,
+        &path("agent-0"),
+        &call_until("agent-0", ms(20), ms(22), kid),
+    );
     e.count();
     let dir = e.seal();
     let set = |v: &mut Value| v["connector"] = "kimi-code-cli".into();
