@@ -3,8 +3,10 @@ value in any argument or file the pad builds (an env key launch included), the p
 check.py's crash rows. No network; gate fast runs python3.11 -m unittest discover -s scripts/pad -p 'test_*.py'.
 """
 import base64
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -205,6 +207,44 @@ class ExecRetry(unittest.TestCase):
     def test_three_attempts_at_most(self):
         run, got, _ = self.box([self.FAIL, self.NONE, self.FAIL, self.NONE, self.FAIL])
         self.assertEqual((got[0], run.n), ("error", 5))
+
+    def test_a_partial_result_file_is_not_a_result(self):
+        half = ('PADSTEP {"result": "ok", "sa\n', "")
+        run, got, _ = self.box([self.FAIL] + [half] * 8, "kill-recorder@30")
+        self.assertEqual(got[0], "error")
+        self.assertEqual(run.n, 9)  # one kill, eight questions, never a second kill
+
+
+class AttemptBegin(unittest.TestCase):
+    """The box refuses a repeated attempt id: a resend under the same id never runs the step twice."""
+
+    def main(self, with_json):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, "attempts"))
+        aid = "0123456789ab"
+        mark = os.path.join(d, "attempts", aid)
+        open(mark + ".begin", "w").close()
+        if with_json:
+            with open(mark + ".json", "w") as f:
+                f.write('{"result": "ok", "saw": "killed"}')
+        ran = []
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"PAD_ATTEMPT": aid}), mock.patch.object(padrun, "Run", side_effect=ran.append), \
+                contextlib.redirect_stdout(out):
+            padrun.main(["pad-run", d, "look"])
+        return ran, out.getvalue()
+
+    def test_a_repeated_attempt_does_not_run_the_step(self):
+        ran, out = self.main(True)
+        self.assertEqual(ran, [])
+        self.assertEqual(out, 'PADSTEP {"result": "ok", "saw": "killed"}\n')
+
+    def test_a_repeated_attempt_with_no_result_says_it_began(self):
+        ran, out = self.main(False)
+        self.assertEqual(ran, [])
+        self.assertIn("attempt already began", out)
+        self.assertEqual(json.loads(out[len("PADSTEP "):])["result"], "error")
 
 
 class Walk(unittest.TestCase):
