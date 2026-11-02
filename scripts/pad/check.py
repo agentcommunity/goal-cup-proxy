@@ -54,7 +54,7 @@ SPAN = {"freeze", "cut-worker", "route-drop"}
 FAULT_GAPS = {"kill-recorder": ("recorder_down",), "kill-watchdog-recover": ("recorder_down",),
               "kill-both": ("recorder_down",), "route-drop": ("decode_failed",)}
 CLEAN = ("kill-watchdog", "freeze", "cut-worker", "fd-limit")  # rows that expect no loss: "checks as a clean run"
-CRASH_SLACK = datetime.timedelta(seconds=5)  # PRD-02 9.1: a recorder_down gap starts at most about 1 s before a plain kill
+CRASH_SLACK = datetime.timedelta(seconds=5)  # a recorder_down gap ends at most this long after its kill (it starts at the dead boot's last LINK, up to a minute before it)
 LINK_SLACK = datetime.timedelta(seconds=65)  # PRD-02 9.4: an abandoned gap starts at the last LINK, at most a minute before kill-both
 ROUTE_SLACK = datetime.timedelta(seconds=10)  # a call cut by the drop may break just after the route is back
 DOWN_ERR = re.compile(r"(?<!\d)5\d\d(?!\d)|overloaded|server_error|api_error|internal", re.I)  # S6 keys are
@@ -654,7 +654,7 @@ def recorder_kills(r, kinds):
     r.flag(any(a is None or b is None or a >= b for a, b, _ in span), "faults", "FAIL",
            "a recorder_down gap without start before end")
     # The recover's own gap is whatever is not at a plain kill; a row with both runs the plain checks on the first only.
-    mine = [g for g in gaps if not own or any(near(g, f) for f in kills)]
+    mine = [g for g in gaps if not own or g.get("cause") != "watchdog_lost" and any(near(g, f) for f in kills)]
     if "kill-watchdog-recover" in kinds:
         recover(r, [g for g in gaps if g not in mine])
         if not kills:
@@ -681,9 +681,9 @@ def recorder_kills(r, kinds):
     r.flag(kills and code != 1 and not stated, "faults", "FAIL", "verifier exit %s, a kill row expects 1" % dig(r.local, "s6_exit"))
 
 def near(gap, fault):
-    """True when the gap starts within CRASH_SLACK of the kill's time."""
-    a, k = when(gap.get("start")), when(fault.get("at"))
-    return bool(a and k and abs(a - k) <= CRASH_SLACK)
+    """True when the gap ends between 1 s before the kill and CRASH_SLACK after it: only the gap end is timed (PRD-01)."""
+    b, k = when(gap.get("end")), when(fault.get("killed_at") or fault.get("at"))
+    return bool(b and k and k - datetime.timedelta(seconds=1) <= b <= k + CRASH_SLACK)
 
 def recover(r, gaps):
     for kind in ("kill-watchdog", "kill-recorder"):  # PRD-10 acceptance 11 needs both kills
