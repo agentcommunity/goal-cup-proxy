@@ -33,9 +33,9 @@ done
 [ -f "$NIGHT/reviews/LATEST.md" ] && cp "$NIGHT/reviews/LATEST.md" "$C/reports/review-latest.md"
 [ -f "$NIGHT/backlog/next-pad-verify.md" ] && cp "$NIGHT/backlog/next-pad-verify.md" "$C/reports/next-pad-verify.md"
 [ -f "$NIGHT/finish/FINISH-PLAN.md" ] && cp "$NIGHT/finish/FINISH-PLAN.md" "$C/FINISH-PLAN.md"
-# No key value may reach the tree: exit 1 (hit) or 3 (nothing proven) stops here.
+# No key value may reach the tree: only exit 0, or 3 with GC_KEYSCAN_ALLOW_EMPTY=1, passes; anything else stops here.
 python3 "$GC_TOOLS/keyscan.py" "$C"; ks=$?
-if [ "$ks" = 1 ] || { [ "$ks" = 3 ] && [ "${GC_KEYSCAN_ALLOW_EMPTY:-}" != 1 ]; } || [ "$ks" = 2 ]; then
+if [ "$ks" != 0 ] && { [ "$ks" != 3 ] || [ "${GC_KEYSCAN_ALLOW_EMPTY:-}" != 1 ]; }; then
   echo "handoff: keyscan refused" >&2
   cd "$REPO"; git worktree remove --force "$WT"; exit 6
 fi
