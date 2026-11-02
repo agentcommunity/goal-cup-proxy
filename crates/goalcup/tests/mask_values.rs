@@ -238,6 +238,125 @@ fn thirty_two_values_stream_escaped_text_without_failing_closed() -> Res {
     Ok(())
 }
 
+/// A value of 256 bytes drawn from `"`, `\`, `<` and `&` has forms near 1,792 bytes. The trie
+/// uses it where a per-form regex could hit a compile limit: it is counted, masked in its
+/// nested HTML-safe form, and the stream equals `mask_whole`.
+#[test]
+fn a_value_of_256_escape_bytes_is_used_and_masked() -> Res {
+    let mut rng = Rng(0x0E5C_0256);
+    let value = rng.chars(b"\"\\<&ABCabc012", 256);
+    let m = masker(&value)?;
+    let c = m.value_counts();
+    assert_eq!((c.workspace, c.skipped), (1, 0));
+    let twice = html_safe(&html_safe(&value));
+    let input = format!("{{\"t\":\"{twice}\"}}\n").into_bytes();
+    let whole = m.mask_whole(&input);
+    assert!(starred(&whole, 6..6 + twice.len()));
+    let cuts: Vec<usize> = (1..input.len()).step_by(97).collect();
+    assert_eq!(stream_in(&m, StreamKind::Native, &input, &cuts), whole);
+    Ok(())
+}
+
+/// A push cut at every byte of a wrapped value, including between CR and LF and inside an
+/// escaped break, streams exactly like `mask_whole`, and no value byte leaves raw.
+#[test]
+fn a_wrapped_value_cut_at_every_byte_streams_like_mask_whole() -> Res {
+    let v = token();
+    let m = masker(&v)?;
+    for brk in ["\r\n", "\\r\\n", "\\\\r\\\\n", "\\r\\\\n"] {
+        let input = format!("x {}{brk}{} y\n", &v[..10], &v[10..]).into_bytes();
+        let whole = m.mask_whole(&input);
+        assert!(starred(&whole, 2..2 + 10) && !holds(&whole.bytes, &v[10..]));
+        for cut in 1..input.len() {
+            assert_eq!(
+                stream_in(&m, StreamKind::Native, &input, &[cut]),
+                whole,
+                "cut {cut}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Value B is value A plus 10 bytes (a trie end node with children), and a value written twice
+/// back to back: both are masked whole, with no raw tail and no raw second copy.
+#[test]
+fn a_value_inside_a_longer_value_and_back_to_back_values_are_masked() -> Res {
+    let mut rng = Rng(0x1B51_DE00);
+    let a = rng.chars(ALNUM, 24);
+    let b = format!("{a}{}", rng.chars(ALNUM, 10));
+    let m = Masker::new(
+        &[],
+        [&a, &b]
+            .iter()
+            .map(|v| SecretValue::new(ValueSource::Workspace, v.as_bytes().to_vec()))
+            .collect(),
+    )?;
+    let input = format!("k={b} {a}{a} end\n").into_bytes();
+    let whole = m.mask_whole(&input);
+    let second = 2 + b.len() + 1;
+    assert!(starred(&whole, 2..2 + b.len()));
+    assert!(starred(&whole, second..second + 2 * a.len()));
+    let cuts: Vec<usize> = (1..input.len()).collect();
+    assert_eq!(stream_in(&m, StreamKind::Native, &input, &cuts), whole);
+    Ok(())
+}
+
+/// One to eight backslashes before each of 32 values, repeated to 256 KiB: every `\u` form
+/// starts on a backslash, which also starts escaped breaks. The stream never fails closed and
+/// equals `mask_whole`.
+#[test]
+fn backslash_runs_before_values_never_fail_closed() -> Res {
+    let mut rng = Rng(0xBA5E_0032);
+    let values: Vec<String> = (0..32).map(|_| rng.chars(ALNUM, 256)).collect();
+    let m = Masker::new(
+        &[],
+        values
+            .iter()
+            .map(|v| SecretValue::new(ValueSource::Workspace, v.clone().into_bytes()))
+            .collect(),
+    )?;
+    let mut input = String::new();
+    let mut i = 0;
+    while input.len() < 256 * 1024 {
+        input.push_str(&"\\".repeat(1 + i % 8));
+        input.push_str(&values[i % 32]);
+        input.push_str(" \\u0041\\n\n");
+        i += 1;
+    }
+    let input = input.into_bytes();
+    let whole = m.mask_whole(&input);
+    assert!(values.iter().all(|v| !holds(&whole.bytes, v)));
+    let cuts: Vec<usize> = (1..input.len() / 4096).map(|k| k * 4096).collect();
+    let got = stream_in(&m, StreamKind::Native, &input, &cuts);
+    assert_eq!(got, whole);
+    let fail_closed = m.mask_rules().len() - 1;
+    assert!(got.spans.iter().all(|s| s.rule != fail_closed));
+    Ok(())
+}
+
+/// An invalid UTF-8 byte right before a value, right after it, and right after a second copy
+/// that a raw LF break wraps: the value is masked whole and streamed, the bad byte stays raw.
+#[test]
+fn a_value_next_to_invalid_utf8_is_masked_whole_and_streamed() -> Res {
+    let v = token();
+    let m = masker(&v)?;
+    let mut input = b"a\xff".to_vec();
+    input.extend_from_slice(v.as_bytes());
+    input.extend_from_slice(b"\xff b ");
+    input.extend_from_slice(&v.as_bytes()[..8]);
+    input.extend_from_slice(b"\n");
+    input.extend_from_slice(&v.as_bytes()[8..]);
+    input.extend_from_slice(b"\xff\n");
+    let whole = m.mask_whole(&input);
+    assert!(starred(&whole, 2..2 + v.len()));
+    assert_eq!(whole.bytes[1], 0xff);
+    assert_eq!(whole.bytes[2 + v.len()], 0xff);
+    let cuts: Vec<usize> = (1..input.len()).collect();
+    assert_eq!(stream_in(&m, StreamKind::Native, &input, &cuts), whole);
+    Ok(())
+}
+
 /// Whether `value` appears in `bytes`.
 fn holds(bytes: &[u8], value: &str) -> bool {
     bytes.windows(value.len()).any(|w| w == value.as_bytes())
