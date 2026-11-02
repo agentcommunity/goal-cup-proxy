@@ -121,16 +121,27 @@ class NotVerified(unittest.TestCase):
         d = self.enterContext(tempfile.TemporaryDirectory())
         f = os.path.join(d, "s.toml")
         with open(f, "w") as fh:
-            fh.write('harness = "crush-cli"\nkey = "claude"\nmode = "cycle"\n')
+            fh.write('harness = "amp-cli"\nkey = "none"\nmode = "cycle"\n')
         with mock.patch.object(subprocess, "run", side_effect=AssertionError("started a box")):
             self.assertEqual(pad.main(["pad", f]), 3)
 
     def test_table_shows_the_reason_over_old_rows(self):
         tbl = load("padtable", "table")
-        row = {"connector": "crush-cli", "case": "direct", "mode": "full", "result": "FAIL"}
-        tier = tbl.tier_for("crush-cli", [row])
-        self.assertEqual(tier[0], "not verified")
-        self.assertTrue(tier[2].startswith("needs permission answer"))
+        row = {"connector": "amp-cli", "case": "direct", "mode": "full", "result": "FAIL"}
+        self.assertEqual(tbl.tier_for("amp-cli", [row]), ("not verified", "", "no key"))
+
+
+class CrushPermissions(unittest.TestCase):
+    def test_crush_runs_with_its_permission_file(self):
+        h = pad.read_toml(os.path.join(HERE, "harnesses", "crush-cli.toml"))
+        self.assertNotIn("not_verified", h)
+        for case in ("direct", "gateway"):
+            self.assertEqual(h[case]["files"][".config/crush/crushrc"], "direct/crush-cli-crushrc", case)
+        lines = open(os.path.join(HERE, "harnesses", "direct", "crush-cli-crushrc")).read().splitlines()
+        allow = [ln for ln in lines if ln.startswith("permissions allow ")]
+        self.assertEqual(len(allow), 1)
+        self.assertIn("bash", allow[0].split())
+        self.assertEqual(load("padtable2", "table").tier_for("crush-cli", []), ("not verified", "", "not yet run on the pad"))
 
 
 class Walk(unittest.TestCase):
