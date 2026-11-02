@@ -2,6 +2,8 @@
 //! database copies. A copy is a `set` of `state.db`, `-wal` and `-shm` snapshot streams (PRD-01
 //! section 4); the newest set that opens after the WAL checksum repair is read, and only session
 //! ids, parent ids, model names and numbers leave this file, never `title`, prompts or messages.
+//! The same copies of a thread database (Crush, Goose: `hints::ThreadDb`) give ids and parent
+//! ids only.
 //! Vendor pages: Hermes "Session Storage" at v0.22.5 (`sessions`, `messages`) and the SQLite
 //! file format page, "WAL format" (header, frame header, checksum).
 
@@ -12,6 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, Row};
 use serde_json::Value;
+use twox_hash::XxHash3_64;
 
 use super::shapes::model_name;
 use super::{CallRow, Kind, Leg, Outcome, Thread, Tokens, hints};
@@ -124,6 +127,16 @@ impl Sets {
             ..HermesLeg::default()
         }))
     }
+
+    /// Session id to parent id, as the wire names them, from the newest set that opens; empty
+    /// when none does. Only rows with a parent are kept.
+    pub(super) fn links(self, spec: &hints::ThreadDb) -> BTreeMap<String, String> {
+        let one = |p: &Pair| {
+            let (db, wal) = bytes(p)?;
+            query(db, &wal, |c| links(c, spec))
+        };
+        (self.copies.values().rev().find_map(one)).unwrap_or_default()
+    }
 }
 
 /// A `sessions` row: id, parent, model, `started_at`, `api_call_count` and the token totals.
@@ -150,6 +163,16 @@ fn whole(f: &Stream) -> Option<&[u8]> {
     (f.bytes.as_deref()).filter(|b| f.size.is_none_or(|s| s == b.len() as u64))
 }
 
+/// A copy's database bytes and its repaired WAL (empty when none was copied).
+fn bytes(p: &Pair) -> Option<(&[u8], Vec<u8>)> {
+    let db = whole(p.db.as_ref()?)?;
+    let wal = p
+        .wal
+        .as_ref()
+        .map_or(Some(Vec::new()), |f| repair(whole(f)?))?;
+    Some((db, wal))
+}
+
 /// The assistant `messages` rows: session id and `timestamp`.
 type Msg = (Option<String>, Option<f64>);
 type Rows = (Vec<Sess>, Vec<Msg>);
@@ -165,14 +188,10 @@ fn read(
     p: &Pair,
     (entry, start, resumed): (&str, Option<u64>, bool),
 ) -> Option<HermesLeg> {
-    let db = whole(p.db.as_ref()?)?;
-    let wal = p
-        .wal
-        .as_ref()
-        .map_or(Some(Vec::new()), |f| repair(whole(f)?))?;
+    let (db, wal) = bytes(p)?;
     let files = || [&p.db, &p.wal].into_iter().flatten();
     let until = files().filter_map(|f| f.mtime).max();
-    let (sessions, msgs) = query(db, &wal)?;
+    let (sessions, msgs) = query(db, &wal, rows)?;
     let ns = |x: Option<f64>| {
         x.filter(|f| f.is_finite() && *f >= 0.0)
             .map(|f| (f * 1e9) as u64)
@@ -245,9 +264,8 @@ fn read(
     Some(leg)
 }
 
-/// The `sessions` rows and the assistant `messages` rows (session, `timestamp`) of a database
-/// and WAL, opened from a private copy.
-fn query(db: &[u8], wal: &[u8]) -> Option<Rows> {
+/// What `f` reads from a database and WAL, opened read-only from a private copy.
+fn query<T>(db: &[u8], wal: &[u8], f: impl FnOnce(&Connection) -> Option<T>) -> Option<T> {
     static N: AtomicU64 = AtomicU64::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("goalcup-sqlite-{}-{n}", std::process::id()));
@@ -256,12 +274,12 @@ fn query(db: &[u8], wal: &[u8]) -> Option<Rows> {
     let mut mk = std::fs::DirBuilder::new();
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut mk, 0o700);
-    let got = mk.create(&dir).ok().and_then(|()| rows(&dir, db, wal));
+    let got = mk.create(&dir).ok().and_then(|()| f(&open(&dir, db, wal)?));
     let _ = std::fs::remove_dir_all(&dir);
     got
 }
 
-fn rows(dir: &Path, db: &[u8], wal: &[u8]) -> Option<Rows> {
+fn open(dir: &Path, db: &[u8], wal: &[u8]) -> Option<Connection> {
     let path = dir.join("state.db");
     std::fs::write(&path, db).ok()?;
     if !wal.is_empty() {
@@ -269,17 +287,26 @@ fn rows(dir: &Path, db: &[u8], wal: &[u8]) -> Option<Rows> {
     }
     let c = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE).ok()?;
     c.execute_batch("PRAGMA query_only=1").ok()?;
+    Some(c)
+}
+
+/// The column names of a table; `None` when it is missing.
+fn columns(c: &Connection, table: &str) -> Option<HashSet<String>> {
+    let st = c.prepare(&format!("SELECT * FROM {table} LIMIT 0")).ok()?;
+    let have = st.column_names().map(String::from).collect();
+    Some(have)
+}
+
+/// The `sessions` rows and the assistant `messages` rows (session, `timestamp`) of Hermes.
+fn rows(c: &Connection) -> Option<Rows> {
     // A token column this version lacks reads as null, not as an unreadable database.
-    let have: HashSet<String> = (c.prepare("SELECT * FROM sessions LIMIT 0").ok()?)
-        .column_names()
-        .map(String::from)
-        .collect();
+    let have = columns(c, "sessions")?;
     let toks = TOKENS.map(|k| if have.contains(k) { k } else { "NULL" });
     let sql = format!(
         "SELECT id, parent_session_id, model, started_at, api_call_count, {} FROM sessions",
         toks.join(", ")
     );
-    let sessions = all(&c, &sql, |r| {
+    let sessions = all(c, &sql, |r| {
         let model = text(r, 2)?.and_then(|s| model_name(Some(&Value::String(s))));
         let n = |i| Ok::<_, rusqlite::Error>(num(r, i)?.filter(|f| *f >= 0.0).map(|f| f as u64));
         Ok(Sess {
@@ -298,11 +325,34 @@ fn rows(dir: &Path, db: &[u8], wal: &[u8]) -> Option<Rows> {
         })
     })?;
     let msgs = all(
-        &c,
+        c,
         "SELECT session_id, timestamp FROM messages WHERE role = 'assistant'",
         |r| Ok((ident(r, 0)?, num(r, 1)?)),
     )?;
     Some((sessions, msgs))
+}
+
+/// The (id, parent) rows of a thread database by `spec`'s columns alone, with a parent, each
+/// named as the wire names it. A missing parent column reads as no parent.
+fn links(c: &Connection, spec: &hints::ThreadDb) -> Option<BTreeMap<String, String>> {
+    let have = columns(c, spec.table)?;
+    let col = |k: &'static str| have.contains(k).then_some(k);
+    let sql = format!(
+        "SELECT {}, {} FROM {}",
+        col(spec.id)?,
+        col(spec.parent).unwrap_or("NULL"),
+        spec.table
+    );
+    let named = |s: String| {
+        if spec.hash {
+            Some(format!("{:016x}", XxHash3_64::oneshot(s.as_bytes())))
+        } else {
+            hints::id(&s)
+        }
+    };
+    let got = all(c, &sql, |r| Ok((text(r, 0)?, text(r, 1)?)))?;
+    let pair = |(i, p): (Option<String>, Option<String>)| Some((named(i?)?, named(p?)?));
+    Some(got.into_iter().filter_map(pair).collect())
 }
 
 fn all<T>(c: &Connection, sql: &str, f: impl FnMut(&Row) -> rusqlite::Result<T>) -> Option<Vec<T>> {
