@@ -18,7 +18,7 @@ export PAD_NODE_MODULES=$GC_TOOLS/node_modules
 export NODE_OPTIONS="--use-openssl-ca --no-warnings --require $GC_TOOLS/proxy-preload.cjs"
 SBX=${GC_SBX:-node $pad/sbx.mjs}
 NEVER=(GH_TOKEN GOALCUP_TEST_APPROVAL_KEY GOALCUP_TEST_MEMBER_ID DATABASE_URL CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID)
-KEYS=(VERCEL_TOKEN VERCEL_TEAM_ID VERCEL_PROJECT_ID CLAUDE_API_KEY OPENAI_API_KEY DEEPSEEK_API_KEY GEMINI_API_KEY AI_GATEWAY_API_KEY)
+KEYS=(CLAUDE_API_KEY OPENAI_API_KEY DEEPSEEK_API_KEY GEMINI_API_KEY AI_GATEWAY_API_KEY)
 # every call drops all secrets; put-env alone keeps the one variable it is asked to read
 sbx() { local a=(); local n; for n in "${NEVER[@]}" "${KEYS[@]}"; do a+=(-u "$n"); done; env "${a[@]}" $SBX "$@"; }
 sbx_putenv() { local a=(); local n; for n in "${NEVER[@]}" "${KEYS[@]}"; do [ "$n" = "$var" ] || a+=(-u "$n"); done; env "${a[@]}" $SBX "$@"; }
