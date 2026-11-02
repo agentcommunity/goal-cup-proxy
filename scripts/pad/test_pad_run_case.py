@@ -132,6 +132,17 @@ class KillTiming(unittest.TestCase):
         self.assertTrue(self.kill(3, [5, 5, 5]))
         self.assertFalse(self.kill(3, [5, 6]))
 
+    def test_a_timed_kill_waits_past_the_keep_going_idle_for_work(self):
+        # A2 passes 3 and 4: the minute-30 kill came after 60 s of idle and was quiet; the watch types keep going after
+        # 2 min idle, so the kill waits long enough for that work to start.
+        r = bare()
+        r.work = lambda st=None: 5
+        r.kill_rec = lambda m, quiet=False: (7, 1.0)
+        limits = []
+        with mock.patch.object(padrun, "wait", lambda ok, limit, every: limits.append(limit) or ok()):
+            r.kill_recorder(30)
+        self.assertGreaterEqual(limits[0], 300)
+
 
 class Recovery(unittest.TestCase):
     def test_quiet_kill_judged_on_first_three(self):
@@ -146,6 +157,20 @@ class Recovery(unittest.TestCase):
             with self.assertRaises(padrun.Step) as cm:
                 r.wait_recovery(None)
         self.assertEqual(cm.exception.args[0], "INCONCLUSIVE")  # not FAIL: the first three held
+
+    def test_quiet_kill_waits_for_the_keep_going_work(self):
+        r = bare()
+        r.st["kill"] = dict(pid=1, at=0.0, requests=4, off_spans=0, off_ms=0, quiet=True)
+        r.status = lambda: {}
+        r.work = lambda s=None: 4
+        r.left = lambda: 9999
+        limits = []
+        dig = {"s4_pid": 2, "s4_mode": "recording", "s4_spans": 1, "s4_since": None, "s4_down_ms": 10}
+        with mock.patch.object(padrun.pc, "dig", lambda d, n: dig.get(n)), \
+                mock.patch.object(padrun, "wait", lambda ok, l, e: limits.append(l) or ok()):
+            with self.assertRaises(padrun.Step):
+                r.wait_recovery(None)
+        self.assertGreaterEqual(limits[-1], 240)
 
 
     def test_idle_harness_after_a_kill_is_inconclusive_not_fail(self):  # A2: recorder back in 44 ms, no new request follows
