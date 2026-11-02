@@ -957,12 +957,14 @@ class Run:
             saw.append("rm %s" % type(e).__name__)
         try:
             r = self.sbx("list", "--prefix", "pad-", limit=third)
-            live = [b.get("status") for b in (json.loads(x) for x in r.stdout.splitlines() if x.startswith("{"))
-                    if b.get("name") == self.name] if r.returncode == 0 else ["unknown"]
-            if all(st in ("stopped", "deleted", "failed") for st in live):
+            names = (self.name, "pad-dbf-" + self.name[len("pad-"):])  # the run box and its index box
+            boxes = [b for b in (json.loads(x) for x in r.stdout.splitlines() if x.startswith("{")) if b.get("name") in names] \
+                if r.returncode == 0 else [{"name": self.name, "status": "unknown"}]
+            live = [b for b in boxes if b.get("status") not in ("stopped", "deleted", "failed")]
+            if not live:
                 late = ["create timed out, box may appear until its timeout"] if self.create_late else []
                 return ok, ", ".join(saw + ["list shows no live box"] + late)
-            saw.append(said("left: box %s %s" % (self.name, ",".join(map(str, live))), r))
+            saw.append(said(", ".join("left: %s %s" % (b.get("name"), b.get("status")) for b in live), r))
         except Exception as e:
             saw.append("list %s, box %s may be left" % (type(e).__name__, self.name))
         return "left", ", ".join(saw)

@@ -497,7 +497,9 @@ def scan(r, name, where):
     """One C3 scan: hits fail; no scan (None) is INCONCLUSIVE, never a PASS."""
     n = r.hits(name)
     loss = r.stated_loss() if name == "secrets" else None
-    if loss:  # owner answer: a stated loss with 0 known hits is a PASS with a note; a known hit makes loss None, so it still fails
+    if loss:  # stated_loss() is set only when every hit, known or shape, is in a joined deltas body; such a hit is a PASS with a note
+        # (owner-decisions-draft.md, 2 November, 02:00Z split echo: conductor reading, owner to confirm). A known hit in a request
+        # body or a contiguous stream leaves loss None, so it still fails below.
         if r.loss_known():
             return r.mark("C3", "PASS", "stated loss: known value split in streamed reply (masking cannot see a value split across "
                           "stream events; future improvement): %s known hits in %s" % (r.loss_known(), ", ".join(loss[1])))
