@@ -894,21 +894,41 @@ class Run:
             os.remove(out)
         return got
 
-    def keep_going(self, _):  # section 1a: once, as a participant may (AGENTS.md), after pane and requests idle keep_going minutes
+    def nudge(self):  # a participant types "keep going" when the harness sits idle (AGENTS.md): after the pane and requests are
+        # idle keep_going minutes, again at each later idle period, up to keep_going_count times in all (faults.jsonl counts them)
+        kg = self.__dict__.setdefault("kg", {"last": None, "since": time.time(), "next": 0})
+        if time.time() < kg["next"]:
+            return False
+        kg["next"] = time.time() + 10
+        if (now := (self.pane(False), pc.dig(self.status(), "s4_requests"))) != kg["last"]:
+            kg["last"], kg["since"] = now, time.time()
+            return False
+        if time.time() - kg["since"] < float(self.s.get("keep_going", 1)) * 60:
+            return False
+        if sum(1 for f in pc.load(self.run, "watch/faults.jsonl", 1) if f.get("kind") == "keep-going") >= int(self.s.get("keep_going_count", 1)):
+            return False
+        sh(["tmux", "send-keys", "-t", self.tmux, "-l", "keep going"])
+        time.sleep(float(self.h.get("submit_delay", 2)))
+        sh(["tmux", "send-keys", "-t", self.tmux, "Enter"])
+        self.pane()
+        self.fault("keep-going")
+        kg["since"] = time.time()
+        return True
+
+    def keep_going(self, _):  # section 1a: the watch types it throughout the run when settings name the step; else once, here
         self.need("goalcup", started=True)
-        idle, last, since = float(self.s.get("keep_going", 1)) * 60, None, time.time()
-        while time.time() < self.st["pasted"] + float(self.s["minutes"]) * 60:
+        end = self.st["pasted"] + float(self.s["minutes"]) * 60
+        if "keep-going" in (self.s.get("steps") or []):
+            wait(lambda: self.sealed() or self.dead(), end - time.time(), 10)
+            n = sum(1 for f in pc.load(self.run, "watch/faults.jsonl", 1) if f.get("kind") == "keep-going")
+            if n:
+                return "ok", "typed keep going %d time%s" % (n, "s" * (n != 1))
+            raise Step("skip", "agent still working")
+        while time.time() < end:
             if self.dead():
                 raise Step("skip", "harness exited")
-            if (now := (self.pane(False), pc.dig(self.status(), "s4_requests"))) != last:
-                last, since = now, time.time()
-            elif time.time() - since >= idle:
-                sh(["tmux", "send-keys", "-t", self.tmux, "-l", "keep going"])
-                time.sleep(float(self.h.get("submit_delay", 2)))
-                sh(["tmux", "send-keys", "-t", self.tmux, "Enter"])
-                self.pane()
-                self.fault("keep-going")
-                return "ok", "typed keep going after %g min idle" % (idle / 60)
+            if self.nudge():
+                return "ok", "typed keep going after %g min idle" % float(self.s.get("keep_going", 1))
             time.sleep(10)
         raise Step("skip", "agent still working")
 
@@ -968,6 +988,8 @@ class Run:
                 write(self.path("watch", "watch.json"), json.dumps({k: self.st[k] for k in ("panes", "screen_known")}), 0o644)
                 if self.s.get("server") != "off":
                     append(self.path("watch", "upload.jsonl"), {"upload": up})
+            if "keep-going" in (self.s.get("steps") or []) and not last:
+                self.nudge()
             if "live" in go and tool("goalcup-verify") and self.st.get("entry_dir") and not (live and live.is_alive()):
                 look = float((self.s.get("limits") or {}).get("look", 60))  # beside the loop, so no status line waits
                 (live := threading.Thread(target=self.look_line, args=(look,), daemon=True)).start()
