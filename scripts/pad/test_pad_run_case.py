@@ -77,7 +77,7 @@ class PreKeys(unittest.TestCase):
         with open(os.path.join(HERE, "harnesses", name + ".toml"), "rb") as f:
             h = tomllib.load(f)
         r = bare()
-        r.h, r.tmux, r.env = h, "t", {"GOALCUP_HOME": d.name}
+        r.h, r.tmux, r.env, r.run = h, "t", {"GOALCUP_HOME": d.name}, d.name
         r.seed = lambda: None
         r.pane = lambda *a, **k: ""
         r.path = lambda *a: os.path.join(d.name, *a)
