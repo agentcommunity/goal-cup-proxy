@@ -110,6 +110,20 @@ class T(unittest.TestCase):
         d = live_fixture(self.t, "20261102T200000Z-pad-abc123", [("2026-11-02T20:30:00+00:00", 4.0)])
         self.assertEqual(longsum.live(d, 60), {"minutes": 30.0, "usd": 4.0, "usd_per_hour": 8.0, "projected_usd": 8.0})
 
+    def test_live_no_data_exits_2_plainly(self):
+        import contextlib
+        import io
+        cases = [("20261102T200000Z-pad-a", [("2026-11-02T20:30:00+00:00", None)], "no priced spend line yet"),
+                 ("pad-without-stamp", [("2026-11-02T20:30:00+00:00", 4.0)], "no stamp in folder name"),
+                 ("20261102T200000Z-pad-b", [("not a time", 4.0)], "no readable time in spend line")]
+        for name, points, words in cases:
+            d = live_fixture(self.t, name, points)
+            err = io.StringIO()
+            with contextlib.redirect_stderr(err):
+                code = longsum.main([d, "--live", "60"])
+            self.assertEqual(code, 2, name)
+            self.assertIn(words, err.getvalue())
+
     def test_markdown_has_run1_and_no_model_id(self):
         md = longsum.markdown(longsum.summary(fixture(self.t), stub([])))
         self.assertIn("| Raw MB per hour | 2000.0 | 495.9 |", md)
