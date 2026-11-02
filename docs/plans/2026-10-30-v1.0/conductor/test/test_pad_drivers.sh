@@ -5,7 +5,7 @@ printf 'echo "GH=${GH_TOKEN-unset} PNM=$PAD_NODE_MODULES NO=$NODE_OPTIONS"\n' > 
 echo snap_test > "$d/wt/scripts/pad/image.id"; touch "$d/s1.toml" "$d/build/goalcup" "$d/build/goalcup-verify"
 # stub sbx: records the sub-command, which secret names are in its environment, and the arguments; exec fails
 cat > "$d/sbx" <<'SB'
-echo "$1 $(env | cut -d= -f1 | grep -E '^(GH_TOKEN|DATABASE_URL|CLAUDE_API_KEY|VERCEL_TOKEN)$' | tr '\n' ,) $*" >> "$(dirname "$0")/calls"
+echo "$1 $(env | cut -d= -f1 | sort | grep -E '^(GH_TOKEN|DATABASE_URL|CLAUDE_API_KEY|VERCEL_TOKEN)$' | tr '\n' ,) $*" >> "$(dirname "$0")/calls"
 [ "$1" = exec ] && exit 1
 exit 0
 SB

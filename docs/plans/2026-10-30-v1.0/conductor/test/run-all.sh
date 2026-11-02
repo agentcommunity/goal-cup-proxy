@@ -11,6 +11,7 @@ for f in "$T"/test_*.sh "$T"/test_*.mjs "$T"/test_*.py; do
     *.mjs) cmd=(node "$f") ;;
     *.py) cmd=(python3 -m unittest discover -s "$T" -p "$(basename "$f")") ;;
   esac
-  if "${cmd[@]}" >/dev/null 2>&1; then echo "PASS $(basename "$f")"; else echo "FAIL $(basename "$f")"; bad=1; fi
+  out=$("${cmd[@]}" 2>&1)
+  if [ $? = 0 ]; then echo "PASS $(basename "$f")"; else echo "FAIL $(basename "$f")"; printf '%s\n' "$out" | tail -15 | sed 's/^/  /'; bad=1; fi
 done
 exit $bad
