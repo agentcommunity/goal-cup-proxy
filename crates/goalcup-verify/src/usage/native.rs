@@ -501,7 +501,9 @@ fn claude(
 }
 
 /// One Qwen Code chat row timed `at`: an `assistant` row with `usageMetadata` is one call. The
-/// prompt count includes the cached part, which is taken out of `input`.
+/// prompt count includes the cached part, which is taken out of `input`. Unlike the Gemini shape,
+/// `output` is `candidatesTokenCount` alone: Qwen copies the chat `completion_tokens`, reasoning
+/// included, into it (measured: total = prompt + candidates, candidates = wire output).
 fn qwen(v: &Value, at: Option<u64>, row: impl FnOnce() -> CallRow) -> Option<CallRow> {
     let u = (v["type"] == "assistant").then_some(&v["usageMetadata"])?;
     let (mut tokens, extra) = split(extra(u.as_object()?, &[]), QWEN);

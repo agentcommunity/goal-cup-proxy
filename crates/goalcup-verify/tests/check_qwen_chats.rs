@@ -64,7 +64,7 @@ fn chat_file(session: &str, at: u64, prompt: u64, cached: u64) -> String {
         json!({"uuid": "u-3", "sessionId": session, "timestamp": t, "type": "assistant",
             "model": "fake-model", "usageMetadata": {"promptTokenCount": prompt,
             "cachedContentTokenCount": cached, "candidatesTokenCount": 40,
-            "thoughtsTokenCount": 7, "totalTokenCount": prompt + 47}}),
+            "thoughtsTokenCount": 7, "totalTokenCount": prompt + 40}}),
     ];
     rows.iter().map(|r| format!("{r}\n")).collect()
 }
