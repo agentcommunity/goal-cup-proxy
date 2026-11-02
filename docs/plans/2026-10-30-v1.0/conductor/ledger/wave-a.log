@@ -1,0 +1,13 @@
+01:01Z | wave-a implementer | push | release-rows task 1 pushed, not tested (slice box later)
+01:01Z | wave-a implementer | task | longsum.py Task 4 pushed (red test then implementation), not run: slice box pending
+01:03Z | wave-a implementer | pushed | task 4a pushed on v1.0/prd-10-participant-text, slice box not run yet
+01:03Z | wave-a implementer | task | release-rows task 2 tier note pushed (not run, slice box pending)
+01:04Z | wave-a implementer | done | task 3 run files pushed
+01:06Z | wave-a runner | box | slice boxes started: wave-a-check and participant-text
+01:06Z | wave-a runner | box | fix round: python3.11 added to job, rustfmt fix on participant-text; second boxes started
+01:07Z | wave-a runner | ready | ready for the train | v1.0/prd-12-release-rows 8b622fea
+01:07Z | wave-a runner | ready | ready for the train | v1.0/conductor-longsum a1376ab9
+01:07Z | wave-a runner | ready | ready for the train | v1.0/prd-10-participant-text 9c40b901
+01:11Z | wave-a reviewer | review | round 1 read-only review of prd-12-release-rows (with longsum and participant-text skimmed): no blocker, nits plus one fix on longsum live()
+01:14Z | wave-a reviewer | review | round 2 read-only review of the three Wave A branches: longsum live() crash still open (tip a1376ab9 unchanged), no new blocker or fix on release-rows or participant-text, nits only
+01:15Z | wave-a fixer | fix | longsum live() plain exit 2 on no data, 56dac900

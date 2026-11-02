@@ -1,0 +1,9 @@
+01:55Z | fix triage | W-CASE | real provider keys raw in recorded reply deltas: gemini row entry e9acb5c06a4bf2aae 0.43/deltas (sha12 matches conductor GEMINI_API_KEY), opencode2 row entry ef100051f05c98367 0.9/deltas (sha12 matches conductor DEEPSEEK_API_KEY); also in fetched copies and staging upload; stopped, reported, rotate both keys
+01:55Z | fix triage | finding | openclaw request-body hits are the planted git remote password restated by the model as backticked pad:<pw> (no // or @), resent in history 0.65..0.83; no shape, no exact source; owner ask
+01:59Z | fix pad | done | T3 T4 T1 T7 pushed v1.0/prd-12-mini-fix
+02:01Z | fix pad | push | T3 T4 T1 T7 T8 on v1.0/prd-12-mini-fix
+02:02Z | fix pad | push | T3-red-test: mask_values added to shape-only test
+02:04Z | fix pad | push | openclaw redacts_kinds comment states basis; box run next
+02:05Z | fix pad | fix | T4 test fixture lacked work evidence (box 1 one failure); rerun on second box
+02:05Z | fix pad | done | head box passed 108 tests, fmt clean, both red commits fail as expected
+03:27Z | fix investigator | finding | H2 opencode2+goose non-delta known hits: 4 PEM body lines headerless after model's own sed 's/=.*/.../' .env.local (tool result resent in req bodies 0.30/0.29/0.31 and in opencode.db / goose sessions.db-wal snapshots 0.34/0.35), private_key needs BEGIN, PAD_PEM fails name gate; goose also bare remote password quoted in reasoning_content (not in sources 1-3, no URL shape); not a values.rs matcher defect, open owner ask 2 + pad known-list rule; real single-line provider key not exposed this way
