@@ -122,7 +122,8 @@ pub enum Reason {
     NoReader,
     /// No database copy opened, even after the WAL repair.
     SnapshotUnreadable,
-    /// A reader found zero native calls while the wire had calls.
+    /// A reader found zero native calls while the wire had calls, or while native streams were
+    /// read or a model host was named not on the wire.
     NoNative,
 }
 
@@ -513,7 +514,10 @@ impl Calls {
             let lost = (per_thread && ok(r) && r.thread.is_none()).then_some(Join::Unattributed);
             r.join = r.join.or(lost).or(Some(Join::WireOnly));
         }
-        let none = (nat.is_empty() && rows.iter().any(ok)).then_some(Reason::NoNative);
+        // Zero native calls is not a readable leg when the wire had calls, or when native streams
+        // were read (threads) or a model host was named not on the wire.
+        let seen = rows.iter().any(ok) || !leg.threads.is_empty() || !base.not_on_wire.is_empty();
+        let none = (nat.is_empty() && seen).then_some(Reason::NoNative);
         let reason = leg
             .unreadable
             .then_some(Reason::SnapshotUnreadable)
