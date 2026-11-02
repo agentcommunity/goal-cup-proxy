@@ -62,6 +62,33 @@ class PreKeys(unittest.TestCase):
     def test_top_level_when_section_has_none(self):
         self.assertEqual(self.sent({"pre_keys": "\\r"}, {}), ["\r"])
 
+    def enters(self, name):
+        d = tempfile.TemporaryDirectory()
+        self.addCleanup(d.cleanup)
+        open(os.path.join(d.name, "prompt.txt"), "w").write("task")
+        with open(os.path.join(HERE, "harnesses", name + ".toml"), "rb") as f:
+            h = tomllib.load(f)
+        r = bare()
+        r.h, r.tmux, r.env = h, "t", {"GOALCUP_HOME": d.name}
+        r.seed = lambda: None
+        r.pane = lambda *a, **k: ""
+        r.path = lambda *a: os.path.join(d.name, *a)
+        keys = []
+
+        def sh(cmd, *a, **k):
+            if "send-keys" in cmd:
+                keys.append(cmd[-1])
+            return mock.Mock(stdout="")
+        with mock.patch.object(padrun, "sh", sh), mock.patch.object(padrun.time, "sleep", lambda s: None), \
+                mock.patch.object(padrun.subprocess, "Popen", side_effect=Stop):
+            with self.assertRaises(Stop):
+                r.type_prompt()
+        return keys.count("Enter")
+
+    def test_openclaw_sends_a_second_enter_after_a_collapsed_paste_and_others_do_not(self):  # S4
+        self.assertEqual(self.enters("openclaw-cli"), 2)
+        self.assertEqual(self.enters("codex-cli"), 1)
+
     def test_claude_code_gateway_list(self):
         with open(os.path.join(HERE, "harnesses", "claude-code-cli.toml"), "rb") as f:
             doc = tomllib.load(f)

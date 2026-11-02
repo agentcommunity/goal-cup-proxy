@@ -146,6 +146,12 @@ class CrushPermissions(unittest.TestCase):
         self.assertEqual(load("padtable2", "table").tier_for("crush-cli", []), ("not verified", "", "not yet run on the pad"))
 
 
+class CrushInitQuestion(unittest.TestCase):
+    def test_crush_answers_the_initialize_question_before_the_prompt(self):  # S2: 0.99.0 stopped at "Would you like to initialize this project?"
+        h = pad.read_toml(os.path.join(HERE, "harnesses", "crush-cli.toml"))
+        self.assertEqual(h.get("pre_keys"), "n")
+
+
 class SealPaneFallback(unittest.TestCase):
     def test_end_screen_requests_from_the_newest_seal_pane_when_the_seal_gave_no_padstep(self):
         with tempfile.TemporaryDirectory() as d:
@@ -1289,6 +1295,8 @@ class GeminiApprovals(unittest.TestCase):
             cfg = json.load(f)
         self.assertEqual(cfg["general"]["defaultApprovalMode"], "auto_edit")
         self.assertIn("run_shell_command", cfg["tools"]["allowed"])
+        self.assertIn("write_file", cfg["tools"]["allowed"])  # S3: 0.66.0 asked "WriteFile ... 1 of 2" under auto_edit
+        self.assertIn("replace", cfg["tools"]["allowed"])
         self.assertNotIn("baseUrl", json.dumps(cfg).lower())
 
 
