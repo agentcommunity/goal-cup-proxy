@@ -87,12 +87,15 @@ fn opencode_threads_and_parent_come_from_the_wire() {
 }
 
 #[test]
-fn a_parent_only_the_wire_names_is_a_thread() {
+fn a_parent_only_the_wire_names_is_a_parent_not_a_thread() {
     let dir = entry("wire-ids-kilo", "kilo-cli", |e| {
         chat(e, &[("x-session-id", KID), ("x-parent-session-id", MAIN)]);
     });
     let t = call_table(&dir);
-    assert_eq!(t.threads.len(), 2);
+    // The parent's calls may sit in another entry: here it has none, so it is no thread, and
+    // the children map still names it.
+    assert_eq!(t.threads.len(), 1);
+    assert!(t.threads.iter().all(|x| x.id != MAIN));
     assert_eq!(thread(&t, KID).parent.as_deref(), Some(MAIN));
     assert_eq!(t.children, kids(MAIN, KID));
 }
