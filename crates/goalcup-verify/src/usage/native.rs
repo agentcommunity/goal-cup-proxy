@@ -1,6 +1,6 @@
-//! The native leg (PRD-09 sections 4 and 5): Codex rollouts, Claude Code transcripts and Gemini
-//! CLI chat files read back out of the record's `native` streams, Claude Code agent labels out of
-//! its `snapshot` streams.
+//! The native leg (PRD-09 sections 4 and 5): Codex rollouts, Claude Code transcripts, Gemini CLI
+//! chat files and Qwen Code chats read back out of the record's `native` streams, Claude Code
+//! agent labels out of its `snapshot` streams.
 //! Bytes are deduped by (path, gen, offset) across boots (PRD-01 section 15 point 5); only lines
 //! that end in a newline are parsed, and a hole drops the partial line. Rows carry their session
 //! file `path` (U1 allows it, but it can name the participant's folders, so section 7 keeps it out
@@ -48,7 +48,8 @@ type Msg = (CallRow, BTreeMap<String, u64>, Option<String>);
 pub(super) struct Native {
     streams: HashMap<(u64, u64), Src>,
     files: BTreeMap<(String, u64), File>,
-    codex: Vec<CallRow>,
+    /// Codex and Qwen Code calls, each whole in one line.
+    calls: Vec<CallRow>,
     /// Claude Code calls by `message.id`.
     msgs: BTreeMap<String, Msg>,
     /// Gemini CLI calls by message `id`, the last copy kept (each message is written twice).
@@ -85,6 +86,7 @@ struct Meta {
 struct File {
     codex: bool,
     gemini: bool,
+    qwen: bool,
     /// Gemini: the next line out is line 1 of the file (it starts at offset 0 and no hole came
     /// before it), and the session id that line gave.
     head: bool,
@@ -128,12 +130,14 @@ impl Native {
                         Some(
                             r @ (Reader::CodexRollout
                             | Reader::ClaudeTranscript
-                            | Reader::GeminiChat),
+                            | Reader::GeminiChat
+                            | Reader::QwenChat),
                         ),
                     ) => {
                         let f = File {
                             codex: r == Reader::CodexRollout,
                             gemini: r == Reader::GeminiChat,
+                            qwen: r == Reader::QwenChat,
                             head: r == Reader::GeminiChat && m["from"].as_u64().unwrap_or(0) == 0,
                             next: m["from"].as_u64().unwrap_or(0),
                             ..File::default()
@@ -172,7 +176,9 @@ impl Native {
                                 self.gemini.insert(id, r);
                             }
                         } else if f.codex {
-                            self.codex.extend(f.rollout(&v, at, row));
+                            self.calls.extend(f.rollout(&v, at, row));
+                        } else if f.qwen {
+                            self.calls.extend(qwen(&v, at, row));
                         } else {
                             claude(&mut self.msgs, &v, at, row);
                         }
@@ -255,6 +261,10 @@ impl Native {
                     (m.id.or_else(|| file_uuid(&path)), m.parent, depth, m.label)
                 }
                 None if f.codex => (file_uuid(&path), None, None, None),
+                None if f.qwen => {
+                    let (id, parent, depth) = qwen_thread(&path);
+                    (id, parent, depth, None)
+                }
                 None if f.gemini => {
                     let (id, parent) = gem[&(path.clone(), rev)].clone();
                     // The folder is a main's full session id, or the id a main file's name ends in.
@@ -328,7 +338,7 @@ impl Native {
             let (tokens, extra) = split(c, CLAUDE);
             real.then_some((CallRow { tokens, extra, ..r }, rid))
         });
-        let plain = self.codex.into_iter().chain(self.gemini.into_values());
+        let plain = self.calls.into_iter().chain(self.gemini.into_values());
         let all = plain.map(|r| (r, None)).chain(claude);
         let rows = all.map(|(r, rid)| {
             let (thread, parent) = r.path.as_ref().and_then(|p| owner.get(p)).cloned().unzip();
@@ -515,6 +525,22 @@ fn gemini(v: &Value, row: impl FnOnce() -> CallRow) -> Option<(String, CallRow)>
     Some((id, r))
 }
 
+/// One Qwen Code chat row timed `at`: an `assistant` row with `usageMetadata` is one call. The
+/// prompt count includes the cached part, which is taken out of `input`. Unlike the Gemini shape,
+/// `output` is `candidatesTokenCount` alone: Qwen copies the chat `completion_tokens`, reasoning
+/// included, into it (measured: total = prompt + candidates, candidates = wire output).
+fn qwen(v: &Value, at: Option<u64>, row: impl FnOnce() -> CallRow) -> Option<CallRow> {
+    let u = (v["type"] == "assistant").then_some(&v["usageMetadata"])?;
+    let (mut tokens, extra) = split(extra(u.as_object()?, &[]), QWEN);
+    tokens.input = less(tokens.input, tokens.cached);
+    Some(CallRow {
+        model: model_name(v.get("model")),
+        tokens,
+        extra,
+        ..row()
+    })
+}
+
 /// Usage member names per the token table: input, cached, cache write, output, reasoning.
 const CODEX: [&str; 5] = [
     "input_tokens",
@@ -522,6 +548,13 @@ const CODEX: [&str; 5] = [
     "",
     "output_tokens",
     "reasoning_output_tokens",
+];
+const QWEN: [&str; 5] = [
+    "promptTokenCount",
+    "cachedContentTokenCount",
+    "",
+    "candidatesTokenCount",
+    "thoughtsTokenCount",
 ];
 const CLAUDE: [&str; 5] = [
     "input_tokens",
@@ -582,6 +615,26 @@ fn gemini_thread(path: &str, sid: Option<&str>) -> (Option<String>, Option<Strin
     match parts.get(i + 1).filter(|_| i + 2 < parts.len()) {
         Some(dir) => (stem(file), hints::id(dir)),
         None => (sid.and_then(hints::id).or_else(|| stem(file)), None),
+    }
+}
+
+/// The Qwen Code thread of a chat path `chats:<cwd>/…`: (id, parent, depth), from the path alone
+/// (docs/harnesses/qwen-cli.md section 4, as measured in a recorded run).
+/// `<cwd>/chats/<session id>.jsonl` is a main thread (depth 0);
+/// `<cwd>/subagents/<session id>/agent-<id>.jsonl` is subagent `<id>`, a child of that session
+/// (depth 1). The rows of a subagent file carry the parent's `sessionId`, so no row names the
+/// thread. Any other file names no thread; its calls are kept with none.
+fn qwen_thread(path: &str) -> (Option<String>, Option<String>, Option<u32>) {
+    let rel = path.split_once(':').map_or(path, |p| p.1);
+    let (dirs, file) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let stem = file.strip_suffix(".jsonl").unwrap_or_default();
+    match dirs.split('/').collect::<Vec<_>>()[..] {
+        [.., "subagents", s] => match stem.strip_prefix("agent-") {
+            Some(id) => (hints::id(id), hints::id(s), Some(1)),
+            None => (None, None, None),
+        },
+        [.., "chats"] => (hints::id(stem), None, Some(0)),
+        _ => (None, None, None),
     }
 }
 
