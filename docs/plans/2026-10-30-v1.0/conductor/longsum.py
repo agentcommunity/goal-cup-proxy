@@ -162,10 +162,17 @@ def summary(run_dir, check_mod, min_subagents=15, gap_limit_ms=5000):
 
 def live(run_dir, planned_minutes):
     m = re.search(r"(\d{8}T\d{6}Z)", os.path.basename(os.path.normpath(run_dir)))
+    if not m:
+        raise ValueError("longsum: no stamp in folder name")
     start = datetime.datetime.strptime(m.group(1), "%Y%m%dT%H%M%SZ").replace(tzinfo=datetime.timezone.utc)
     lines = [x for x in read_lines(os.path.join(run_dir, "watch", "spend.jsonl")) if num(x.get("usd")) is not None]
+    if not lines:
+        raise ValueError("longsum: no priced spend line yet")
     last = lines[-1]
-    minutes = (when(last["at"]) - start).total_seconds() / 60
+    at = when(last.get("at"))
+    if at is None:
+        raise ValueError("longsum: no readable time in spend line")
+    minutes = (at - start).total_seconds() / 60
     usd = last["usd"]
     rate = usd / (minutes / 60) if minutes > 0 else 0.0
     return {"minutes": round(minutes, 1), "usd": usd, "usd_per_hour": round(rate, 1),
@@ -229,7 +236,12 @@ def main(argv=None):
         print("longsum: %s not found in %s" % (need, a.run_dir), file=sys.stderr)
         return 2
     if a.live is not None:
-        print(json.dumps(live(a.run_dir, a.live), sort_keys=True))
+        try:
+            out = live(a.run_dir, a.live)
+        except ValueError as e:
+            print(e, file=sys.stderr)
+            return 2
+        print(json.dumps(out, sort_keys=True))
         return 0
     repo = a.repo or find_repo(a.run_dir)
     if not repo:
