@@ -146,7 +146,7 @@ fi
 # 2. Check the index, fetch every object, write each entry. The R2 token, when used, reaches curl in
 # its configuration on stdin; it is never in an argument or the output.
 FETCH_RUN_WORKER_DIR=$worker_dir python3 -I - "$id" "$out" "$tmp" "$bucket" "$index" "$store" "$persist" "$queried" <<'PY'
-import hashlib, json, os, re, shutil, subprocess, sys
+import hashlib, json, os, random, re, shutil, subprocess, sys, time
 
 wanted, out, tmp, bucket, index_path, store, persist, queried = sys.argv[1:9]
 GENESIS = "0" * 64
@@ -204,15 +204,23 @@ def get_object(key, dest):
         f'header = "Authorization: Bearer {os.environ["CLOUDFLARE_API_TOKEN"]}"\n'
         'silent\nshow-error\nconnect-timeout = 15\nmax-time = 600\nwrite-out = "%{http_code}"\n'
     )
-    r = subprocess.run(["curl", "-K", "-"], input=config, capture_output=True, text=True)
-    status = r.stdout.strip()
-    if r.returncode == 0 and status == "200":
-        return True
-    if os.path.exists(dest):
-        os.remove(dest)
-    if r.returncode == 0 and status == "404":
-        return False
-    raise ReadFailed(f"could not read {key} from bucket {bucket} (HTTP {status or 'none'})")
+    # R2 answers 429 (and now and then 5xx) when many reads arrive at once: wait and ask again, up to six
+    # tries, 2, 4, 8, 16, 32 seconds plus jitter. 403 and 404 are answers, never retried.
+    base = float(os.environ.get("FETCH_RUN_RETRY_BASE", "2"))
+    for attempt in range(6):
+        r = subprocess.run(["curl", "-K", "-"], input=config, capture_output=True, text=True)
+        status = r.stdout.strip()
+        if r.returncode == 0 and status == "200":
+            return True
+        if os.path.exists(dest):
+            os.remove(dest)
+        if r.returncode == 0 and status == "404":
+            return False
+        busy = r.returncode == 0 and (status == "429" or (status.isdigit() and 500 <= int(status) <= 599))
+        if not busy or attempt == 5:
+            break
+        time.sleep(base * 2 ** attempt + random.uniform(0, base / 2))
+    raise ReadFailed(f"HTTP {status or 'none'}: could not read {key} from bucket {bucket}")
 
 
 def sha256_file(path):

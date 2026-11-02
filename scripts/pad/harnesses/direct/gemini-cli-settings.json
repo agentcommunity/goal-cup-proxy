@@ -1,4 +1,6 @@
 {
   "security": { "auth": { "selectedType": "gemini-api-key" } },
-  "model": { "name": "gemini-4-argon" }
+  "model": { "name": "gemini-4-argon" },
+  "general": { "defaultApprovalMode": "auto_edit" },
+  "tools": { "allowed": ["run_shell_command"] }
 }

@@ -63,6 +63,13 @@ if status == 200 and key == os.environ.get("FAKE_FORBID"):
     status = 403
 elif status == 200 and not os.path.isfile(src):
     status = 404
+if status == 200 and os.environ.get("FAKE_BUSY"):  # FAKE_BUSY=<status>:<times>: that status for the first <times> reads
+    code, _, times = os.environ["FAKE_BUSY"].partition(":")
+    seen = os.environ["FAKE_LOG"] + ".busy"
+    n = int(open(seen).read()) if os.path.isfile(seen) else 0
+    if n < int(times):
+        open(seen, "w").write(str(n + 1))
+        status = int(code)
 with open(cfg["output"][0], "wb") as o:
     o.write(open(src, "rb").read() if status == 200 else b'{"error":"no"}')
 sys.stdout.write(cfg["write-out"][0].replace("%{http_code}", str(status)))
@@ -352,6 +359,33 @@ class FetchRunTest(unittest.TestCase):
         absent = self.run_script("--index", str(self.index_path), ENTRY, str(self.out), env=self.fakes())
         self.assertEqual(absent.returncode, 1, absent.stderr)
         self.assertEqual(self.fetched()[1]["missing"]["why"], "object_bad")
+
+    def test_a_busy_r2_is_retried_and_then_read(self) -> None:
+        e = self.entry(chunks=1)
+        self.write_index(e)
+        for code in ("429", "503"):
+            busy = self.root / "fake.busy"
+            busy.unlink(missing_ok=True)
+            out = self.root / ("out" + code)
+            env = {**self.fakes(), "FAKE_BUSY": code + ":2", "FETCH_RUN_RETRY_BASE": "0"}
+            result = self.run_script("--index", str(self.index_path), ENTRY, str(out), env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(busy.read_text(), "2", "two refusals, then the read")
+            self.assertEqual((out / ENTRY / "rec.gcr.zst").read_bytes(), e["_bodies"][0])
+
+    def test_a_read_that_stays_busy_fails_naming_the_status_and_a_403_is_not_retried(self) -> None:
+        self.write_index(self.entry(chunks=1))
+        env = {**self.fakes(), "FAKE_BUSY": "429:99", "FETCH_RUN_RETRY_BASE": "0"}
+        result = self.run_script("--index", str(self.index_path), ENTRY, str(self.out), env=env)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("HTTP 429", result.stderr)
+        self.assertEqual((self.root / "fake.busy").read_text(), "6", "six tries, no more")
+        (self.root / "fake.busy").unlink()
+        env = {**self.fakes(), "FAKE_BUSY": "403:99", "FETCH_RUN_RETRY_BASE": "0"}
+        refused = self.run_script("--index", str(self.index_path), ENTRY, str(self.root / "o2"), env=env)
+        self.assertEqual(refused.returncode, 1)
+        self.assertIn("HTTP 403", refused.stderr)
+        self.assertEqual((self.root / "fake.busy").read_text(), "1", "a refusal is read once")
 
     def test_a_staging_bucket_is_named_in_the_url(self) -> None:
         self.write_index(self.entry())
