@@ -581,7 +581,11 @@ pub fn harness_line(name: &str, alive: bool, exit: Option<Exit>, started: bool) 
 pub fn written_line(requests: u64, hosts: &[(&str, u64)], whole: u64, holes: u64) -> String {
     let mut line = format!(
         "Written so far: {}",
-        plural(requests, "model request", "model requests")
+        plural(
+            requests,
+            "request to model hosts",
+            "requests to model hosts"
+        )
     );
     if !hosts.is_empty() {
         line += &format!(" ({})", host_list(hosts));
@@ -753,7 +757,7 @@ pub fn no_request_written(name: &str, pinned: Option<&str>) -> String {
 pub fn requests_written(n: u64, hosts: &[(&str, u64)]) -> String {
     format!(
         "{} written: {}.",
-        plural(n, "model request", "model requests"),
+        plural(n, "request to model hosts", "requests to model hosts"),
         host_list(hosts)
     )
 }
@@ -1322,6 +1326,23 @@ pub fn recover_on_again(name: &str, part: usize, span: &str, from: &str, to: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_request_count_says_requests_to_model_hosts() {
+        let hosts = [("models.example", 3)];
+        assert_eq!(
+            written_line(3, &hosts, 3, 0),
+            "Written so far: 3 requests to model hosts (models.example 3)."
+        );
+        assert!(
+            written_line(1, &hosts, 1, 0).starts_with("Written so far: 1 request to model hosts")
+        );
+        assert_eq!(
+            requests_written(3, &hosts),
+            "3 requests to model hosts written: models.example 3."
+        );
+        assert!(requests_written(1, &hosts).starts_with("1 request to model hosts written:"));
+    }
 
     #[test]
     fn not_masked_counts_and_grammar() {
