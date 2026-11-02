@@ -563,6 +563,83 @@ fn a_rewritten_call_id_matches_but_another_threads_response_does_not_cover_a_dro
     assert_eq!(missing(&verdict(&d, "fail", 2)), (1, 0, 0));
 }
 
+const CHAT: &str = "/v1/chat/completions";
+
+/// A Chat tool call as a resent turn or a non-streamed reply lists it.
+fn fcall(id: &str, name: &str, args: &str) -> Value {
+    json!({"id": id, "type": "function", "function": {"name": name, "arguments": args}})
+}
+
+/// A resend of `calls` in one assistant turn, each answered, then a new user turn.
+fn resend(calls: &[(&str, &str, &str)]) -> Value {
+    let list: Vec<Value> = calls.iter().map(|c| fcall(c.0, c.1, c.2)).collect();
+    let mut m = vec![json!({"role": "assistant", "content": null, "tool_calls": list})];
+    m.extend((calls.iter()).map(|c| json!({"role": "tool", "tool_call_id": c.0, "content": "ok"})));
+    m.push(user(Chat));
+    json!({"model": "fake-model", "messages": m})
+}
+
+/// Two parallel calls streamed: the id and name in the first delta, the arguments later and in
+/// pieces; or the same two calls in one non-streamed body.
+fn two_calls(stream: bool) -> (&'static str, String) {
+    if !stream {
+        let calls = [
+            fcall("call_a1", "f", r#"{"x": 1, "y": [2]}"#),
+            fcall("call_b2", "g", r#"{"q":"v"}"#),
+        ];
+        let m = json!({"role": "assistant", "content": null, "tool_calls": calls});
+        let body = json!({"choices": [{"index": 0, "message": m}]});
+        return ("application/json", body.to_string());
+    }
+    let d = |t: Value| json!({"choices": [{"index": 0, "delta": {"tool_calls": [t]}}]});
+    let evs = [
+        d(json!({"index": 0, "id": "call_a1", "type": "function",
+            "function": {"name": "f", "arguments": ""}})),
+        d(json!({"index": 1, "id": "call_b2", "type": "function",
+            "function": {"name": "g", "arguments": ""}})),
+        d(json!({"index": 0, "function": {"arguments": r#"{"x": 1, "#}})),
+        d(json!({"index": 0, "function": {"arguments": r#""y": [2]}"#}})),
+        d(json!({"index": 1, "function": {"arguments": r#"{"q":"v"}"#}})),
+    ];
+    let mut body: String = evs.iter().map(|e| format!("data: {e}\n\n")).collect();
+    body += "data: [DONE]\n\n";
+    ("text/event-stream", body)
+}
+
+/// A harness that resends parallel calls under fresh ids with their arguments re-serialised, or
+/// splits one call into two (the first keeps its id), still matches the response that made them;
+/// the same renamed resend with no such response is a missed call.
+#[test]
+fn renamed_or_split_parallel_calls_match_their_response_and_a_drop_still_fails() {
+    let renamed = [
+        ("call_9Zq4", "f", r#"{"y":[2],"x":1}"#),
+        ("call_7Kp2", "g", r#"{"q": "v"}"#),
+    ];
+    let first = json!({"model": "fake-model", "messages": [user(Chat)]});
+    for stream in [true, false] {
+        let d = rec("h-renamed", |e| {
+            send(e, CHAT, T, &first, two_calls(stream));
+            send(e, CHAT, T, &resend(&renamed), reply(Chat, Text(1)));
+        });
+        let h = verdict(&d, "pass", 0);
+        assert_eq!((n(&h, "checked"), missing(&h)), (1, (0, 0, 0)));
+    }
+    let split = [
+        ("call_a1", "f", r#"{"x": 1}"#),
+        ("call_s9", "f", r#"{"y": [2]}"#),
+    ];
+    let d = rec("h-split", |e| {
+        send(e, CHAT, T, &first, two_calls(true));
+        send(e, CHAT, T, &resend(&split), reply(Chat, Text(1)));
+    });
+    assert_eq!(missing(&verdict(&d, "pass", 0)), (0, 0, 0));
+    let d = rec("h-renamed-drop", |e| {
+        send(e, CHAT, T, &first, reply(Chat, Text(5)));
+        send(e, CHAT, T, &resend(&renamed), reply(Chat, Text(1)));
+    });
+    assert_eq!(missing(&verdict(&d, "fail", 2)), (1, 0, 0));
+}
+
 /// The lost call is found by (sid, message number): the thread is the one of the second message
 /// on its stream, after a message that is no request, so only a count of every message names it.
 #[test]

@@ -21,7 +21,8 @@ type Key = [u8; 16];
 /// (boot, stream, WebSocket message number): the call table's row key.
 type Id = (u64, u64, Option<u64>);
 /// One answer's keys: (key, whether it is a tool-call id, the [`ends`] key a masked resend of a
-/// text is also matched by). Only the first key is digested into the chain.
+/// text is also matched by, or for a tool call the [`calls_key`] of its turn). Only the first key
+/// is digested into the chain.
 type Turn = Vec<(Key, bool, Option<Key>)>;
 
 fn hash(b: &[u8]) -> Key {
@@ -51,6 +52,50 @@ fn id_key(id: &str) -> Key {
     hash(if n.is_empty() { id } else { &n }.as_bytes())
 }
 
+/// The content key of one turn's tool calls, in order: each name and its arguments, parsed and
+/// re-serialised (raw when they do not parse). A harness that resends parallel calls under fresh
+/// ids, arguments re-serialised, still matches the response. One key per turn, not per call, and
+/// none when a call has no arguments, which would let one bare call cover another.
+fn calls_key(calls: &[(String, String)]) -> Option<Key> {
+    if calls.is_empty() || calls.iter().any(|c| c.1.is_empty()) {
+        return None;
+    }
+    let mut b = b"calls\0".to_vec();
+    for (name, args) in calls {
+        b.extend(name.as_bytes());
+        b.push(0);
+        match serde_json::from_str::<Value>(args) {
+            Ok(v) => b.extend(v.to_string().as_bytes()),
+            Err(_) => b.extend(args.as_bytes()),
+        }
+        b.push(0);
+    }
+    Some(hash(&b))
+}
+
+/// Streamed tool-call deltas joined per (choice index, call index) into name and arguments.
+fn join(v: &Value, calls: &mut BTreeMap<(u64, u64), (String, String)>) {
+    for (ci, c) in v["choices"].as_array().into_iter().flatten().enumerate() {
+        let ci = c["index"].as_u64().unwrap_or(ci as u64);
+        let tcs = c["delta"]["tool_calls"].as_array();
+        for (ti, t) in tcs.into_iter().flatten().enumerate() {
+            let k = (ci, t["index"].as_u64().unwrap_or(ti as u64));
+            let e = calls.entry(k).or_default();
+            e.0.extend(t["function"]["name"].as_str());
+            e.1.extend(t["function"]["arguments"].as_str());
+        }
+    }
+}
+
+/// One content key per choice of a finished stream.
+fn joined(calls: BTreeMap<(u64, u64), (String, String)>, keys: &mut HashSet<Key>) {
+    let mut by: BTreeMap<u64, Vec<(String, String)>> = BTreeMap::new();
+    for ((c, _), call) in calls {
+        by.entry(c).or_default().push(call);
+    }
+    keys.extend(by.values().filter_map(|c| calls_key(c.as_slice())));
+}
+
 /// The answer as one assistant turn: its tool-call ids, else (Gemini function calls, no id, and
 /// text) the hash of its whitespace-collapsed text. `None` when it has neither. The key is always
 /// the hash, so a chain's digests never depend on a MASK elsewhere in a request. A text with
@@ -66,6 +111,20 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
     }
     let calls = m.get("tool_calls").and_then(Value::as_array);
     ids.extend(calls.into_iter().flatten().filter_map(|t| id(t, "id")));
+    // A whole assistant message's calls (a resent turn, a non-streamed reply) carry their
+    // content key; a streamed delta's are joined in [`join`] instead.
+    let content = (calls.filter(|_| s("role") == Some("assistant"))).and_then(|c| {
+        let f = |t: &Value, k: &str| match &t["function"][k] {
+            Value::String(v) => v.clone(),
+            Value::Null => String::new(),
+            v => v.to_string(),
+        };
+        let c: Vec<_> = c
+            .iter()
+            .map(|t| (f(t, "name"), f(t, "arguments")))
+            .collect();
+        calls_key(&c)
+    });
     let (mut text, mut fcs) = (String::new(), Vec::new());
     if matches!(s("role"), Some("assistant" | "model")) {
         let parts = m.get("parts").and_then(Value::as_array);
@@ -84,7 +143,7 @@ fn turn(m: &Map<String, Value>) -> Option<Turn> {
         }
     }
     if !ids.is_empty() {
-        return Some(ids.iter().map(|i| (id_key(i), true, None)).collect());
+        return Some(ids.iter().map(|i| (id_key(i), true, content)).collect());
     }
     let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let b = text.as_bytes();
@@ -146,6 +205,8 @@ struct St {
     pend: bool,
     msgs: u64,
     acc: String,
+    /// Streamed tool calls joined so far, by (choice index, call index): name and arguments.
+    calls: BTreeMap<(u64, u64), (String, String)>,
     /// A MASK record was seen on this request, or on the open message.
     masked: bool,
     /// A finished WebSocket message waiting for the MASK records written after its last DATA.
@@ -339,6 +400,7 @@ impl Sink {
             pend,
             msgs: 0,
             acc: String::new(),
+            calls: BTreeMap::new(),
             masked: false,
             held: None,
         };
@@ -374,8 +436,11 @@ impl Sink {
             }
             Role::Resp(true) => {
                 st.buf.extend_from_slice(bytes);
-                let (acc, keys) = (&mut st.acc, &mut self.h.answers);
-                lines(&mut st.buf, &mut |v| event(v, acc, keys));
+                let (acc, calls, keys) = (&mut st.acc, &mut st.calls, &mut self.h.answers);
+                lines(&mut st.buf, &mut |v| {
+                    event(v, acc, keys);
+                    join(v, calls);
+                });
             }
             Role::Resp(false) | Role::Up | Role::Down if !st.hole => {
                 st.buf.extend_from_slice(bytes)
@@ -432,9 +497,13 @@ impl Sink {
             }
             Role::Resp(true) => {
                 st.buf.push(b'\n');
-                let (acc, keys) = (&mut st.acc, &mut self.h.answers);
-                lines(&mut st.buf, &mut |v| event(v, acc, keys));
+                let (acc, calls, keys) = (&mut st.acc, &mut st.calls, &mut self.h.answers);
+                lines(&mut st.buf, &mut |v| {
+                    event(v, acc, keys);
+                    join(v, calls);
+                });
                 texts(&mut st.acc, keys);
+                joined(std::mem::take(&mut st.calls), keys);
             }
             Role::Resp(false) if !st.hole => self.reply(&st.buf),
             Role::Up if st.pend => self.h.undecoded += 1,
@@ -473,7 +542,10 @@ impl Sink {
             .filter_map(|t| turn(t.as_object()?))
             .collect();
         if !masked {
-            turns.iter_mut().flatten().for_each(|k| k.2 = None);
+            // Only a text's ends key needs a MASK; a tool call's content key stays.
+            (turns.iter_mut().flatten())
+                .filter(|k| !k.1)
+                .for_each(|k| k.2 = None);
         }
         let ds: Vec<u64> = turns
             .iter()
@@ -616,13 +688,14 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
         for (pos, keys) in &r.turns {
             e.1 += 1;
             checked += 1;
-            let miss: Vec<bool> = (keys.iter())
-                .filter(|k| {
-                    !h.answers.contains(&k.0) && !k.2.is_some_and(|e| h.answers.contains(&e))
-                })
-                .map(|k| k.1)
-                .collect();
-            if miss.is_empty() {
+            let hit = |k: &&(Key, bool, Option<Key>)| {
+                h.answers.contains(&k.0) || k.2.is_some_and(|e| h.answers.contains(&e))
+            };
+            // All ids of a tool-call turn come from one response: one found covers the turn (a
+            // harness that renames some ids, or splits a call, on resend).
+            let call_hit = keys.iter().any(|k| k.1) && keys.iter().any(|k| hit(&k));
+            let miss: Vec<bool> = (keys.iter()).filter(|k| !hit(k)).map(|k| k.1).collect();
+            if call_hit || miss.is_empty() {
                 continue;
             }
             // The time between the chain's previous request and this one (this one's own time
