@@ -18,7 +18,7 @@ key_file = "{home}/.gemini/.env"
 key_line = "GEMINI_API_KEY={key}"
 # Pad data for the dodger copy only (section 2): the Gemini API key route calls this host.
 model_host = "generativelanguage.googleapis.com"
-# Unattended approvals (geminicli.com/docs/reference/configuration/, read 2 Nov 2026): general.defaultApprovalMode "auto_edit" and tools.allowed in the settings file; YOLO is a launch flag only, and the Ctrl+Y key below did not hold (0.66.0 stopped at "Apply this change?").
+# Unattended approvals (geminicli.com/docs/reference/configuration/, read 2 Nov 2026): general.defaultApprovalMode "auto_edit" and tools.allowed in the settings file; YOLO is a launch flag only (--yolo, --approval-mode=yolo), and the Ctrl+Y key below did not hold. Pass 3 still asked "WriteFile ... 1 of 2" under auto_edit, and geminicli.com/docs/reference/tools says write_file and replace require confirmation, so both are in tools.allowed.
 pre_keys = '\031'
 exit_keys = '/quit\r'
 keep_going = true
