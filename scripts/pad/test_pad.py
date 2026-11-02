@@ -411,6 +411,11 @@ class CrashRows(unittest.TestCase):
         got = self.row("kill-watchdog-recover", self.GAP, more=[self.LOST], commits=0)
         self.assertEqual(got["faults"], "INCONCLUSIVE")
 
+    def test_idle_harness_after_a_busy_kill_is_not_a_fail(self):  # wait-recovery INCONCLUSIVE and no new request: not FAIL
+        stalled = self.UP[:1] * 2
+        self.assertEqual(self.row("kill-recorder", self.GAP, stalled, recovery=(("INCONCLUSIVE", "10:03"),))["faults"], "INCONCLUSIVE")
+        self.assertEqual(self.row("kill-recorder", self.GAP, stalled)["faults"], "FAIL")
+
     def test_dodger_progress_is_tunnel_connections(self):
         def tun(n):
             return {"written": {"model_requests": 0, "tunnel_hosts": {"api.example": {"conns": n}}}}

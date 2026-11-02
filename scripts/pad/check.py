@@ -636,7 +636,8 @@ def recorder_kills(r, kinds):
         elif f in kills and "kill-recorder" in kinds:
             old, new = [n for t, n in reqs if t < k], [n for t, n in reqs if t > k]
             stalled = old and new and max(new) <= max(old)
-            if f.get("quiet") and stalled:  # the pad saw no request in flight: the kill proves nothing about new work
+            waited = next((x for x, e in rec if e is None or e >= k), None)  # this kill's wait-recovery result
+            if stalled and (f.get("quiet") or waited == "INCONCLUSIVE"):  # the pad saw no request in flight, or the harness sat idle
                 r.mark("faults", "INCONCLUSIVE", "no work in flight at the kill at %s" % f.get("at"))
             else:
                 fail(r, stalled, k, next((e for _, e in rec if e is None or e >= k), None),
