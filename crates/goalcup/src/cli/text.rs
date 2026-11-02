@@ -1319,17 +1319,17 @@ mod tests {
 
     #[test]
     fn the_request_count_says_requests_to_model_hosts() {
-        let hosts = [("api.anthropic.com", 3)];
+        let hosts = [("models.example", 3)];
         assert_eq!(
             written_line(3, &hosts, 3, 0),
-            "Written so far: 3 requests to model hosts (api.anthropic.com 3)"
+            "Written so far: 3 requests to model hosts (models.example 3)."
         );
         assert!(
             written_line(1, &hosts, 1, 0).starts_with("Written so far: 1 request to model hosts")
         );
         assert_eq!(
             requests_written(3, &hosts),
-            "3 requests to model hosts written: api.anthropic.com 3."
+            "3 requests to model hosts written: models.example 3."
         );
         assert!(requests_written(1, &hosts).starts_with("1 request to model hosts written:"));
     }
