@@ -474,6 +474,7 @@ class StatedLoss(unittest.TestCase):
     DELTAS = {"kind": "generic_secret_assignment", "in": "e1/1.3/deltas", "sha12": "a" * 12, "n": 1}
     PLAIN = {"kind": "generic_secret_assignment", "in": "e1/1.3", "sha12": "a" * 12, "n": 1}
     KNOWN = {"form": "raw", "in": "e1/1.3/deltas", "sha12": "b" * 12, "n": 1}
+    KNOWN_BODY = {"form": "raw", "in": "e1/1.3", "sha12": "b" * 12, "n": 1}  # a request body or a contiguous response stream
 
     def run_row(self, known=(), shapes=(), code=2):
         extra = {"verify/secrets.json": {"known_hits": list(known), "shape_hits": list(shapes), "big_masks": [],
@@ -512,7 +513,7 @@ class StatedLoss(unittest.TestCase):
             self.assertEqual(row["checks"]["C1"], "FAIL", (shapes, code, row["why"]))
 
     def test_any_other_hit_still_fails(self):
-        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),
+        for known, shapes in (([self.KNOWN_BODY], [self.DELTAS]), ([self.KNOWN, self.KNOWN_BODY], []), ([], [self.PLAIN]), ([], [self.DELTAS, self.PLAIN]),
                               ([], [dict(self.DELTAS, **{"in": None})])):
             row = self.run_row(known, shapes)
             self.assertEqual((row["checks"]["C3"], row["faults"]), ("FAIL", "FAIL"), (known, shapes))
@@ -532,8 +533,16 @@ class StatedLoss(unittest.TestCase):
 
     def test_known_or_pathless_hit_with_a_planted_kind_unmasked_still_fails(self):
         masks = dict(SecretCheck.PLANTED, jwt=0)
-        for known, shapes in (([self.KNOWN], [self.DELTAS]), ([], [self.PLAIN])):
+        for known, shapes in (([self.KNOWN_BODY], [self.DELTAS]), ([], [self.PLAIN])):
             self.assertEqual(self.planted_row(known, shapes, masks)["checks"]["C3"], "FAIL", (known, shapes))
+
+    def test_known_value_only_in_streamed_reply_is_a_stated_loss_pass(self):  # T8, owner answer 2 Nov (split-echo gap)
+        for known, shapes in (([self.KNOWN], []), ([self.KNOWN], [self.DELTAS])):
+            row = self.run_row(known, shapes)
+            self.assertEqual(row["checks"]["C3"], "PASS", row["why"])
+            self.assertTrue(any("known value split in streamed reply" in w for w in row["why"]), row["why"])
+            self.assertEqual(row["facts"]["stated_loss_known_hits"], 1)
+        self.assertEqual(self.run_row([self.KNOWN_BODY], [self.DELTAS])["checks"]["C3"], "FAIL")  # same hit in a request body
 
     def test_exit_2_without_a_stated_loss_still_fails(self):
         self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
@@ -575,7 +584,7 @@ class UpstreamRedaction(unittest.TestCase):
         self.assertEqual(self.c3(False, {}), "INCONCLUSIVE")
 
     def test_a_known_hit_still_fails(self):
-        self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN]), "FAIL")
+        self.assertEqual(self.c3(True, {}, known=[StatedLoss.KNOWN_BODY]), "FAIL")
 
     def test_deltas_only_shape_is_a_stated_loss_not_a_fail(self):
         self.assertEqual(self.c3(True, SecretCheck.PLANTED, shapes=[self.DELTAS]), "PASS")
