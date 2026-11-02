@@ -1,95 +1,134 @@
-INTERIM report, not the end-of-build report. Written 09:59Z on 1 Nov 2026 against `v1.0/integration` at `27341339`.
+# Goalcup 1.0 morning report
 
-# Goalcup 1.0 morning report (interim)
+Written Monday 2 November 2026 at about 10:10 UTC for the owner. The conductor finalises it with the last rows. Full evidence is in `ACCEPTANCE.md`. The overnight log is `NIGHT-LOG.md`.
 
-Not ready: no run has yet passed the full prompt with many subagents, so done items 1, 2, 4, 5 and 9 are open.
+**Not ready: no release blocker set passes on one frozen head yet. Hermes has no PASS row, and no one-hour run is a PASS (best is INCONCLUSIVE).**
 
-Acceptance line (A1 to A4): none has run. A1 and A2 wait on the first full rows. A3 and A4 wait on the gateway call. ACCEPTANCE.md is not written yet.
+Acceptance line: A2, A3 and A5 have each run twice. The first pass failed on all three. The second pass is INCONCLUSIVE on all three, with C1 to C6 mostly PASS. A1 and A4 run after the release.
 
-This report was due at H+16 (31 Oct). It is about 31 hours late. The build is at H+47 (H+0 was 30 Oct 10:32Z). The night log is at `NIGHT-LOG.md`; its top now shows the open calls.
+## Your decisions
 
-## What is done, with evidence
+Open asks, with the default in force until you answer. Numbers are those of the finishing plan, section 5.
 
-- **The cut is in.** `d7759fdc` deleted the five old crates, `spikes/`, the old scripts and the old connector files (763 paths). `crates/` now holds `goalcup`, `goalcup-format`, `goalcup-verify`. Gate log: `/root/gc-night/gate-logs/v1.0_prd-13-cuts-0924.log`.
-- **The deletion gate is green** at `aed8e51f` (LESSONS.md, PRD-17 slice 10). Done item 3 is met.
-- **Fast gate passes on every merge.** 622 to 626 tests passed, 4 skipped, 0 failed in the last five gate logs. CI `check` is green on every head up to `dbd4a86b`. The latest merge is `27341339` (PRD-08, Gemini parent reader), gate fast PASS in 250 s.
-- **Code on integration:** recorder core, proxy, native capture, masking, uploader, Worker, verifier, connectors, CLI and the test pad rig. `goalcup recover` and `goalcup continue` are built and shown in docs.
-- **Point 4 fix for the Gemini key** is merged as `fc8df0e9`. Sweep 2 (09:27Z, on `cafcdef4`): 0 known key hits in 3 runs, env dump starred in place. Report: `/root/gc-night/sweep2/REPORT.txt`.
-- **Staging Worker** `goalcup-ingest-staging` is deployed (version `ea42d4e9`, tag `013ab7c5`). Production is untouched.
+| # | Ask | Default in force |
+|---|---|---|
+| 4 | Does a Hermes C3 that passes because Hermes redacts the key itself ("masked upstream") count for the release check? | No. Hermes then cannot reach a clean C3 PASS, because three secret kinds are never printed by the model. This is the main thing blocking a Hermes "verified". |
+| 5 | Cap for each one-hour run | 15 USD. The six runs cost 13.87 USD together (pad estimate). |
+| 6 | Freeze time | Tuesday 3 November, 18:00 UTC. |
+| 7 | Mac release run (`release.yml` by hand, metered runner minutes, nothing published) and a slot for your own Mac smoke | Waits for the freeze. |
+| 10 | Gemini CLI shell prompt | "Verified with a note" if the keep-going nudge works. In the last wave Gemini CLI stalled on a write confirmation even in unattended mode, so it stays "not verified". |
+| 12 | Size overrun: about 39.9k Rust lines against an 18.1k budget (figure from the plan; I did not recount) | No default recorded. |
+| 15 | Setup L3: the launching shell must outlive the watchdog for `goalcup recover` to work | Documented. Never answered. |
+| - | Split echo: a known key split across streamed reply events is recorded raw. The pad scores it as a stated loss (C3 PASS with a note). This is the conductor's reading of your 2 Nov 02:00Z answer. Please confirm it. | Stated loss, keep shipping. |
+| - | A bare git remote password restated by a model in its reasoning (OpenClaw, Goose) | Stated loss. The other choice is a new exact-value source for `.git/config` remote passwords. |
+| - | OpenClaw `source_changed` gaps | Stated loss with a note. |
+| - | Is the test member id a secret? It sits in 8 committed test fixtures and docs from before this session. | Not treated as a secret. Not added by this work. |
+| - | Hermes dodger tier note wording (Hermes is not a dodger; the record is correct) | Wording still to settle. |
+| - | Amp and Factory | Ship "not verified", no key. |
+| - | Gateway key budget | See "Your steps", step 3. |
 
-### Test rows that passed all six checks
+Already answered, not reopened: masker cap 32 kept, Hermes C2 on task logs with a plain note, Codex gateway on the pinned cheap model, stated loss for shapes in streamed replies, rotate the Gemini and DeepSeek keys later and keep testing with them now.
 
-Two rows, both `smoke` on staging, from `f2f96f0e` (rung 3b, report `/root/gc-night/rung3b/REPORT.txt`, cost about 0.36 USD):
+## What happened overnight
 
-| Harness | Run | Time | Model requests | C1 to C6 |
+All times UTC, 2 November. Eight trains merged into `v1.0/integration`, each with one gate.
+
+| Time | Train | Merge | Carried |
+|---|---|---|---|
+| 01:04 | handover | `45b47073` | tools, ledger, reports, the four finishing plans |
+| 02:52 | the big train | `13ce0d62` | trie matcher, mini rig, release rows, longsum, participant text, seal wording, mini-wave fixes |
+| 03:50 | pre-freeze | `f7048ed8` | pad trust fixes, fresh-clone compare |
+| 04:46 | long-run fixes | `ad32a2a4` | headerless PEM body lines masked, pad kill pairing, busy one-hour runs |
+| 05:21 | core-row fixes | `a437988d` | Hermes no longer called unreadable, seal end screen from the pane copy |
+| 06:15 | exec retry | `aa36af92` | a lost sandbox reply is read back, never a second kill |
+| 07:47 | subagent links | `284c2610` | readers for many harnesses, history matches renamed tool calls |
+| 08:53 | wave fixes | `fabd82ec` | fetch retries on 429, work rule, Gemini CLI approvals |
+
+Gates: 11 gate runs, 8 passed. The three failures were slips caught by the gate (rustfmt, a rule check that found a harness name in CLI code, clippy). Each was fixed and rerun. A passing gate takes about 7 to 8 minutes. The test count went from 685 (train 5) to 707 (train 8).
+
+Builds: six release builds (B0 `04044320`, H2 `13ce0d62`, `f7048ed8`, H4 `ad32a2a4`, H5 `a437988d`, H6 `284c2610`), each shared by all rows on it.
+
+Waves, with the pad's own cost estimate in USD (it errs high):
+
+| Wave | Build | Rows | Cost | Result |
 |---|---|---|---|---|
-| Claude Code | `rddadf04700305b92` | 5 m 09 s | 21 | all PASS, server copy equals local (3 chunks) |
-| Codex | `ra601d73b307ff005` | 4 m 47 s | 15 | all PASS, server copy equals local (2 chunks) |
+| Mini wave | B0 | 13 boxes | 0.33 | 2 PASS, 7 FAIL, 4 INC, 2 not verified (no key) |
+| Mini reruns | H2 | 7 | 0.22 | 0 PASS, 3 INC, 4 FAIL |
+| Core set | `f7048ed8` | 9 | 8.18 | 5 PASS, 2 INC, 2 FAIL (before the PEM fix) |
+| Core set again | H5 | 9 | 5.21 | 4 PASS, 4 INC, 1 FAIL (Hermes gateway, a verifier defect) |
+| One-hour runs, pass 1 | H2 | 3 | 6.92 | all FAIL |
+| One-hour runs, pass 2 | H4 | 3 | 6.95 | all INC, C1 to C6 mostly PASS |
+| Paynest subagent wave 1 | H5 | 13 | 1.46 | all "did no work" |
+| Paynest wave 2 | H6 | 13 | about 9.9 | 8 rows with data, 5 interrupted |
+| Paynest wave 3 | H6 | 10 | 9.85 | 4 PASS (Kilo, Qwen, Goose, Kimi Code) |
 
-Also shown, with their own reports under `/root/gc-night/`:
+Model spend over the night: about 49 USD by the pad's estimate. Row boxes: about 80 boxes and about 1,600 box minutes (my sum of the spend files and the B0 ledger figure). Build and gate boxes, from the conductor's two spend lines: 10 boxes, 21.4 box minutes, 119.7 vCPU minutes (02:56 to 04:05) and 5 boxes, 16.7 box minutes, 122.1 vCPU minutes (04:49 to 05:56). The earlier Vercel infrastructure spend you named at 23:12Z on 1 November was about 100 USD.
 
-- Rung 1 (local capture) passes on Claude Code and Codex (`8dc99969`).
-- Rung 4 (recorder crash) and rung 8 (pinned host named, not hidden) hold on both harnesses (`5825d6d8`).
-- Rung 5 (kill the watchdog, then `goalcup recover`) gave the first real server-copy PASS on 5 entries (`6fb5db63`, 07:21Z). It holds only when the launching shell outlives the watchdog (setup L3, owner to confirm).
-- Sweep 2 on the other harnesses: Gemini passes rung 3 except C2 (no parent reader then; one is now merged in `27341339`, not yet run on a pad row). Copilot C1 passes.
+Your calls overnight: 02:00 the key answer (W1), 06:20 the direction to focus on recording and subagents, 07:20 DeepSeek out of credit and topped up, 08:31 top up about 20 USD with a stop at 18 USD.
 
-These are not done item 1 rows. Item 1 needs `full` rows for the core set. There are 0 `full` rows, 0 `cycle` rows and 0 rows on the post-cut commit. Two caveats on the passes: Claude Code shows a `history_complete` warning on every row (a harness-written turn, or a response recorded with a hole; cause not settled), and a value in `.env.local` with no key shape reached the record on both rows. That second one is a stated loss by design.
+## State of the code
 
-## What is not done
+- Integration head is `fabd82ec`. The fast gate was green on it.
+- The stall-fix branch (`v1.0/prd-12-stall-fixes`, for the Crush, Gemini CLI and OpenClaw stalls) exists on origin and is not merged.
+- Not frozen. Guarded code changed in H4, H5 and H6, so every release row has to be redone on the frozen head.
+- Production Worker untouched. The staging Worker holds the test rows.
+- Only `f7048ed8` has a written pad trust read. The later builds have selftest files that ran all controls.
 
-- **`gate full` has never run end to end.** Only `idle_tunnel_survives_120s` ran under the full profile. No report may say gate full passed. Done item 4 is open.
-- **The first `full` rows** (20-minute payments prompt, many subagents, Codex with `kill-recorder`) have not run. Point 2 at scale is untested.
-- **Hermes** is at rung 1 only, and only with a data fix still on `v1.0/prd-12-pad` (merge request `095421-prd-12-pad` is pending). It is a release blocker.
-- **Gateway rows** (rung 7, A3, A4): every call refused, see the open calls.
-- **`connectors/tiers.toml`:** 16 of 16 harnesses read "not yet run on the pad". Crush, Cline, Kimi and Qwen stall on approval dialogs, sign-in or the model asking. Goose and OpenClaw leak PEM body lines. Hermes and OpenClaw leak key shapes split across stream deltas. These ship "not verified" with a reason unless answered.
-- **Phase 3 tail after the cut:** the cut merged without its written preconditions (see the ruling below). Still to do: the `Cargo.toml` `exclude` block and old-crate dependencies, `scripts/check-links.py`, a passing `selftest` (it still exits 3), and `gate full`. The 08:03Z ledger line "selftest exit 3 fixed" was false and was corrected at 09:57Z.
-- **Heavy test group** is not set up (`.config/nextest.toml` lists four binaries). Two watchdog restart tests flake under load. The cause is assumed to be test timing and has not been measured. If a restart under load takes minutes, that is a point 3 fault.
-- **Participant text:** every Codex run prints a PROBLEM line for `ab.chatgpt.com`, which PRD-11 has found to be Codex's metrics endpoint. It needs a connector data row or a quieter line.
-- **Known limits, deferred on purpose:** rest of PRD-02 slice C part 2 (`by_hand_load`, mask pool, `many_streams`, `no_latch`, `SnapshotCursor.fid`), PRD-09 `usage-job.sh`, PRD-14 `e2e_run.rs` and G2. `by_hand_load` is information only beside A1 and A2.
-- **Unproven long runs:** every real run so far lasted 3 to 6 minutes. Rotation, multi-part upload, the lag bound and pruning stay unproven until A2 or A1.
-- **No ACCEPTANCE.md or PAD-RESULTS.md yet.**
-- **Size:** Rust source is 39,908 lines against about 18,100 planned. Rust tests are 30,801 against about 14,200. These are recorded overruns.
+## What is proven
 
-## Open calls
+- Claude Code: all six checks pass on direct, gateway and dodger on H5, with 5 subagents per row.
+- Codex: all six pass on all three cases on `f7048ed8`. On H5 the gateway row passes. Direct and dodger did no work because the OpenAI key is out of credit.
+- The recorder survives a kill. Two recorder kills and one watchdog kill with `goalcup recover` ran in all six one-hour runs. The harness ran to its own end every time. Recorder gaps were 0.4 to 1.0 s, with one quiet kill of 14.4 s.
+- Subagent links: 28 of 28 (OpenCode 2), 20 of 20 (Kimi Code), 18 of 18 (Kilo), 14 of 14 (OpenCode), 12 of 12 (Hermes and Qwen), 10 of 10 (Goose). Codex started 10 to 11 and Claude Code 13.
+- No secret in any kept record outside the stated losses. Keyscan of all pad output: 0 hits.
+- No loss under load: no memory-guard gap in any one-hour run. Recorder memory peaked under 180 MB.
+- Server copy equals local on every row that was fetched.
 
-1. **W5, gateway free tier (open).** The Vercel AI Gateway key is free tier. Every gateway call answers 403 since 06:49Z. Owner: add credits or name a free-tier model. Blocks 3 of 9 core rows, A3 and A4.
-2. **W1, Gemini key (fixed, rotation open).** The leak is fixed in `fc8df0e9`. The owner decides whether to rotate GEMINI_API_KEY and CLAUDE_API_KEY. The rules ask new runs to wait for this answer. Runs have gone on, and that is logged here.
-3. **Ruling on the cut (conductor, 09:57Z).** `d7759fdc` merged with its preconditions unmet. It is not reverted (history is merge-only). The preconditions are completed after the fact on the post-cut head, and the first `full` rows run there.
+## What is not proven
 
-Resolved, for the record: the 31 Oct W6 network call (08:25Z, full network access), the 31 Oct W5 Cloudflare token (14:46Z, token replaced), and the 1 Nov W6 database route (06:19Z, read grant given).
+- Hermes: no PASS row. C3 stays INCONCLUSIVE (ask 4). Its gateway C1 failure was a verifier defect, fixed and shown by replay only.
+- Any one-hour run as a PASS. X2 (15 subagents, 10 at once) was not reached. Best at once: 6 for Claude Code, 5 for Codex. Hermes cannot show concurrency from task logs.
+- Kill-gap bound under load: PASS once in three runs.
+- Gemini CLI, Crush, Copilot (subagents), OpenClaw, Cline, Amp, Factory: not verified.
+- macOS, the newcomer docs run and the clean-up check: no result yet.
+- A known value split across stream events can still be stored raw.
 
-## Owner asks
+## Problems that cost time
 
-1. Gateway: add credits for the AI Gateway team, or name a free-tier model (W5).
-2. Rotate or keep GEMINI_API_KEY and CLAUDE_API_KEY (W1).
-3. Question 3, exact-value masking: the default "no" stands. The full prompt builds a payments platform, so `.env` and Stripe-style values will reach the record. Say yes or accept the loss.
-4. Accept the rung 5 and A2 setup (the terminal outlives `goalcup start`, `goalcup continue` as the participant's path), or ask for more.
-5. Waive the cut's missing preconditions, or have them done. The integrator may rule under B8; otherwise it is yours.
-6. Confirm the `gsk_` and `sgamp_` masking rules already merged in `fc8df0e9`.
-7. Allow `goalcup setup` to add a harness auto-approve switch after the participant says yes (Crush, opencode2, Gemini), write Crush's init marker, and fill `{workspace}` for OpenClaw.
-8. Set a new report time. H+16 has passed.
-9. Put run 1's prompt in a file for A1, or accept "compared by load" (question 6).
-10. Confirm the cron sends the `recording` email on a `failed` heartbeat, answer question 12 (test hooks in the release binary), and accept the size overruns or name further cuts.
-11. At release: the macOS run, production Worker deploy and secret removal, merge to main, tag (PRD-16 section 14).
+- Two real keys were recorded raw on the first mini wave (W1). Cause: the pad's setup script printed the environment. Fixed. Rotation is in your steps.
+- OpenAI credit ran out during the second one-hour run and again in the H5 core rows.
+- DeepSeek credit ran out at 07:20 and stopped 10 rows.
+- The gateway key budget (10 USD) was exceeded twice. You raised it at 08:31, but the 10:07 ledger line still shows the key over 10 USD, and the Claude Code and Codex gateway rows did not run in wave 3.
+- Staging storage returned HTTP 429 to the pad's fetch in wave 2. The retry merged and held.
+- The wave 2 stop did not act in time. The 8 USD rule was passed (about 9.9 USD).
 
-No owner ask has been answered since the 07:20Z review, except the database grant and the network and token calls above.
+## Your steps
 
-## Spend so far
+Before the release (the conductor does these on your word):
 
-- Model calls: about 7.4 USD, summed from the reports' own estimates (rung 3b 0.36, sweep 2 0.51, the rest in earlier reports). The per-run cap of 10 USD has not been hit.
-- Sandboxes and agent-token spend: not measured anywhere. This is a gap.
+1. Answer the table above or accept the defaults. Especially ask 4, the freeze time and the split-echo reading.
+2. Check the OpenAI balance. Without it Codex rows do no work.
+3. Check the Vercel AI Gateway key budget. Make sure it really is above 20 USD, and top up DeepSeek if the balance is low. Without this the gateway rows stop at HTTP 402.
+4. Say "freeze". The conductor then runs the full gate on the frozen head, one build, and the release rows (core set, one-hour runs).
 
-## Plan to Friday 6 November
+Release (owner only, the plan's Task 12). The fast path is Tuesday 3 November at 17:00 UTC. The default is Wednesday 4 November at 17:00 UTC. The event opens Friday 6 November at 00:00 UTC.
 
-Time left is about 4.5 days. There is no slack for a second core-set wave.
+5. Read this file. Confirm no real run is open on production.
+6. Merge `v1.0/integration` at the frozen head into `main` as a merge commit. `main` is `4b226de2` at 0.7.0. The merge brings 1.0.0, so no `release.sh prepare`. If `main` moved under a guarded path, the conductor reruns the release rows on the merge result first.
+7. Run `sh scripts/gate.sh full` on `main` in a build box.
+8. Run `sh scripts/release.sh tag 1.0.0`. It runs `scripts/pad/table --release-check` first.
+9. `release.yml` publishes four targets. Run `install.sh` from the latest release on Linux and on your Mac. Do one pad run on the Mac and note the masker boot time (target under about 2 s).
+10. Deploy the production Worker from your own device, from the tagged commit: `cd server/worker && npx wrangler deploy`. Then `npx wrangler secret delete RECEIPT_SIGNING_KEY`.
+11. Production smoke: one practice run sealed, fetched, checked.
+12. Deferred checks: PRD-14 G2 and PRD-12 P8.
+13. Set `EVENT_ID = "goalcup-cup-2026"` between 6 Nov 00:00Z and 7 Nov 00:00Z, in `server/worker/wrangler.toml`, with your deploy.
 
-1. **Today:** run the first `full` rows on the post-cut head (Codex with `kill-recorder@8` and `@10`, Claude Code with parts kept), staging, 10 to 25 USD. Let the cuts watcher check PRD-13 acceptance 2 to 5 on the Codex row.
-2. **Today:** merge the pad request `095421-prd-12-pad`, then Hermes rung 3 on staging, then its `dodger` and `direct` `full` rows. Watch C2 and the delta-split echo in C3.
-3. **Today:** try a free-tier gateway model while the owner decides on credits.
-4. **Today and Monday:** settle the Claude Code `history_complete` warning from the fetched record of run `rddadf04700305b92` (verify lane with usage). Add the heavy test group, drop the `exclude` block and old dependencies from `Cargo.toml`, delete `check-links.py`, run `gate full`, and time the restart tests under load.
-5. **Tuesday:** core set of 9 `full` rows on the post-cut head, then the two `dodger` `full` rows.
-6. **Wednesday:** A2 straight after the first Claude Code `full` pass (its kill-watchdog case also serves as the rung 5 rerun), then A1, with A3 once the gateway is settled. Phase 5 harnesses run beside, one row each or "not verified" with a reason. Cycle rows go to phase 5 harnesses only.
-7. **Thursday:** N4 to N10 checks, one docs sweep, `tiers.toml` and README from PAD-RESULTS.md, then MORNING.md (final) and ACCEPTANCE.md.
-8. **Friday:** owner reads the report and releases. Friday is slack for the owner's steps.
+After the last test run:
 
-Rig features are frozen. Only faults that make a row read wrong go in. The scribe merges the lane logs into the night log every 30 minutes from now on.
+14. Rotate the keys. Your 2 Nov 02:00Z answer names the Gemini key and the DeepSeek key. An older ask also named a Claude key. That one was not repeated in the later answer, so say if it still needs rotating.
+15. Clean keys and personal information off the staging server, per your W1 answer. The two entries known to hold a raw key are `e9acb5c06a4bf2aae` and `ef100051f05c98367`. The local fetched copies of those two rows sit in locked folders on the conductor box.
+16. Check that no boxes or `gc-pad-*` repositories are left (check N9).
+
+## After the release
+
+Plan Task 13, on your word and on staging only. A4 (Kilo through the gateway, 20 minutes). One `full` row per harness whose short composite row passed. A1 (two hours, Codex) only if you want the comparison to run 1. Results go into `ACCEPTANCE.md` and a "Big tests on 1.0.0" block here. Any new failure is a 1.0.1 fix, and tiers change only in 1.0.1.
