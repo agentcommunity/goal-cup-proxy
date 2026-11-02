@@ -545,6 +545,20 @@ no participant value, measures 14.6 MB/s on the same box. The rest of the exact 
 hold (a `Literal` candidate starts on nearly every letter or digit, since 32 values give forms that
 start on almost every one), not the scan. The next steps stay items 3 and 4.
 
+**The matcher alone, and the stream's share (2026-11-02, release box, branch head 1c190400).** The
+trie's `find_all`, run alone over 4 MB of generated text with 32 values of 256 bytes, measures
+20.6 MB/s, so it is not above 50 MB/s as the plan hoped. One stream of a generated Codex request
+masks at 14.4 MB/s with no participant value and 6.1 MB/s with 32 values, so the values keep 0.42
+of the no-value rate. `Masker::new` took 91 ms and the peak resident memory was 38 MB on this box.
+Both are inside their targets. The 50 MB/s stream target is held back by the shared rules (14.6
+MB/s alone), by the hold, and by the matcher itself. The release-only test
+`find_all_alone_is_far_above_50_mb_s` asserts the 50 MB/s figure and therefore fails in a release
+build; it skips itself in the debug builds of the gate, so the gate does not see it. Whether to
+lower or drop that assertion is open (see the amendment). The change to the hold, one literal
+tracker per stream, is deferred to after 1.0; it runs only if the one-hour runs show the recorder
+falling behind (the masking backlog grows through the hour, or a hold or candidate bound trips
+`fail_closed`) and the ratio above is below 0.8. It is 0.42 today.
+
 **Memory of the compiled forms (measured, same release box).** The masker's peak resident memory was
 about 39 MB with 8 values of 100 bytes, 104 MB with 32 of 100 and 238 MB with 32 of 256. That memory
 is the compiled exact-value forms; it stays resident in the recorder for the whole run, and PRD-02's
@@ -1242,6 +1256,12 @@ A1 reports it as a stated loss instead of failing on it.
   stream equals `mask_whole`, and that one stream stays above 5 MB/s (best of 3). The planned floor
   of 20 MB/s is not reachable in this slice, since the shared rules alone measure 14.6 MB/s; 5 MB/s
   is above the old code's best (3.3).
+- **Measured again, matcher alone.** `find_all` alone: 20.6 MB/s. Stream, no values 14.4 MB/s, with
+  32 values 6.1 MB/s (ratio 0.42). `Masker::new` 91 ms, peak 38 MB. The release-only test
+  `find_all_alone_is_far_above_50_mb_s` asserts more than 50 MB/s and fails in a release build; the
+  owner or conductor decides whether to lower the figure, mark it ignored, or speed the matcher up.
+  The per-stream literal tracker (one `LiteralTrack` per scanner) is deferred to after 1.0, with the
+  trigger in section 11.
 - **Left open.** The 50 MB/s target (section 11 items 3 and 4, and the hold's per-unit cost of a
   `Literal` candidate on nearly every letter or digit). The open nits of the earlier amendments and
   the size budget overrun are unchanged.
