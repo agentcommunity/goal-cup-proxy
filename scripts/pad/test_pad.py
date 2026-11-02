@@ -1003,5 +1003,54 @@ class PinnedModel(unittest.TestCase):
             self.assertNotIn("pinned", " ".join(self.row(pin, recorded, read=read)["why"]), (pin, recorded, read))
 
 
+class MiniFixRound(unittest.TestCase):
+    """Mini-wave fixes: goose plain count, task-log subagents, OpenClaw redaction data, setup script without provider keys."""
+
+    def test_shape_only_plain_hit_does_not_undo_the_stated_loss(self):  # T3
+        shape = {"kind": "generic_secret_assignment", "in": "e1/1.3/deltas", "sha12": "a" * 12, "n": 1}
+        row = evaluate({"meta.json": {"connector": "goose-cli", "case": "direct", "known_box": True, "entry": "e1"},
+                        "verify/secrets.json": {"known_hits": [], "shape_hits": [shape], "big_masks": [], "masks": dict(SecretCheck.PLANTED)},
+                        "verify/secrets-plain.json": {"known_hits": [], "shape_hits": [shape], "big_masks": []},
+                        "verify/secrets-conductor.json": {"hits": 0},
+                        "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 2}})
+        self.assertEqual(row["checks"]["C3"], "PASS", row["why"])
+
+    def usage_row(self, flag, harness="hermes-cli"):
+        use = {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
+               "threads": [{"parent": None, "models": {"m": 3}, "wire_calls": 3}, {"parent": "t0", "models": {}, "wire_calls": 0}]}
+        meta = {"connector": harness, "case": "direct", "known_box": True, "entry": "e1"}
+        if flag:
+            meta["subagents_by_task_log"] = True
+        return evaluate({"meta.json": meta, "verify/usage/e1.json": use})
+
+    def test_task_log_subagents_need_no_calls(self):  # T4
+        row = self.usage_row(True)
+        self.assertNotEqual(row["checks"]["C2"], "FAIL", row["why"])
+        self.assertNotEqual(row["checks"]["C5"], "FAIL", row["why"])
+        self.assertTrue(any("subagents shown by their task logs, not tied to calls" in w for w in row["why"]), row["why"])
+        other = self.usage_row(False, "gemini-cli")  # the rule stays for every other harness
+        self.assertEqual(other["checks"]["C2"], "FAIL")
+        self.assertEqual(other["checks"]["C5"], "FAIL")
+
+    def test_pad_copies_the_task_log_flag_and_openclaw_names_its_redaction(self):  # T4, T1
+        import tomllib
+        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "harnesses")
+        with open(os.path.join(here, "hermes-cli.toml"), "rb") as f:
+            self.assertIs(tomllib.load(f).get("subagents_by_task_log"), True)
+        with open(os.path.join(here, "openclaw-cli.toml"), "rb") as f:
+            oc = tomllib.load(f)
+        self.assertIs(oc.get("redacts_tool_output"), True)
+        self.assertTrue(oc.get("redacts_kinds"))
+
+    def test_setup_script_never_prints_the_environment(self):  # T7
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "prompts", "pad-setup-check.sh")) as f:
+            code = [ln for ln in f.read().splitlines() if not ln.lstrip().startswith("#")]
+        text = "\n".join(code)
+        for bad in ("env", "printenv", "set", "export", "declare", "API_KEY", "/proc/"):
+            self.assertNotRegex(text, r"(^|[\s|;&(])%s($|[\s|;&)=])" % bad if bad.isalpha() else bad, bad)
+        self.assertIn("PAD_SECRET_PLAIN", text)
+
+
 if __name__ == "__main__":
     unittest.main()
