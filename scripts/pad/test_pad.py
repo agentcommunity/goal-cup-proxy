@@ -3,8 +3,10 @@ value in any argument or file the pad builds (an env key launch included), the p
 check.py's crash rows. No network; gate fast runs python3.11 -m unittest discover -s scripts/pad -p 'test_*.py'.
 """
 import base64
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -155,6 +157,94 @@ class SealPaneFallback(unittest.TestCase):
             self.assertEqual(pad.end_screen_from_panes(d), 42)
         with tempfile.TemporaryDirectory() as d:
             self.assertIsNone(pad.end_screen_from_panes(d))
+
+
+class ExecRetry(unittest.TestCase):
+    """An `sbx exec` that fails in transport with no PADSTEP line: the box is asked whether the attempt began; only if not is it sent again."""
+
+    def box(self, outs, step="look"):
+        run = object.__new__(pad.Run)
+        run.s, run.name, run.meta, run.logged, run.n, run.verbs = {"where": "sandbox"}, "pad-x", {}, [], 0, []
+        run.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, run.tmp, True)
+        run.log = run.logged.append
+
+        def sbx(verb, *args, limit=None, name=None, env=None):
+            out, err = outs[run.n]
+            run.n += 1
+            run.verbs.append(open(args[args.index("--script") + 1]).read())
+            return subprocess.CompletedProcess([verb], 0, out, err)
+        run.sbx = sbx
+        with mock.patch.object(pad.time, "sleep") as sleep:
+            got = run.box(step, 60)
+        return run, got, sleep
+
+    FAIL, STEP, NONE = ("", "sbx exec: fetch failed"), ('PADSTEP {"result": "ok", "saw": ""}\n', ""), ("PADNONE\n", "")
+
+    def test_never_began_is_sent_again(self):
+        run, got, sleep = self.box([self.FAIL, self.NONE, self.STEP])
+        self.assertEqual((got[0], run.n), ("ok", 3))
+        self.assertTrue([ln for ln in run.logged if "never began" in ln])
+        sleep.assert_called_once_with(5)
+        self.assertEqual(run.verbs[0], run.verbs[2])  # the same attempt id and step
+
+    def test_a_kill_whose_response_was_lost_is_not_sent_again_and_its_result_is_read(self):
+        done = ('PADSTEP {"result": "ok", "saw": "killed"}\n', "")
+        run, got, _ = self.box([self.FAIL, done], "kill-recorder@30")
+        self.assertEqual((got[:2], run.n), (("ok", "killed"), 2))
+        self.assertIn("kill-recorder@30", run.verbs[0])
+        self.assertNotIn("kill-recorder", run.verbs[1])  # the second call only asks
+
+    def test_a_kill_that_began_and_cannot_be_read_is_an_error_not_a_second_kill(self):
+        run, got, _ = self.box([self.FAIL] + [("PADBEGUN\n", "")] * 8, "kill-recorder@30")
+        self.assertEqual(got[0], "error")
+        self.assertEqual(run.n, 9)  # one kill, eight questions
+
+    def test_a_step_that_printed_a_line_is_not_asked_about(self):
+        run, got, _ = self.box([('PADSTEP {"result": "ok", "saw": ""}\n', "sbx exec: fetch failed")])
+        self.assertEqual((got[0], run.n), ("ok", 1))
+
+    def test_three_attempts_at_most(self):
+        run, got, _ = self.box([self.FAIL, self.NONE, self.FAIL, self.NONE, self.FAIL])
+        self.assertEqual((got[0], run.n), ("error", 5))
+
+    def test_a_partial_result_file_is_not_a_result(self):
+        half = ('PADSTEP {"result": "ok", "sa\n', "")
+        run, got, _ = self.box([self.FAIL] + [half] * 8, "kill-recorder@30")
+        self.assertEqual(got[0], "error")
+        self.assertEqual(run.n, 9)  # one kill, eight questions, never a second kill
+
+
+class AttemptBegin(unittest.TestCase):
+    """The box refuses a repeated attempt id: a resend under the same id never runs the step twice."""
+
+    def main(self, with_json):
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        os.makedirs(os.path.join(d, "attempts"))
+        aid = "0123456789ab"
+        mark = os.path.join(d, "attempts", aid)
+        open(mark + ".begin", "w").close()
+        if with_json:
+            with open(mark + ".json", "w") as f:
+                f.write('{"result": "ok", "saw": "killed"}')
+        ran = []
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"PAD_ATTEMPT": aid}), mock.patch.object(padrun, "Run", side_effect=ran.append), \
+                contextlib.redirect_stdout(out):
+            padrun.main(["pad-run", d, "look"])
+        return ran, out.getvalue()
+
+    def test_a_repeated_attempt_does_not_run_the_step(self):
+        ran, out = self.main(True)
+        self.assertEqual(ran, [])
+        self.assertEqual(out, 'PADSTEP {"result": "ok", "saw": "killed"}\n')
+
+    def test_a_repeated_attempt_with_no_result_says_it_began(self):
+        ran, out = self.main(False)
+        self.assertEqual(ran, [])
+        self.assertIn("attempt already began", out)
+        self.assertEqual(json.loads(out[len("PADSTEP "):])["result"], "error")
 
 
 class Walk(unittest.TestCase):
