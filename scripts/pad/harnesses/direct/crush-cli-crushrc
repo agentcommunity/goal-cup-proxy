@@ -1,0 +1,3 @@
+# Pad data (PRD-12 section 6): Crush's permission answers for an unattended pad run, in the crushrc a participant
+# keeps at ~/.config/crush/crushrc (Crush v0.99.0 README, "Permissions"). Test data; goalcup never reads it.
+permissions allow bash view ls glob grep edit multiedit write agent job_output
