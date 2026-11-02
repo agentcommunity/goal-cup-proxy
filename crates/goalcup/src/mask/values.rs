@@ -932,6 +932,42 @@ mod tests {
         assert!(planted > 300, "too few matches planted: {planted}");
     }
 
+    #[test]
+    fn find_all_alone_is_far_above_50_mb_s() {
+        if cfg!(debug_assertions) {
+            println!("find_all_alone_is_far_above_50_mb_s: skipped: debug build");
+            return;
+        }
+        let mut rng = Rng(0xA11_0256);
+        const SET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        let values: Vec<SecretValue> = (0..32)
+            .map(|_| {
+                SecretValue::new(
+                    ValueSource::Workspace,
+                    (0..256).map(|_| rng.pick(SET)).collect(),
+                )
+            })
+            .collect();
+        let (secrets, counts) = RunSecrets::new(&values);
+        assert_eq!(counts.workspace, 32);
+        let forms: Vec<Vec<u8>> = (0..secrets.len())
+            .map(|i| secrets.form(i).to_vec())
+            .collect();
+        let mut view = Vec::new();
+        while view.len() < 4_000_000 {
+            view.extend_from_slice(&text(&mut rng, &forms));
+        }
+        let mut best = std::time::Duration::MAX;
+        for _ in 0..3 {
+            let t = std::time::Instant::now();
+            std::hint::black_box(secrets.find_all(&view));
+            best = best.min(t.elapsed());
+        }
+        let rate = view.len() as f64 / 1e6 / best.as_secs_f64();
+        println!("find_all_alone_is_far_above_50_mb_s: {rate:.1} MB/s");
+        assert!(rate > 50.0, "find_all below 50 MB/s");
+    }
+
     /// From every start of `text`, a [`LiteralWalk`] and the per-form [`Progress`] set (the
     /// old hold recognizer) agree byte by byte.
     fn walks_agree(secrets: &RunSecrets, forms: &[Vec<u8>], text: &[u8], case: usize) {
