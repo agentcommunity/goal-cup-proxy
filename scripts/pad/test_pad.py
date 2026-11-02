@@ -144,6 +144,19 @@ class CrushPermissions(unittest.TestCase):
         self.assertEqual(load("padtable2", "table").tier_for("crush-cli", []), ("not verified", "", "not yet run on the pad"))
 
 
+class SealPaneFallback(unittest.TestCase):
+    def test_end_screen_requests_from_the_newest_seal_pane_when_the_seal_gave_no_padstep(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "watch"))
+            for name, text in (("pane-s2.txt", "7 requests to model hosts written: a"), ("pane-s5.txt", "x\n42 requests to model hosts written: b"),
+                               ("pane-w9.txt", "99 requests to model hosts written")):
+                with open(os.path.join(d, "watch", name), "w") as f:
+                    f.write(text)
+            self.assertEqual(pad.end_screen_from_panes(d), 42)
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(pad.end_screen_from_panes(d))
+
+
 class Walk(unittest.TestCase):
     """A sentinel key in the environment: no argument the pad builds, and no file it writes, holds it."""
 
