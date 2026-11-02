@@ -4241,3 +4241,5 @@ Tools: node 22, python3.11, git, gh, flock, tar present. Conductor tools install
 14:43Z | integrator | run | trains 12 (f2f58c8a) and 13 (592d87d3) merged, gate PASS: kill waits for work, limits cover it. A2 pass 5 started on H6 binaries.
 15:47Z | integrator | W-CASE key | A2 pass 5 void: Claude key credit balance too low from the first request (71 refused requests recorded, kills recovered 1488 ms / 459 ms, recover ok). Owner top-up needed before a rerun.
 15:47Z | integrator | W-CASE key | A2 pass 5 void: Claude key credit balance too low from the first request (71 refused requests recorded, kills recovered 1488 ms / 459 ms, recover ok). Owner top-up needed before a rerun.
+15:54Z | integrator | owner | Owner: stop using Vercel; test on the Mac, Mac VMs or Tenki. MAC-TESTS.md and HERMES-UPSTREAM-DRAFT.md (not sent) on integration.
+20:57Z | integrator | owner | Owner: stop driving the Mac from the cloud; Mac brief cancelled, its check-in deleted. Cloud work wrapped up: LOCAL-SESSION-PROMPT.md for a new local session. Freeze check-in kept (no Vercel).
