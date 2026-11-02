@@ -39,7 +39,10 @@ pub fn end_screen(entry_dir: &Path) -> Result<String, NotSealed> {
     )?;
     let mut extra = Vec::new();
     extra.extend(text::not_masked(super::not_masked_count(entry_dir)));
-    if server.as_ref().is_some_and(|s| s.connector.id == "hermes-cli") {
+    if server
+        .as_ref()
+        .is_some_and(|s| s.connector.id == "hermes-cli")
+    {
         extra.push(text::HERMES_SUBAGENTS.to_owned());
     }
     Ok(with_extra(shown, &extra))
