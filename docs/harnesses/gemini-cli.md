@@ -31,6 +31,8 @@ The connector sets `GEMINI_CLI_HOME` to the isolated home, so every `~/.gemini` 
 ## 4. Session format and identity
 
 - JSONL, one file per session: `chats/session-<timestamp>-<first 8 of the id>.jsonl`. A subagent has its own file at `chats/<parent session id>/<subagent session id>.jsonl` (package). Older `.json` session files are still read by Gemini; the connector reads only `.jsonl`.
+- Record shapes, measured on 0.66.0: line 1 is the session's metadata (`sessionId`, `kind` `main` or `subagent`, times). Later lines are messages (`id`, `timestamp`, `type` `user` or `gemini`; a `gemini` message has `model` and `tokens` with `input`, `output`, `cached`, `thoughts`), plus `$set`, `$patch` and `$rewindTo` lines. Each `gemini` message is written twice under the same `id`. No field names the parent; the folder name does.
+- The verifier reads one native call per `gemini` message `id` (the last copy), with its model and token counts, and nothing else from the line. Its `tokens` equal the reply's `usageMetadata` (`input` is `promptTokenCount`, `output` is `candidatesTokenCount`, `cached` is `cachedContentTokenCount`), and its `timestamp` is just after the reply ends. The requests carry no session id, so the calls join the wire by time, the wire call with the same usage first. A utility call that no chat file holds stays wire-only.
 - `<project>` comes from a project registry, not a plain hash of the path; the docs call it `<project_hash>`. The exact rule is unknown, so the connector matches `**/chats/**/*.jsonl` under `{home}/.gemini/tmp`.
 - Retention: `general.sessionRetention` is on by default with `maxAge` `30d`; deleting a session also deletes its logs and tool outputs (docs). A week-long run is inside that.
 
