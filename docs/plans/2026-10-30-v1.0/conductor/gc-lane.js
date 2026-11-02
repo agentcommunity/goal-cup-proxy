@@ -7,29 +7,37 @@ export const meta = {
 }
 
 const A = args
+if (typeof A.session !== 'string' || !/^https:\/\/claude\.ai\/code\/session_[A-Za-z0-9]{8,}$/.test(A.session)) throw new Error('gc-lane: args.session is required (a claude.ai session URL)')
+if (!A.paths || typeof A.paths !== 'object') throw new Error('gc-lane: args.paths is required')
+for (const k of ['repo', 'tools', 'night', 'wt']) {
+  if (typeof A.paths[k] !== 'string' || !A.paths[k].startsWith('/')) throw new Error(`gc-lane: args.paths.${k} is required (an absolute path)`)
+}
 const LANE = A.lane
+const SESSION = A.session
+const COAUTHOR = A.coauthor ?? 'Claude Opus 5.5 <noreply@anthropic.com>'
+const { repo: R, tools: T, night: N, wt: W } = A.paths
 const COMMON = `
-You are one agent in the goalcup 1.0 build, lane "${LANE}". Repo: /home/user/goal-cup-proxy .
+You are one agent in the goalcup 1.0 build, lane "${LANE}". Repo: ${R} .
 Integration branch: origin/v1.0/integration. Always \`git fetch origin\` first and read docs from that branch (git show origin/v1.0/integration:<path> or a checkout).
 The plan lives in docs/plans/2026-10-30-v1.0/: OWNER-DECISIONS.md (the ledger, wins over everything), PRD-00-index.md (architecture, "File ownership", "Seams" S1..S18 with final shapes, "Build order", "Size budget"), PRD-01-record-format.md, PRD-16 (merge rule section 4), your PRD and the Amendments notes at its end. VISION.md and AGENTS.md hard rules hold (as ledger section 7 restates them).
 
 Rules for you:
-- Work in your OWN git worktree (no other agent uses it): \`git -C /home/user/goal-cup-proxy fetch -q origin && git -C /home/user/goal-cup-proxy worktree add /root/gc-wt/<role>-<short-unique-name> <start point>\` (use a detached start point or \`-b <new branch> origin/<base>\`, or \`--track -B <branch> origin/<branch>\` for an existing branch); do all edits and commits there; remove it with \`git -C /home/user/goal-cup-proxy worktree remove --force <dir>\` when you are done. Never edit /home/user/goal-cup-proxy's own checkout.
+- Work in your OWN git worktree (no other agent uses it): \`git -C ${R} fetch -q origin && git -C ${R} worktree add ${W}/<role>-<short-unique-name> <start point>\` (use a detached start point or \`-b <new branch> origin/<base>\`, or \`--track -B <branch> origin/<branch>\` for an existing branch); do all edits and commits there; remove it with \`git -C ${R} worktree remove --force <dir>\` when you are done. Never edit ${R}'s own checkout.
 - NEVER compile, run cargo, npm test, python tests or any build output on this machine. Every build/test runs in a Vercel Sandbox build box: commit your work, write a bash job script to a temp file (begin it with \`cargo fetch --locked -q 2>/dev/null || cargo fetch -q\` when Rust is involved), then run
-  node /root/gc-tools/box.mjs run --repo <your git dir> --ref <your branch or HEAD sha> --script <job file> --minutes 40 [--out <path in box>:<local path>]
+  node ${T}/box.mjs run --repo <your git dir> --ref <your branch or HEAD sha> --script <job file> --minutes 40 [--out <path in box>:<local path>]
   The box clones that committed ref into ~/w and runs the script there as a non-root user (Rust 1.99 from rust-toolchain.toml, cargo-nextest, zstd, Node 22, Python 3). Batch checks into one job; a cold Rust build takes several minutes. For long jobs use Bash run_in_background and wait for the notification. A box failing to start: retry later, never fall back to running here.
-- Every temp file (job scripts, box output) comes from mktemp (for example J=$(mktemp /root/gc-wt/job.XXXXXX)); never a fixed name in a shared folder, other agents run at the same time. box.mjs --ref takes a branch name or a commit sha. Python in boxes is 3.9 by default; use python3.11 (sudo dnf install -y -q python3.11) when a script needs 3.10+.
+- Every temp file (job scripts, box output) comes from mktemp (for example J=$(mktemp ${W}/job.XXXXXX)); never a fixed name in a shared folder, other agents run at the same time. box.mjs --ref takes a branch name or a commit sha. Python in boxes is 3.9 by default; use python3.11 (sudo dnf install -y -q python3.11) when a script needs 3.10+.
 - Never read, print, log, or put into argv/files any key, token or secret env value. No key or token enters a build box.
 - Edit only paths your PRD owns per PRD-00 "File ownership". Never edit VISION.md, OWNER-DECISIONS.md, BUILD-PROMPT.md. Never touch main, tags, production (ingest.agentcommunity.org, bucket goalcup-traces), or the website database.
 - Push only v1.0/* branches. Never force-push. Merge commits only; never rebase a pushed branch. Never commit Cargo.lock from a task branch (the integrator refreshes it).
 - Commit messages: conventional style, plain words, no model names or model ids, and end with exactly these two lines:
-  Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
-  Claude-Session: https://claude.ai/code/session_01V2hUmG4Ccnfp953KQMAUS6
+  Co-Authored-By: ${COAUTHOR}
+  Claude-Session: ${SESSION}
 - Docs and comments: no em dashes, no model names or ids.
 - The seven points; masking before any byte reaches disk; no drop without a GAP; no caps of our own (memory guards write a GAP and go on); no harness names in core code; no secret in fixtures; record raw, interpret later; one process, no IPC for bytes; no 0.7 compatibility; nothing PRD-13's no-return guard names comes back (daemon/IPC for bytes, our own caps, disk-full handling, signing, pins, termination proof, research decoders).
 - Tests (ledger B10): automated tests only for the seven points, the format, masking, the never-stop rules and your PRD's acceptance cases. No golden snapshots of internal shapes, no wording asserts.
 - A harness-specific part: read the vendor's current docs first (WebFetch) and cite the page in the commit message.
-- Log notable events (start, decision, seam, fix, stop, owner question) as one line each appended to /root/gc-night/lanes/${LANE}.log in the form
+- Log notable events (start, decision, seam, fix, stop, owner question) as one line each appended to ${N}/lanes/${LANE}.log in the form
   <HH:MM>Z | ${LANE} <role> <PRD> | <kind> | <plain text>
   using \`date -u +%H:%M\`. No secrets, no model names, no request bodies.
 - Waiting on another lane (a seam or file not yet on origin/v1.0/integration): poll with \`git fetch\` using a background Bash loop or the Monitor tool, about every 3 minutes, up to 90 minutes; build against the seam's PRD-00 final shape meanwhile if you can.
@@ -117,7 +125,7 @@ Steps: git fetch origin; create branch v1.0/${p.slug}-${t.id} from origin/${prdB
     if (findings.some(f => f.dead)) { log(`${p.id} ${plan.slice}: a reviewer died; not merged`); results.push({ prd: p.id, slice: plan.slice, merged: false, problem: 'reviewer died (usage limit?)' }); break }
     if (findings.some(f => f.severity === 'blocker' || f.severity === 'fix')) {
       log(`${p.id} ${plan.slice}: open findings after 3 rounds, not merged`)
-      await agent(`${COMMON}\nAppend one line to /root/gc-night/lanes/${LANE}.log: kind "stop", text: "${p.id} ${plan.slice} not merged: findings still open after the last review round: ${findings.filter(f => f.severity !== 'nit').map(f => f.id).join(', ')} (branch ${prdBranch})". Then return "ok".`, { label: `log:${p.id}`, phase: 'Merge', effort: 'low', model: 'haiku' })
+      await agent(`${COMMON}\nAppend one line to ${N}/lanes/${LANE}.log: kind "stop", text: "${p.id} ${plan.slice} not merged: findings still open after the last review round: ${findings.filter(f => f.severity !== 'nit').map(f => f.id).join(', ')} (branch ${prdBranch})". Then return "ok".`, { label: `log:${p.id}`, phase: 'Merge', effort: 'low', model: 'haiku' })
       results.push({ prd: p.id, slice: plan.slice, merged: false, problem: 'open findings', findings })
       break
     }
@@ -129,12 +137,12 @@ Steps: git fetch origin; create branch v1.0/${p.slug}-${t.id} from origin/${prdB
       const rq = await agent(`${COMMON}\nYou are the MERGE REQUESTER for ${p.id}, branch ${prdBranch}, slice "${plan.slice}". Reviewers have no open findings.${mr && mr.problem ? ' Previous attempt: ' + mr.problem : ''}
 1. git fetch origin; list \`git diff --name-only origin/v1.0/integration...origin/${prdBranch}\` and check every path is owned by ${p.id} (PRD-00 "File ownership" and the PRD's "Files it owns"). Exceptions: a seam change approved in the night log, and the integrator's one Cargo.toml members line. If any path is outside ownership, return queued=false naming the paths.
 2. If this branch creates a crate that must join the workspace (crates/goalcup-format, crates/goalcup, crates/goalcup-verify) and the workspace Cargo.toml on the branch does not list it in members, add exactly that members line in a commit "chore(workspace): add <crate> to members (integrator, PRD-16)" and push.
-${mr && mr.gate_log ? '3a. The last gate run FAILED; read ' + mr.gate_log + '. If the cause is in ' + p.id + "'s files, fix it on " + prdBranch + ' (own worktree, test in a box, push). If it is in another PRD\'s files, return queued=false naming the failing check and its owner.\n' : ''}3. Queue the merge: write the JSON {"branch": "${prdBranch}", "message": "<${p.id} and the slice in a few words>", "refresh_lock": <true if the diff touches any Cargo.toml>} to a new file /root/gc-night/mrq/<id>.req where <id> is \`date -u +%H%M%S\`-${p.slug} (write it to a .tmp name first, then mv). A queue run by the conductor merges one request at a time with gate fast in a build box, and holds requests until PRD-14's gate change is on integration. Do not run merge.sh yourself. Return queued=true and the id.`, { label: `mreq:${p.id}`, phase: 'Merge', schema: REQ, model: CHEAP })
+${mr && mr.gate_log ? '3a. The last gate run FAILED; read ' + mr.gate_log + '. If the cause is in ' + p.id + "'s files, fix it on " + prdBranch + ' (own worktree, test in a box, push). If it is in another PRD\'s files, return queued=false naming the failing check and its owner.\n' : ''}3. Queue the merge: write the JSON {"branch": "${prdBranch}", "message": "<${p.id} and the slice in a few words>", "refresh_lock": <true if the diff touches any Cargo.toml>} to a new file ${N}/mrq/<id>.req where <id> is \`date -u +%H%M%S\`-${p.slug} (write it to a .tmp name first, then mv). A queue run by the conductor merges one request at a time with gate fast in a build box, and holds requests until PRD-14's gate change is on integration. Do not run merge.sh yourself. Return queued=true and the id.`, { label: `mreq:${p.id}`, phase: 'Merge', schema: REQ, model: CHEAP })
       if (rq && rq.queued && !rq.id) rq.queued = false, rq.problem = 'requester returned no id'
       if (!rq || !rq.queued) { mr = { merged: false, problem: rq ? rq.problem : 'requester died' }; break }
       let w = null
       for (let k = 0; k < 40 && !(w && w.done); k++) {
-        w = await agent(`Wait for the merge queue result file /root/gc-night/mrq/${rq.id}.res (the conductor drives the queue; you only read). Run exactly this one Bash command with a 590000 ms timeout: \`timeout 560 bash -c 'until [ -f /root/gc-night/mrq/${rq.id}.res ]; do sleep 15; done'; cat /root/gc-night/mrq/${rq.id}.res 2>/dev/null || echo NOT_YET\`. If it printed NOT_YET return done=false. Otherwise it is JSON with exit (0 merged, 1 gate FAIL, 3 conflict, 4 push refused), output and gate_log: return done=true, exit, the merge commit sha and the 'gate fast: ...' line if the output has them, and gate_log. Do nothing else.`, { label: `mwait:${p.id}`, phase: 'Merge', effort: 'low', schema: WAIT, model: 'haiku' })
+        w = await agent(`Wait for the merge queue result file ${N}/mrq/${rq.id}.res (the conductor drives the queue; you only read). Run exactly this one Bash command with a 590000 ms timeout: \`timeout 560 bash -c 'until [ -f ${N}/mrq/${rq.id}.res ]; do sleep 15; done'; cat ${N}/mrq/${rq.id}.res 2>/dev/null || echo NOT_YET\`. If it printed NOT_YET return done=false. Otherwise it is JSON with exit (0 merged, 1 gate FAIL, 3 conflict, 4 push refused), output and gate_log: return done=true, exit, the merge commit sha and the 'gate fast: ...' line if the output has them, and gate_log. Do nothing else.`, { label: `mwait:${p.id}`, phase: 'Merge', effort: 'low', schema: WAIT, model: 'haiku' })
       }
       if (!w || !w.done) { mr = { merged: false, problem: 'merge queue gave no result in about 6 hours' }; break }
       mr = { merged: w.exit === 0, commit: w.commit, gate_line: w.gate_line, gate_log: w.exit === 1 ? w.gate_log : '', problem: w.exit === 0 ? '' : (w.exit === 3 ? 'merge conflict with integration' : w.exit === 4 ? 'push refused' : 'gate fast FAIL') }
@@ -145,9 +153,9 @@ ${mr && mr.gate_log ? '3a. The last gate run FAILED; read ' + mr.gate_log + '. I
     doneSlices.push(plan.slice)
     log(`${p.id} ${plan.slice}: merged ${mr.commit} ${mr.gate_line}`)
 
-    if (!A.noReplan) await agent(`${COMMON}\nYou are the REPLAN agent after the merge of ${p.id} slice "${plan.slice}" (merge ${mr.commit}). Read what was learned: the review findings and fixes below, the merged diff, gate results, and recent lane logs in /root/gc-night/lanes/. Decide what affects the remaining PRDs and PRD-16 (the build plan). If anything does, append an "## Amendments" note (or a dated entry under an existing one) at the END of each affected PRD file in docs/plans/2026-10-30-v1.0/ (never rewrite a section; never edit OWNER-DECISIONS.md, VISION.md, BUILD-PROMPT.md; a note may not change a locked ledger item: if one seems to need changing, write a line of kind "owner question" with W6 in the log instead). Also report \`wc -l\` of the merged ${p.id} code against its PRD-00 "Size budget" row in the PRD-16 note. Commit docs-only on integration under the lock:
-  flock /root/gc-night/integration.lock bash -c 'cd /home/user/goal-cup-proxy && git fetch -q origin && git worktree add -q --detach /root/gc-night/replan-wt-$$ origin/v1.0/integration' ; edit files there; commit; push HEAD:v1.0/integration (still inside the lock; retry fetch+rebase-free re-apply if the push is refused); remove the worktree.
-Append an "amendment" line to /root/gc-night/lanes/${LANE}.log. Findings and answers:\n${JSON.stringify(findings).slice(0, 6000)}\nReturn one short paragraph of what you changed.`, { label: `replan:${p.id}`, phase: 'Replan', model: CHEAP })
+    if (!A.noReplan) await agent(`${COMMON}\nYou are the REPLAN agent after the merge of ${p.id} slice "${plan.slice}" (merge ${mr.commit}). Read what was learned: the review findings and fixes below, the merged diff, gate results, and recent lane logs in ${N}/lanes/. Decide what affects the remaining PRDs and PRD-16 (the build plan). If anything does, append an "## Amendments" note (or a dated entry under an existing one) at the END of each affected PRD file in docs/plans/2026-10-30-v1.0/ (never rewrite a section; never edit OWNER-DECISIONS.md, VISION.md, BUILD-PROMPT.md; a note may not change a locked ledger item: if one seems to need changing, write a line of kind "owner question" with W6 in the log instead). Also report \`wc -l\` of the merged ${p.id} code against its PRD-00 "Size budget" row in the PRD-16 note. Commit docs-only on integration under the lock:
+  flock ${N}/integration.lock bash -c 'cd ${R} && git fetch -q origin && git worktree add -q --detach ${N}/replan-wt-$$ origin/v1.0/integration' ; edit files there; commit; push HEAD:v1.0/integration (still inside the lock; retry fetch+rebase-free re-apply if the push is refused); remove the worktree.
+Append an "amendment" line to ${N}/lanes/${LANE}.log. Findings and answers:\n${JSON.stringify(findings).slice(0, 6000)}\nReturn one short paragraph of what you changed.`, { label: `replan:${p.id}`, phase: 'Replan', model: CHEAP })
   }
 }
 return results
