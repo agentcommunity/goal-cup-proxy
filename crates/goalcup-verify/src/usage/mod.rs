@@ -536,18 +536,15 @@ impl Calls {
             (t.native_calls, t.native_only) = per.get(t.id.as_str()).copied().unwrap_or_default();
         }
         let known: HashSet<String> = threads.iter().map(|t| t.id.clone()).collect();
-        // A thread only the wire names takes the parent of its first row that names one; a parent
-        // the wire names that is no thread is pushed as a wire-only thread too.
+        // A thread only the wire names takes the parent of its first row that names one. A parent
+        // the wire names with no rows of its own is no thread here (its calls may sit in another
+        // entry): the children map still names it.
         let mut wire_only: BTreeMap<&String, Option<&String>> = BTreeMap::new();
         for r in &rows {
             if let Some(id) = r.thread.as_ref() {
                 let p = wire_only.entry(id).or_default();
                 *p = p.or(r.parent.as_ref());
             }
-        }
-        let named: Vec<&String> = wire_only.values().flatten().copied().collect();
-        for p in named {
-            wire_only.entry(p).or_default();
         }
         for (id, parent) in wire_only.into_iter().filter(|(id, _)| !known.contains(*id)) {
             threads.push(Thread {
