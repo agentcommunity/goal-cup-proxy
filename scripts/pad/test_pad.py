@@ -1264,6 +1264,15 @@ class WorkEvidence(unittest.TestCase):
         self.assertEqual(row["checks"]["C1"], "INCONCLUSIVE")
         self.assertTrue(any("tool turn none" in w for w in row["why"]), row["why"])
 
+    def test_wire_threads_with_parents_are_a_tool_turn_without_a_native_reader(self):  # S1: opencode, 479 requests, linked subagents, no native stream
+        use = {"tokens": {"merged": {"input": 9, "output": 9}}, "coverage": {"unattributed": 0},
+               "threads": [{"parent": None, "models": {"m": 400}, "wire_calls": 400}, {"parent": "t0", "models": {"m": 79}, "wire_calls": 79}]}
+        row = evaluate({"meta.json": {"connector": "opencode-cli", "case": "direct", "known_box": True, "entry": "e1", "commits_since_start": 0},
+                        "verify/usage/e1.json": use,
+                        "verify/check-local.json": {"exit": 0, "entries": [{"entry": "e1", "counts": {"model_requests": 479}, "checks": []}]},
+                        "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0}})
+        self.assertFalse(any("did no work" in w for w in row["why"]), row["why"])
+
     def test_few_requests_without_commits_is_no_work(self):
         row = self.row(0, 4)
         self.assertEqual(row["checks"]["C1"], "INCONCLUSIVE")
