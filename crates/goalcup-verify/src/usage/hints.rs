@@ -6,8 +6,9 @@ use serde_json::Value;
 /// A native session format this build reads: Codex `sessions:**/rollout-*.jsonl`, Claude Code
 /// `transcripts:**/*.jsonl`, the `meta:**/*.meta.json` snapshots, and Hermes's `state:state.db*`
 /// database copies (snapshot streams), Gemini CLI's `chats:**/*.jsonl` session files (thread
-/// links only), and Hermes's delegation files: `task-<n>.log` plain-text logs (read by path only,
-/// never parsed) and the `manifest.json` snapshots (delegation id and task indexes).
+/// links only), Hermes's delegation files: `task-<n>.log` plain-text logs (read by path only,
+/// never parsed) and the `manifest.json` snapshots (delegation id and task indexes), and Kimi
+/// Code's `wire:**/agents/<name>/wire.jsonl` agent files (one per agent).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reader {
     CodexRollout,
@@ -17,6 +18,7 @@ pub(super) enum Reader {
     GeminiChat,
     HermesTask,
     HermesManifest,
+    KimiWire,
 }
 
 /// The reader of a native or snapshot stream by its connector and `meta.path` (`<row>:<rel>`).
@@ -35,6 +37,7 @@ pub(super) fn reader(connector: Option<&str>, path: &str) -> Option<Reader> {
             Reader::HermesManifest
         }
         ("gemini-cli", "chats", true) => Reader::GeminiChat,
+        ("kimi-code-cli", "wire", true) if file == "wire.jsonl" => Reader::KimiWire,
         _ => return None,
     })
 }
@@ -66,13 +69,14 @@ const WIRE_IDS: &[(&str, &[&str], &[&str])] = &[
 
 /// For a connector this build reads threads for: (its wire requests carry their thread, as
 /// [`WIRE_IDS`] says; native calls join the wire by the reply's request id, as Claude Code's do).
-/// Hermes has neither: its calls join the entry's wire calls by time alone. Gemini has no native
-/// call rows (the chat file's per-call shape is unmeasured), so its wire calls stay `WireOnly`;
-/// the reader is here for the threads and parent links of its chat files.
+/// Hermes has neither: its calls join the entry's wire calls by time alone, as Kimi Code's do
+/// (its `prompt_cache_key` names only the session, which main and subagents share). Gemini has no
+/// native call rows (the chat file's per-call shape is unmeasured), so its wire calls stay
+/// `WireOnly`; the reader is here for the threads and parent links of its chat files.
 pub(super) fn join_of(connector: Option<&str>) -> Option<(bool, bool)> {
     match connector? {
         "claude-code-cli" => Some((false, true)),
-        "hermes-cli" | "gemini-cli" => Some((false, false)),
+        "hermes-cli" | "gemini-cli" | "kimi-code-cli" => Some((false, false)),
         c => WIRE_IDS.iter().any(|w| w.0 == c).then_some((true, false)),
     }
 }
@@ -80,7 +84,10 @@ pub(super) fn join_of(connector: Option<&str>) -> Option<(bool, bool)> {
 /// True when this build has a native reader for the connector (an arm in [`reader`]); a
 /// connector with only [`WIRE_IDS`] keeps [`super::Reason::NoReader`].
 pub(super) fn reads_native(connector: Option<&str>) -> bool {
-    matches!(connector, Some("codex-cli" | "claude-code-cli" | "hermes-cli" | "gemini-cli"))
+    matches!(
+        connector,
+        Some("codex-cli" | "claude-code-cli" | "hermes-cli" | "gemini-cli" | "kimi-code-cli")
+    )
 }
 
 /// The thread a wire request names and its parent, by the connector's [`WIRE_IDS`]: from the

@@ -1,11 +1,12 @@
 //! The native leg (PRD-09 sections 4 and 5): Codex rollouts and Claude Code transcripts read back
-//! out of the record's `native` streams, Claude Code agent labels out of its `snapshot` streams.
+//! out of the record's `native` streams, Claude Code agent labels out of its `snapshot` streams,
+//! and Kimi Code's per-agent wire files.
 //! Bytes are deduped by (path, gen, offset) across boots (PRD-01 section 15 point 5); only lines
 //! that end in a newline are parsed, and a hole drops the partial line. Rows carry their session
 //! file `path` (U1 allows it, but it can name the participant's folders, so section 7 keeps it out
 //! of the output files); otherwise only ids, labels, model names and numbers leave this file.
 //! Vendor pages: Codex `protocol.rs` at rust-v0.165.0; Claude Code "Explore the .claude
-//! directory" and "Subagents".
+//! directory" and "Subagents"; Kimi Code `packages/agent-core-v2/docs/wire-manifest.d.ts`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -48,6 +49,9 @@ pub(super) struct Native {
     streams: HashMap<(u64, u64), Src>,
     files: BTreeMap<(String, u64), File>,
     codex: Vec<CallRow>,
+    /// Kimi Code calls, and the parent thread each `subagent.spawned` gives a child thread.
+    kimi: Vec<CallRow>,
+    spawns: BTreeMap<String, String>,
     /// Claude Code calls by `message.id`.
     msgs: BTreeMap<String, Msg>,
     /// Claude Code agent id to its session and the last `agentType` a meta snapshot gave.
@@ -82,6 +86,9 @@ struct Meta {
 struct File {
     codex: bool,
     gemini: bool,
+    kimi: bool,
+    /// Kimi Code: the time of the last `llm.request`, for the `usage.record` after it.
+    asked: Option<u64>,
     /// Gemini: the next line out is line 1 of the file (it starts at offset 0 and no hole came
     /// before it), and the session id that line gave.
     head: bool,
@@ -125,12 +132,14 @@ impl Native {
                         Some(
                             r @ (Reader::CodexRollout
                             | Reader::ClaudeTranscript
-                            | Reader::GeminiChat),
+                            | Reader::GeminiChat
+                            | Reader::KimiWire),
                         ),
                     ) => {
                         let f = File {
                             codex: r == Reader::CodexRollout,
                             gemini: r == Reader::GeminiChat,
+                            kimi: r == Reader::KimiWire,
                             head: r == Reader::GeminiChat && m["from"].as_u64().unwrap_or(0) == 0,
                             next: m["from"].as_u64().unwrap_or(0),
                             ..File::default()
@@ -169,7 +178,10 @@ impl Native {
                             (r.outcome, r.whole) = (Outcome::Ok, true);
                             r
                         };
-                        if f.codex {
+                        if f.kimi {
+                            let (asked, spawns) = (&mut f.asked, &mut self.spawns);
+                            self.kimi.extend(kimi(asked, spawns, &file.0, &v, row));
+                        } else if f.codex {
                             self.codex.extend(f.rollout(&v, at, row));
                         } else {
                             claude(&mut self.msgs, &v, at, row);
@@ -253,6 +265,16 @@ impl Native {
                     (m.id.or_else(|| file_uuid(&path)), m.parent, depth, m.label)
                 }
                 None if f.codex => (file_uuid(&path), None, None, None),
+                None if f.kimi => {
+                    let (id, parent, depth) = kimi_thread(&path);
+                    // A spawn record's parent agent wins; past `main`, the depth is unknown.
+                    let spawn = id.as_ref().and_then(|i| self.spawns.get(i)).cloned();
+                    let depth = match &spawn {
+                        Some(p) if Some(p) != parent.as_ref() => p.ends_with("/main").then_some(1),
+                        _ => depth,
+                    };
+                    (id, spawn.or(parent), depth, None)
+                }
                 None if f.gemini => {
                     let (id, parent) = gem[&(path.clone(), rev)].clone();
                     // The folder is a main's full session id, or the id a main file's name ends in.
@@ -290,6 +312,10 @@ impl Native {
             // Keyed by path: after a source_changed generation, older rows take the newest one's.
             owner.insert(path, (id, parent));
         }
+        // A Kimi Code child a spawn names, with or without a file of its own.
+        for (c, p) in &self.spawns {
+            kids.entry(p.clone()).or_default().insert(c.clone());
+        }
         for (id, (session, label)) in self.agents {
             let t = threads.entry(id.clone()).or_insert_with(|| named(&id));
             (t.label, t.depth) = (label.or(t.label.take()), t.depth.or(Some(1)));
@@ -326,7 +352,8 @@ impl Native {
             let (tokens, extra) = split(c, CLAUDE);
             real.then_some((CallRow { tokens, extra, ..r }, rid))
         });
-        let all = self.codex.into_iter().map(|r| (r, None)).chain(claude);
+        let own = self.codex.into_iter().chain(self.kimi);
+        let all = own.map(|r| (r, None)).chain(claude);
         let rows = all.map(|(r, rid)| {
             let (thread, parent) = r.path.as_ref().and_then(|p| owner.get(p)).cloned().unzip();
             let (parent, wall_end) = (parent.flatten(), r.wall_start);
@@ -489,6 +516,48 @@ fn claude(
     Some(())
 }
 
+/// One Kimi Code wire line (flat: `type`, `agentId`, `time` in epoch ms) of the agent file at
+/// `path`. An `llm.request` keeps its time for the `usage.record` after it, which is one call; a
+/// line another agent's id names is not this file's. A `subagent.spawned` gives the child's
+/// parent agent (`parentAgentId`, else this file's agent). Ids, model, times and numbers only.
+fn kimi(
+    asked: &mut Option<u64>,
+    spawns: &mut BTreeMap<String, String>,
+    path: &str,
+    v: &Value,
+    row: impl FnOnce() -> CallRow,
+) -> Option<CallRow> {
+    let (sid, name) = kimi_agent(path)?;
+    let time = v["time"].as_u64().and_then(|t| t.checked_mul(1_000_000));
+    let mine = id_at(v, "/agentId").is_none_or(|a| a == name);
+    match v["type"].as_str()? {
+        "llm.request" if mine => *asked = time,
+        "usage.record" if mine => {
+            let n = |k: &str| v["usage"][k].as_u64();
+            let tokens = Tokens {
+                input: n("inputOther"),
+                cached: n("inputCacheRead"),
+                cache_write: n("inputCacheCreation"),
+                output: n("output"),
+                reasoning: None,
+            };
+            return Some(CallRow {
+                model: model_name(v.get("model")),
+                tokens,
+                wall_start: asked.take().or(time),
+                ..row()
+            });
+        }
+        "subagent.spawned" => {
+            let at = |a: &str| hints::id(&format!("{sid}/{a}"));
+            let by = id_at(v, "/parentAgentId").unwrap_or_else(|| name.to_string());
+            spawns.insert(at(&id_at(v, "/subagentId")?)?, at(&by)?);
+        }
+        _ => {}
+    }
+    None
+}
+
 /// Usage member names per the token table: input, cached, cache write, output, reasoning.
 const CODEX: [&str; 5] = [
     "input_tokens",
@@ -556,6 +625,32 @@ fn gemini_thread(path: &str, sid: Option<&str>) -> (Option<String>, Option<Strin
     match parts.get(i + 1).filter(|_| i + 2 < parts.len()) {
         Some(dir) => (stem(file), hints::id(dir)),
         None => (sid.and_then(hints::id).or_else(|| stem(file)), None),
+    }
+}
+
+/// The (session, agent name) of a Kimi Code wire path
+/// `wire:<workspace>/<session>/agents/<name>/wire.jsonl` (Kimi Code "Data locations").
+fn kimi_agent(path: &str) -> Option<(&str, &str)> {
+    let rel = path.split_once(':').map_or(path, |p| p.1);
+    let parts: Vec<&str> = rel.split('/').collect();
+    match parts[..] {
+        [.., sid, "agents", name, "wire.jsonl"] => Some((sid, name)),
+        _ => None,
+    }
+}
+
+/// The Kimi Code thread of a wire path: (`<session>/<name>`, parent, depth). `main` is the root
+/// (depth 0); an `agent-<n>` is a subagent of the session's `main` (depth 1). A
+/// `subagent.spawned` record can name another parent agent (custom agents may nest).
+fn kimi_thread(path: &str) -> (Option<String>, Option<String>, Option<u32>) {
+    let Some((sid, name)) = kimi_agent(path) else {
+        return (None, None, None);
+    };
+    let id = |n: &str| hints::id(&format!("{sid}/{n}"));
+    match name {
+        "main" => (id(name), None, Some(0)),
+        n if n.starts_with("agent-") => (id(n), id("main"), Some(1)),
+        n => (id(n), None, None),
     }
 }
 
