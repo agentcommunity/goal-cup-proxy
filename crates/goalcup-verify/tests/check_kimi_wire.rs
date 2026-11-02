@@ -172,7 +172,8 @@ fn native_calls_join_the_wire_by_time() {
     assert!(wire.iter().all(|r| r.join == Some(Join::Matched)));
     let mut threads: Vec<_> = wire.iter().filter_map(|r| r.thread.as_deref()).collect();
     threads.sort_unstable();
-    assert_eq!(threads, [MAIN, KID]);
+    // Sorted: `<session>/agent-0` comes before `<session>/main`.
+    assert_eq!(threads, [KID, MAIN]);
     let native = rows(&t, Leg::Native);
     assert!(native.iter().all(|r| r.join == Some(Join::Matched)));
 }

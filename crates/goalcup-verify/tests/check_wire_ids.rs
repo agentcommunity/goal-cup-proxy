@@ -139,7 +139,7 @@ fn codex_websocket_client_metadata_names_the_parent() {
             "client_metadata": meta})
         .to_string();
         e.data(up, 0, 0x10 | FLAG_FIN, msg.as_bytes());
-        let done = br#"{"type":"response.completed"}"#;
+        let done = br#"{"type":"response.completed","response":{}}"#;
         e.data(down, 0, 0x10 | FLAG_FIN, done);
         e.end(
             up,
