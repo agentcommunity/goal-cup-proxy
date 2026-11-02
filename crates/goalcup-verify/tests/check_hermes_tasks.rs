@@ -7,6 +7,8 @@ mod common;
 
 use common::{Entry, call_table, check, edit_event, gemini_wire, mutate, result};
 use goalcup_format::{EndReason, StreamKind};
+use goalcup_verify::legs::judge;
+use goalcup_verify::usage::Reason;
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -120,4 +122,26 @@ fn five_tasks_reopened_across_boots_stay_five() {
     assert_eq!(t.children.as_ref().unwrap().values().flatten().count(), 5);
     let (_, v) = check(&d, &[]);
     assert_eq!(result(&v, "subagents_present"), "pass");
+}
+
+/// A dodger row: the model host is pinned, so its one connection is a tunnel and no wire call is
+/// read; the task logs give threads but no calls. The harness log is not readable per call.
+#[test]
+fn task_logs_with_no_calls_and_no_wire_call_are_not_readable() {
+    let mut e = Entry::new("ht-e");
+    e.event(json!({"ev": "launch", "pid": 4242, "program": "fake-harness"}));
+    let tunnel = json!({"host": "pinned.example.test", "port": 443, "mode": "tunnel",
+        "listed": "shared", "kind": "provider", "reason": "pinned", "alpn": null, "tls": null,
+        "fingerprint": "0123456789abcdef"});
+    e.open(StreamKind::Conn, 0, 0, tunnel);
+    for n in 0..2 {
+        e.native(&task_path(n), 0, 0);
+    }
+    e.count();
+    let d = mutate(&e.seal(), None, |r| edit_event(r, "start", 0, hermes));
+    let t = call_table(&d);
+    assert!(t.threads.iter().any(|x| x.id == task_ids(2)[1]), "task threads");
+    assert_eq!(t.not_on_wire.len(), 1);
+    assert_eq!(t.reason, Some(Reason::NoNative));
+    assert_eq!(judge(&t, &[]).1.harness_log, "none");
 }
