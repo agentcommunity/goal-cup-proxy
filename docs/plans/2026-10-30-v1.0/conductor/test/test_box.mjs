@@ -21,12 +21,10 @@ for (const k of ['VERCEL_TOKEN', 'VERCEL_TEAM_ID', 'VERCEL_PROJECT_ID']) env[k] 
 let r = spawnSync('node', [box, '--help'], { env });
 assert.equal(r.status, 0);
 assert.match(r.stdout + r.stderr, /run --repo DIR --ref REF --script FILE/);
-ok('help_without_sdk');
-
 // no command exits 2
 r = spawnSync('node', [box], { env });
 assert.equal(r.status, 2);
-ok('no_command_exit_2');
+ok('help_without_sdk');
 
 const { sessionMinutes, ledgerLine } = await import(path.join(work, 'spend.mjs'));
 assert.deepEqual(sessionMinutes([{ vcpus: 2, startedAt: 0, createdAt: 0, stoppedAt: 600000 }, { vcpus: 4, createdAt: 0 }], 300000), { minutes: 15, vcpuMinutes: 40 });
