@@ -16,10 +16,16 @@ def iso(minute, seconds=0):
     return (T0 + datetime.timedelta(minutes=minute, seconds=seconds)).isoformat()
 
 
-def gap(minute, ms, cause="recorder_down"):
+def gap(minute, ms, cause="killed"):
     start = T0 + datetime.timedelta(minutes=minute)
     return {"cause": cause, "start": start.isoformat(),
             "end": (start + datetime.timedelta(milliseconds=ms)).isoformat(), "ms": ms}
+
+
+def gap_before(minute, ms, after_ms, cause="killed"):
+    """A gap of ms that ends after_ms after minute (the kill), so it starts ms - after_ms before it."""
+    end = T0 + datetime.timedelta(minutes=minute, milliseconds=after_ms)
+    return {"cause": cause, "start": (end - datetime.timedelta(milliseconds=ms)).isoformat(), "end": end.isoformat(), "ms": ms}
 
 
 def stub(gaps):
@@ -59,6 +65,10 @@ def fixture(tmp, **over):
     threads.append({"parent": "p", "first": iso(60), "last": iso(65)})
     threads.append({"parent": None, "first": iso(0), "last": iso(60)})
     put(os.path.join(d, "verify", "usage", "e1.json"), {"threads": threads})
+    os.makedirs(os.path.join(d, "watch"), exist_ok=True)
+    with open(os.path.join(d, "watch", "faults.jsonl"), "w") as f:
+        for m, quiet in ((10, False), (30, over.get("quiet30", False)), (45, False)):  # the last is the recover's own kill
+            f.write(json.dumps(dict({"kind": "kill-recorder", "pid": 9, "killed_at": iso(m)}, **({"quiet": True} if quiet else {}))) + "\n")
     return d
 
 
@@ -78,7 +88,7 @@ class T(unittest.TestCase):
         self.t = self._t.name
 
     def test_per_hour(self):
-        s = longsum.summary(fixture(self.t), stub([gap(10, 900), gap(30, 1200), gap(46, 40000)]))
+        s = longsum.summary(fixture(self.t), stub([gap(10, 900), gap(30, 1200), gap(46, 40000, cause="watchdog_lost")]))
         self.assertEqual((s["hours"], s["usd_per_hour"], s["tokens_per_hour"]["input"], s["raw_mb_per_hour"],
                           s["compressed_mb_per_hour"]), (1.0, 6.0, 6000000.0, 2000.0, 50.0))
 
@@ -86,17 +96,31 @@ class T(unittest.TestCase):
         self.assertEqual(longsum.summary(fixture(self.t), stub([]))["max_parallel"], 10)
 
     def test_x4_pass(self):
-        s = longsum.summary(fixture(self.t), stub([gap(10, 900), gap(30, 1200), gap(46, 40000)]))
+        s = longsum.summary(fixture(self.t), stub([gap(10, 900), gap(30, 1200), gap(46, 40000, cause="watchdog_lost")]))
         self.assertEqual(s["x4"], "PASS")
 
     def test_x4_allows_5s_under_load(self):
         d = fixture(self.t, why=["faults FAIL: a recorder_down gap of 3100 ms, not under 2 s"])
-        self.assertEqual(longsum.summary(d, stub([gap(10, 3100), gap(30, 900), gap(46, 40000)]))["x4"], "PASS")
+        self.assertEqual(longsum.summary(d, stub([gap(10, 3100), gap(30, 900), gap(46, 40000, cause="watchdog_lost")]))["x4"], "PASS")
 
     def test_x4_fails_over_5s(self):
         d = fixture(self.t)
-        self.assertTrue(longsum.summary(d, stub([gap(10, 5200), gap(30, 900), gap(46, 40000)]))["x4"].startswith("FAIL"))
-        self.assertTrue(longsum.summary(d, stub([gap(10, 900), gap(46, 40000)]))["x4"].startswith("FAIL"))
+        self.assertTrue(longsum.summary(d, stub([gap(10, 5200), gap(30, 900), gap(46, 40000, cause="watchdog_lost")]))["x4"].startswith("FAIL"))
+        self.assertTrue(longsum.summary(d, stub([gap(10, 900), gap(46, 40000, cause="watchdog_lost")]))["x4"].startswith("FAIL"))
+
+    def test_x4_a2_shapes_pass(self):  # a kill gap starts at the last LINK, so a quiet kill's gap is long; only its end is timed
+        d = fixture(self.t, quiet30=True)
+        gaps = [gap_before(10, 969, 400), gap_before(30, 22872, 500), gap(46, 40000, cause="watchdog_lost")]
+        self.assertEqual(longsum.summary(d, stub(gaps))["x4"], "PASS")
+
+    def test_x4_late_end_fails_but_not_for_a_quiet_kill(self):
+        gaps = [gap_before(10, 969, 400), gap_before(30, 900, 9000), gap(46, 40000, cause="watchdog_lost")]
+        self.assertTrue(longsum.summary(fixture(self.t), stub(gaps))["x4"].startswith("FAIL"))
+        self.assertEqual(longsum.summary(fixture(self.t, quiet30=True), stub(gaps))["x4"], "PASS")
+
+    def test_x4_counts_kills_and_recovers_apart(self):
+        gaps = [gap(10, 900), gap(30, 900), gap(46, 40000)]  # the recover's gap labelled killed
+        self.assertTrue(longsum.summary(fixture(self.t), stub(gaps))["x4"].startswith("FAIL"))
 
     def test_x3_memory_guard_fails(self):
         s = longsum.summary(fixture(self.t), stub([gap(10, 900, cause="memory_guard")]))

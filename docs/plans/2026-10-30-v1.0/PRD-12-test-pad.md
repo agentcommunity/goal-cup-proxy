@@ -181,7 +181,7 @@ integration commit, PRD-00 "Where the build runs"; with `where = "here"`, the `g
 `goalcup start --hosts`, S16; PRD-11's acceptance 3 passes one with a host removed; the dodger case makes
 its own copy, section 2; both work in test and practice runs only, PRD-00 owner question 4), `keep`
 (default true; false leaves `GOALCUP_KEEP_PARTS` unset, only for K8 and PRD-06's U5, and such a row can
-never give a tier, C4) and `keep_going` (idle minutes before "keep going", default 1). `cap_usd`, `box_extra_minutes` and `box_vcpus` replace the `pad.toml` value for this row only. An unknown key is a
+never give a tier, C4) and `keep_going` (idle minutes before "keep going", default 1) and `keep_going_count` (how many times in all, default 1; the watch types it again at each later idle period). `cap_usd`, `box_extra_minutes` and `box_vcpus` replace the `pad.toml` value for this row only. An unknown key is a
 usage error, so a typo never runs the wrong test quietly. There is no server address setting: the rig
 knows only the staging Worker and loopback, so production is always refused (ledger B4; the allowlist
 of `scripts/matrix.sh:253-258`, `:559-600`, without its production flag).
@@ -258,7 +258,7 @@ the rig goes on to seal, fetch, check and clean up, so every run ends with a tab
 | `look` | `check --live --json` and `usage --json` on the open entry, under `nice -n 19`; prints calls, threads, gaps and known-value hits so far | | 1 min. A live `fail` or a known-value hit is written as "first seen at T" and the run goes on (section 4) |
 | `kill-recorder@m` and the other faults | Section 3.1 | An open response stream, up to 60 s | As section 3.1 |
 | `wait-recovery` | Reads `status.json` and the open entry | A new recorder pid, `mode: recording`, one closed `recorder_down` gap, and written model requests up by at least 1 | 3 min, then FAIL "did not stand back up"; the run still seals, fetches and checks |
-| `keep-going` | Types "keep going" once, as a participant may (`AGENTS.md:83-84`); goalcup itself never does it (PRD-16 A1) | Pane and wire both idle `keep_going` minutes | Until the seal; "skip: agent still working" if never idle |
+| `keep-going` | Types "keep going" whenever pane and wire have been idle `keep_going` minutes, up to `keep_going_count` times, as a participant may (`AGENTS.md:83-84`); goalcup itself never does it (PRD-16 A1) | Pane and wire both idle `keep_going` minutes | Until the seal; "skip: agent still working" if never idle |
 | `seal` | `goalcup seal --yes` | `minutes` after the paste, the spend cap (section 7), or the harness's exit | |
 | `wait-upload` | Reads `upload.json` | `final: sealed` | 10 min, or 5 min after the last fault ends, whichever is later |
 | `fetch` | Conductor: `fetch-run`, copy in (section 3, 0:27) | | 5 min, then C4 FAIL "server copy not fetched" |

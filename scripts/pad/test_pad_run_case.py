@@ -113,6 +113,79 @@ class Recovery(unittest.TestCase):
         self.assertEqual(cm.exception.args[0], "INCONCLUSIVE")  # not FAIL: the first three held
 
 
+    def test_idle_harness_after_a_kill_is_inconclusive_not_fail(self):  # A2: recorder back in 44 ms, no new request follows
+        r = bare()
+        r.st["kill"] = dict(pid=1, at=padrun.time.time() - 0.1, requests=4, off_spans=0, off_ms=0, quiet=False)
+        r.status = lambda: {}
+        r.work = lambda s=None: 4
+        r.left = lambda: 5
+        dig = {"s4_pid": 2, "s4_mode": "recording", "s4_spans": 1, "s4_since": None, "s4_down_ms": 10}
+        with mock.patch.object(padrun.pc, "dig", lambda d, n: dig.get(n)), mock.patch.object(padrun, "wait", lambda ok, l, e: ok()):
+            with self.assertRaises(padrun.Step) as cm:
+                r.wait_recovery(None)
+        self.assertEqual(cm.exception.args[0], "INCONCLUSIVE")
+        self.assertRegex(cm.exception.args[1], r"back in 0\.\d s")
+
+
+class KeepGoing(unittest.TestCase):
+    def run_nudges(self, count, times):
+        r = bare()
+        r.s = {"keep_going": 2, "keep_going_count": count}
+        r.tmux, r.run = "t", "/nonexistent"
+        r.pane = lambda *a, **k: "same screen"
+        r.status = lambda: {}
+        told = []
+        r.fault = lambda kind, **kw: told.append(kind)
+        keys = []
+        clock = [0.0]
+        sent = []
+        for t in times:
+            clock[0] = float(t)
+            with mock.patch.object(padrun.time, "time", lambda: clock[0]), mock.patch.object(padrun.time, "sleep", lambda s: None), \
+                    mock.patch.object(padrun, "sh", lambda cmd, **k: keys.append(cmd[-1])), \
+                    mock.patch.object(padrun.pc, "load", lambda *a: [{"kind": k} for k in told]):
+                sent.append(bool(r.nudge()))
+        return sent, keys
+
+    def test_types_again_after_a_second_idle_period_up_to_the_count(self):
+        sent, keys = self.run_nudges(2, [0, 60, 130, 140, 200, 262, 400, 600])
+        self.assertEqual(sent, [False, False, True, False, False, True, False, False])
+        self.assertEqual([k for k in keys if k == "keep going"], ["keep going", "keep going"])  # never more than the count
+
+    def test_the_run_files_count_is_loaded(self):
+        s = pad.load_settings(dict(harness="codex-cli", key="openai", mode="full", keep_going_count=12), {"keys": {"openai": "OPENAI_API_KEY"}})
+        self.assertEqual((s["keep_going_count"], s["keep_going"]), (12, 1))
+        with self.assertRaises(pad.Usage):
+            pad.load_settings(dict(harness="codex-cli", key="openai", mode="full", keep_going_count=0), {"keys": {"openai": "OPENAI_API_KEY"}})
+
+
+class EndScreen(unittest.TestCase):
+    def test_watchdog_row_reads_the_end_screen_from_goalcup_status(self):  # A2: nothing prints it into the pane once the watchdog is dead
+        r = bare()
+        r.s = {"minutes": 1}
+        r.project, r.env, r.run = "/nonexistent", {}, "/nonexistent"
+        r.sealed = lambda: True
+        r.dead = lambda: True
+        r.has = lambda *a: True
+        r.exit_harness = lambda: None
+        r.known = lambda: []
+        r.pane = lambda *a, **k: ""
+        r.left = lambda: 100
+        r.status = lambda: {}
+        r.harness_files = lambda: None
+        r.wipe_secrets = lambda **k: None
+        calls = []
+
+        def sh(cmd, **k):
+            calls.append(cmd)
+            return mock.Mock(stdout="217 requests to model hosts written: 3 gaps", returncode=0)
+        with mock.patch.object(padrun, "sh", sh), mock.patch.object(padrun, "tool", lambda n: n), \
+                mock.patch.object(padrun.pc, "load", lambda *a: []), mock.patch.object(padrun, "wait", lambda ok, l, e: ok()):
+            r.seal(None)
+        self.assertEqual(r.st["end_screen_requests"], 217)
+        self.assertIn(["goalcup", "status"], calls)
+
+
 class EarlyPane(unittest.TestCase):
     def test_pane_is_copied_before_recording_seen(self):
         d = tempfile.TemporaryDirectory()

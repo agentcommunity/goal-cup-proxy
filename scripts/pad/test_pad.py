@@ -394,6 +394,10 @@ class CrashRows(unittest.TestCase):
             if quiet and not fails:
                 self.assertEqual(res, "INCONCLUSIVE", (start, end))
 
+    def test_short_gap_ending_just_after_the_kill_pairs(self):  # A2: killed, 969 ms
+        gap = {"cause": "killed", "start": "2026-10-30T10:01:59.431Z", "end": "2026-10-30T10:02:00.4Z", "ms": 969}
+        self.assertEqual(self.row("kill-recorder", gap)["faults"], "PASS")
+
     LOST = {"kind": "status", "exit": 0, "at": "2026-10-30T10:03:40+00:00",
             "said": "Problem. Recording is off since 10:02: goalcup is not running. To go on, run: goalcup continue r1"}
 
@@ -406,6 +410,11 @@ class CrashRows(unittest.TestCase):
     def test_no_work_is_inconclusive(self):  # R5-3
         got = self.row("kill-watchdog-recover", self.GAP, more=[self.LOST], commits=0)
         self.assertEqual(got["faults"], "INCONCLUSIVE")
+
+    def test_idle_harness_after_a_busy_kill_is_not_a_fail(self):  # wait-recovery INCONCLUSIVE and no new request: not FAIL
+        stalled = self.UP[:1] * 2
+        self.assertEqual(self.row("kill-recorder", self.GAP, stalled, recovery=(("INCONCLUSIVE", "10:03"),))["faults"], "INCONCLUSIVE")
+        self.assertEqual(self.row("kill-recorder", self.GAP, stalled)["faults"], "FAIL")
 
     def test_dodger_progress_is_tunnel_connections(self):
         def tun(n):
@@ -472,6 +481,16 @@ class FaultRows(unittest.TestCase):
         self.assertEqual(self.row(both, faults, [plain, own], counts={"recorder_down": 2}), "PASS")
         self.assertEqual(self.row(both, faults, [dict(plain, cause="null_mode"), own], counts={"recorder_down": 2}), "FAIL")
         self.assertEqual(self.row(both, faults, [own], counts={"recorder_down": 1}), "FAIL")  # the plain kill left no gap
+
+    def test_gap_pairs_to_a_kill_by_its_end(self):  # A2: the gap starts at the dead boot's last LINK, up to a minute before the kill
+        plain = {"cause": "killed", "start": "2026-10-30T10:00:08Z", "end": "2026-10-30T10:00:30.3Z", "ms": 22300}
+        own = {"cause": "watchdog_lost", "start": "2026-10-30T10:02:00Z", "end": "2026-10-30T10:03:00Z"}
+        faults = [{"kind": k, "exit": 0, "said": w, "at": at} for k, w, at in (
+            ("recover", check.RECOVER[0], "02:30"), ("recover", check.RECOVER[1], "04:00"), ("status", check.STATUS_RECOVER, "03:30"))]
+        faults += [{"kind": "kill-recorder", "pid": 9, "quiet": True, "at": "00:30"}, {"kind": "kill-watchdog", "pid": 9, "at": "02:00"},
+                   {"kind": "kill-recorder", "pid": 9, "at": "02:00"}, {"kind": "wait-recovery", "result": "ok", "at": "01:00"}]
+        both = ["kill-recorder@0", "kill-watchdog-recover@3"]
+        self.assertEqual(self.row(both, faults, [plain, own], counts={"recorder_down": 2}), "INCONCLUSIVE")  # quiet: length not shown
 
     def test_kill_both_abandoned_gap_may_start_a_minute_before_the_kill(self):  # it starts at the last LINK (PRD-01 section 10)
         both = [{"kind": "kill-both", "pid": 3, "watchdog": 4, "at": "05:00"}]
@@ -590,6 +609,19 @@ class StatedLoss(unittest.TestCase):
             self.assertTrue(any("known value split in streamed reply" in w for w in row["why"]), row["why"])
             self.assertEqual(row["facts"]["stated_loss_known_hits"], 1)
         self.assertEqual(self.run_row([self.KNOWN_BODY], [self.DELTAS])["checks"]["C3"], "FAIL")  # same hit in a request body
+
+    def test_c3_leak_is_not_counted_again_by_the_faults_line(self):  # A3: exit 2 from the secrets check alone
+        gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
+        extra = {"verify/secrets.json": {"known_hits": [self.KNOWN_BODY], "shape_hits": [], "big_masks": [], "masks": dict(SecretCheck.PLANTED)},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 0},
+                 "verify/check-local.json": {"exit": 2, "entries": [{"entry": "e1", "seal_reason": "harness_exit",
+                     "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
+                         {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
+                         {"id": "secrets", "result": "fail"},
+                         {"id": "inv6", "result": "named", "facts": {"gaps": [gap]}}]}]}}
+        row = CrashRows.row("kill-recorder", gap, code=2, extra=extra, known_box=True)
+        self.assertEqual((row["checks"]["C3"], row["faults"], row["result"]), ("FAIL", "PASS", "FAIL"), row["why"])
 
     def test_exit_2_without_a_stated_loss_still_fails(self):
         self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
@@ -817,6 +849,7 @@ class StartRefusal(unittest.TestCase):
         for screen, want in (("No model request was written yet.", None), ("No model request was written for 10 minutes, x", None),
                              ("No model request was written. h may not use the proxy", 0), ("3 requests to model hosts written", 3)):
             with mock.patch.object(padrun, "wait", lambda *a: True), mock.patch.object(padrun, "tool", lambda n: "/bin/true"), \
+                    mock.patch.object(padrun, "sh", lambda argv, **kw: subprocess.CompletedProcess(argv, 0, "", "")), \
                     mock.patch.object(r, "sealed", lambda: True), \
                     mock.patch.object(r, "pane", lambda *a, **k: screen), mock.patch.object(r, "status", lambda: {}), \
                     mock.patch.object(r, "harness_files", lambda: None), mock.patch.object(r, "wipe_secrets", lambda **k: None):
@@ -912,10 +945,10 @@ class QuietKillRecovery(unittest.TestCase):
             self.run_recovery(True).wait_recovery(None)
         self.assertEqual(got.exception.args[0], "INCONCLUSIVE")
 
-    def test_busy_kill_without_new_work_fails(self):
+    def test_busy_kill_without_new_work_is_inconclusive_too(self):  # the recorder is back; an idle harness is not a recorder fault
         with self.assertRaises(padrun.Step) as got:
             self.run_recovery(False).wait_recovery(None)
-        self.assertEqual(got.exception.args[0], "FAIL")
+        self.assertEqual(got.exception.args[0], "INCONCLUSIVE")
 
 
 class KillBothVerify(unittest.TestCase):

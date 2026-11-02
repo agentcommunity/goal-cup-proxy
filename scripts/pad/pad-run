@@ -565,6 +565,11 @@ class Run:
             except subprocess.TimeoutExpired:
                 self.fault("seal", exit="timeout")
         ok = wait(self.sealed, self.left() - 30, 5)
+        if ok and not out:  # a dead watchdog prints no end screen into the pane: status on a sealed part shows it (status.rs)
+            try:
+                out = sh([tool("goalcup"), "status"], env=self.env, cwd=self.project, timeout=max(1, min(60, self.left() - 5))).stdout
+            except subprocess.TimeoutExpired:
+                pass
         values = self.known()
         if out:  # the number is read only from files in the output folder: keep the seal's own words, masked
             self.pane(tag="s", text=out)
@@ -685,24 +690,21 @@ class Run:
 
         def missing():
             st = self.status()
-            n = self.work(st)
             return [w for w, bad in (("a new recorder pid", pc.dig(st, "s4_pid") in (None, k["pid"])),
                                      ("mode recording", pc.dig(st, "s4_mode") != "recording"),
                                      ("one closed recorder_down gap", (pc.dig(st, "s4_spans") or 0) != (k["off_spans"] or 0) + 1
-                                      or pc.dig(st, "s4_since")),
-                                     ("a new model request", not k.get("quiet")  # a quiet kill is judged on the first three only
-                                      and (type(n) is not int or n <= (k["requests"] or 0)))) if bad]
-        if not wait(lambda: not missing(), self.left(), 2):
+                                      or pc.dig(st, "s4_since"))) if bad]
+        if not wait(lambda: not missing(), self.left(), 2):  # FAIL only when the recorder did not stand back up
             raise Step("FAIL", "did not stand back up: missing " + ", ".join(missing()))
-        if k.get("quiet"):  # a short bounded wait for new work; none is not a failure
-            wait(lambda: (self.work() or 0) > (k["requests"] or 0), min(30, self.left()), 2)
+        back = time.time() - k["at"]  # taken now, before any wait for work
+        # then new work: a harness may sit idle, which says nothing about the recorder (never a FAIL)
+        wait(lambda: (self.work() or 0) > (k["requests"] or 0), max(0, min(30 if k.get("quiet") else 120, self.left())), 2)
         st = self.status()
         n = self.work(st) or 0
-        saw = "recorder %s back %.1f s after the kill, gap %s ms, work %s > %s" % (
-            pc.dig(st, "s4_pid"), time.time() - k["at"], (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0), n, k["requests"])
-        if k.get("quiet") and n <= (k["requests"] or 0):
-            raise Step("INCONCLUSIVE", "quiet kill: no new request to show; " + saw)
-        return "ok", saw
+        if n <= (k["requests"] or 0):
+            raise Step("INCONCLUSIVE", "recorder back in %.1f s; harness sent no new request" % back)
+        return "ok", "recorder %s back %.1f s after the kill, gap %s ms, work %s > %s" % (
+            pc.dig(st, "s4_pid"), back, (pc.dig(st, "s4_down_ms") or 0) - (k["off_ms"] or 0), n, k["requests"])
 
     def kill_wd(self, m):  # kill9 of the pid in rec/watchdog.pid, at minute m -> the pid, or a FAIL when none was hit
         self.need("goalcup", started=True, entry=True)
@@ -892,21 +894,41 @@ class Run:
             os.remove(out)
         return got
 
-    def keep_going(self, _):  # section 1a: once, as a participant may (AGENTS.md), after pane and requests idle keep_going minutes
+    def nudge(self):  # a participant types "keep going" when the harness sits idle (AGENTS.md): after the pane and requests are
+        # idle keep_going minutes, again at each later idle period, up to keep_going_count times in all (faults.jsonl counts them)
+        kg = self.__dict__.setdefault("kg", {"last": None, "since": time.time(), "next": 0})
+        if time.time() < kg["next"]:
+            return False
+        kg["next"] = time.time() + 10
+        if (now := (self.pane(False), pc.dig(self.status(), "s4_requests"))) != kg["last"]:
+            kg["last"], kg["since"] = now, time.time()
+            return False
+        if time.time() - kg["since"] < float(self.s.get("keep_going", 1)) * 60:
+            return False
+        if sum(1 for f in pc.load(self.run, "watch/faults.jsonl", 1) if f.get("kind") == "keep-going") >= int(self.s.get("keep_going_count", 1)):
+            return False
+        sh(["tmux", "send-keys", "-t", self.tmux, "-l", "keep going"])
+        time.sleep(float(self.h.get("submit_delay", 2)))
+        sh(["tmux", "send-keys", "-t", self.tmux, "Enter"])
+        self.pane()
+        self.fault("keep-going")
+        kg["since"] = time.time()
+        return True
+
+    def keep_going(self, _):  # section 1a: the watch types it throughout the run when settings name the step; else once, here
         self.need("goalcup", started=True)
-        idle, last, since = float(self.s.get("keep_going", 1)) * 60, None, time.time()
-        while time.time() < self.st["pasted"] + float(self.s["minutes"]) * 60:
+        end = self.st["pasted"] + float(self.s["minutes"]) * 60
+        if "keep-going" in (self.s.get("steps") or []):
+            wait(lambda: self.sealed() or self.dead(), end - time.time(), 10)
+            n = sum(1 for f in pc.load(self.run, "watch/faults.jsonl", 1) if f.get("kind") == "keep-going")
+            if n:
+                return "ok", "typed keep going %d time%s" % (n, "s" * (n != 1))
+            raise Step("skip", "agent still working")
+        while time.time() < end:
             if self.dead():
                 raise Step("skip", "harness exited")
-            if (now := (self.pane(False), pc.dig(self.status(), "s4_requests"))) != last:
-                last, since = now, time.time()
-            elif time.time() - since >= idle:
-                sh(["tmux", "send-keys", "-t", self.tmux, "-l", "keep going"])
-                time.sleep(float(self.h.get("submit_delay", 2)))
-                sh(["tmux", "send-keys", "-t", self.tmux, "Enter"])
-                self.pane()
-                self.fault("keep-going")
-                return "ok", "typed keep going after %g min idle" % (idle / 60)
+            if self.nudge():
+                return "ok", "typed keep going after %g min idle" % float(self.s.get("keep_going", 1))
             time.sleep(10)
         raise Step("skip", "agent still working")
 
@@ -966,6 +988,8 @@ class Run:
                 write(self.path("watch", "watch.json"), json.dumps({k: self.st[k] for k in ("panes", "screen_known")}), 0o644)
                 if self.s.get("server") != "off":
                     append(self.path("watch", "upload.jsonl"), {"upload": up})
+            if "keep-going" in (self.s.get("steps") or []) and not last:
+                self.nudge()
             if "live" in go and tool("goalcup-verify") and self.st.get("entry_dir") and not (live and live.is_alive()):
                 look = float((self.s.get("limits") or {}).get("look", 60))  # beside the loop, so no status line waits
                 (live := threading.Thread(target=self.look_line, args=(look,), daemon=True)).start()

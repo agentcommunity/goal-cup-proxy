@@ -46,7 +46,7 @@ MODES = {"micro": {"server": "off", "prompt": "micro", "minutes": 3, "calls": 2}
 LIMITS = {"setup": 5, "pre": 3, "start": 3, "wait-calls": 4, "look": 1, "wait-recovery": 3,
           "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
 KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
-        "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going",
+        "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going", "keep_going_count",
         "cap_usd", "box_extra_minutes", "box_vcpus"}
 OVERRIDES = ("cap_usd", "box_extra_minutes", "box_vcpus")  # a row may replace these pad.toml values for itself
 FAULTS, SPAN = pc.FAULTS, pc.SPAN  # section 3.1: kind to the minutes it lasts by default; the kinds that take +<minutes>
@@ -325,7 +325,7 @@ def load_settings(raw, pad):
         raise Usage("bad harness id")
     if raw["mode"] not in MODES:
         raise Usage("mode is micro, cycle or full")
-    s = {"case": "direct", "where": "sandbox", "steps": [], "keep": True, "keep_going": 1, "gateway_key": "gateway",
+    s = {"case": "direct", "where": "sandbox", "steps": [], "keep": True, "keep_going": 1, "keep_going_count": 1, "gateway_key": "gateway",
          **MODES[raw["mode"]], **raw}
     if s["case"] not in ("direct", "gateway", "dodger", "all"):
         raise Usage("case is direct, gateway, dodger or all")
@@ -343,7 +343,7 @@ def load_settings(raw, pad):
             raise Usage("%s %r: pad.toml [keys] must map it to a *_API_KEY variable" % (k, s[k]))
     if s["prompt"] not in ("micro", "smoke", "full") and not os.path.isfile(str(s["prompt"])):
         raise Usage("prompt is micro, smoke, full or a prompt file")
-    for k in ("minutes", "keep_going"):
+    for k in ("minutes", "keep_going", "keep_going_count"):
         if isinstance(s[k], bool) or not isinstance(s[k], (int, float)) or s[k] <= 0:
             raise Usage("%s is a number above 0" % k)
     if not isinstance(s["keep"], bool):
