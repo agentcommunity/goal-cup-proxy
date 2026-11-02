@@ -759,7 +759,7 @@ class StartRefusal(unittest.TestCase):
                 json.dump(doc, f)
         r = padrun.Run(run, "verify")
         for screen, want in (("No model request was written yet.", None), ("No model request was written for 10 minutes, x", None),
-                             ("No model request was written. h may not use the proxy", 0), ("3 model requests written", 3)):
+                             ("No model request was written. h may not use the proxy", 0), ("3 requests to model hosts written", 3)):
             with mock.patch.object(padrun, "wait", lambda *a: True), mock.patch.object(padrun, "tool", lambda n: "/bin/true"), \
                     mock.patch.object(r, "sealed", lambda: True), \
                     mock.patch.object(r, "pane", lambda *a, **k: screen), mock.patch.object(r, "status", lambda: {}), \

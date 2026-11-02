@@ -571,7 +571,7 @@ pub fn harness_line(name: &str, alive: bool, exit: Option<Exit>, started: bool) 
 pub fn written_line(requests: u64, hosts: &[(&str, u64)], whole: u64, holes: u64) -> String {
     let mut line = format!(
         "Written so far: {}",
-        plural(requests, "model request", "model requests")
+        plural(requests, "request to model hosts", "requests to model hosts")
     );
     if !hosts.is_empty() {
         line += &format!(" ({})", host_list(hosts));
@@ -743,7 +743,7 @@ pub fn no_request_written(name: &str, pinned: Option<&str>) -> String {
 pub fn requests_written(n: u64, hosts: &[(&str, u64)]) -> String {
     format!(
         "{} written: {}.",
-        plural(n, "model request", "model requests"),
+        plural(n, "request to model hosts", "requests to model hosts"),
         host_list(hosts)
     )
 }

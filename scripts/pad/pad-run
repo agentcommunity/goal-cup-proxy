@@ -556,11 +556,11 @@ class Run:
         if out:  # the number is read only from files in the output folder: keep the seal's own words, masked
             self.pane(tag="s", text=out)
         screen = (out if values is not None else "") + "\n" + self.pane()
-        found = re.findall(r"([\d,]+) model requests? written", screen)
+        found = re.findall(r"([\d,]+) requests? to model hosts written", screen)
         self.st["end_screen_requests"] = int(found[-1].replace(",", "")) if found else 0 if re.search(r"No model request was written\.", screen) else None
         self.harness_files()
         self.wipe_secrets(home=ok or self.dead())  # an unsealed entry may still be reading the home: wipe leaves it
-        return ("ok", "sealed %s, %s model requests written" % (why, pc.dig(self.status(), "s4_requests"))
+        return ("ok", "sealed %s, %s requests to model hosts written" % (why, pc.dig(self.status(), "s4_requests"))
                 ) if ok else ("timeout", "%s, not sealed within the step's limit after goalcup seal" % why)
 
     def exit_harness(self):  # the harness file's exit_keys (printf format); after 30 s SIGTERM to harness.pid if it lives

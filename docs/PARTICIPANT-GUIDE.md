@@ -270,7 +270,7 @@ Your competition run with Claude Code: recording.
   Ends: Sat 14 Nov, 10:12 CET (09:12 UTC), 95 h 10 min left.
   Claude Code: running.
   Recording: on.
-  Written so far: 905 model requests (api.anthropic.com 812, openrouter.ai 93); 896 whole, 9 with missing parts.
+  Written so far: 905 requests to model hosts (api.anthropic.com 812, openrouter.ai 93); 896 whole, 9 with missing parts.
   Session files: 43, 48 MB.
   Off: 1 time, 2 min 30 s in total.
   Upload: the server holds everything up to 14:02 (1 min ago).
@@ -279,7 +279,7 @@ Your competition run with Claude Code: recording.
 ```
 
 - **Ends** is the server's deadline in your time zone and in UTC, with the time left.
-- **Written so far** counts model requests written to the record, by host; "whole" and "with missing
+- **Written so far** counts requests to model hosts written to the record, by host; "whole" and "with missing
   parts" appear when some requests have a hole.
 - **Session files** is how many of the harness's files are in the record, and their size.
 - **Off** is the time recording was off, as a count and a total. Each is a gap in the record.
@@ -363,7 +363,7 @@ received before the deadline. Later pushes are flagged, and so is a force-push. 
 Codex has exited (exit code 0).
 
 What this part recorded (on this computer):
-  905 model requests written: api.openai.com 812, chatgpt.com 93.
+  905 requests to model hosts written: api.openai.com 812, chatgpt.com 93.
   896 of them written whole, 9 with missing parts. 1.5 MB was not recorded.
   43 session files, 48 MB.
   Recording was off 2 times, 2 min 30 s in total.
@@ -374,7 +374,7 @@ Details for support are in "/home/you/.config/goalcup/runs/<run>/<part>/goalcup.
 
 - The first lines say the agent has exited and, if the run is still open, how to go on with
   `goalcup continue`. A part that ended without `goalcup` (the computer stopped) says so.
-- **Model requests written**, by host. With none: "No model request was written."
+- **Requests to model hosts written**, by host. With none: "No model request was written."
 - **Nothing was lost.** is the second line only when there was no gap, no off time, no tunnel to a
   model host, no byte hidden for lack of time, no cut file and no byte after the stop. Otherwise each
   loss has its line with numbers: requests with missing parts, bytes not recorded, gaps of unknown
