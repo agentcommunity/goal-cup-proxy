@@ -321,8 +321,9 @@ pub fn masking(db: Option<&str>) -> String {
     format!(
         "Goal Cup Proxy hides known secret shapes in memory, before anything is saved: API keys with a \
          known prefix, login headers, cookies, passwords in URLs, private keys, login tokens, values \
-         named like `api_key`, `secret`, `token` or `password`, and your project's GitHub token. A \
-         hidden value is replaced by stars of the same length. It cannot catch every secret. These \
+         named like `api_key`, `secret`, `token` or `password`, and your project's GitHub token. The \
+         values of known keys found in your project's own files and in your environment are hidden \
+         too, held in memory only and never written. A hidden value is replaced by stars of the same length. It cannot catch every secret. These \
          can still be recorded: a key the model repeats back in its reply, a key written right \
          after a letter, a digit or `_`, a short password, {and}a value with no known shape (for \
          example a line of `cat .env` whose name is not one of those){db}. Your email address and \
@@ -330,6 +331,19 @@ pub fn masking(db: Option<&str>) -> String {
          before research use. Use keys you can revoke, and rotate every key after the run."
     )
 }
+
+/// PRD-10 section 3: how many key values the start could not add to masking (PRD-05 `skipped`).
+pub fn not_masked(skipped: usize) -> Option<String> {
+    match skipped {
+        0 => None,
+        1 => Some("1 key value was not added to masking.".to_owned()),
+        n => Some(format!("{n} key values were not added to masking.")),
+    }
+}
+
+/// The verifier's text for subagents shown by their task logs (`goalcup-verify`, `legs.rs`).
+pub const HERMES_SUBAGENTS: &str =
+    "Subagents are shown by their task logs, not tied to individual calls.";
 
 pub const READY: &str = "Ready.
   Practice (10 minutes, no GitHub):

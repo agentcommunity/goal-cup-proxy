@@ -365,7 +365,12 @@ fn show(found: &Found, st: &Status, now: u64) -> String {
         })
         .collect();
     let upload = up::read(&found.entry_dir());
-    let shown = block(st, &state, run, upload.as_ref(), &cx, &parts);
+    let mut shown = block(st, &state, run, upload.as_ref(), &cx, &parts);
+    if !matches!(state, State::Sealed { .. })
+        && let Some(line) = text::not_masked(super::not_masked_count(&found.entry_dir()))
+    {
+        shown += &format!("  {line}\n");
+    }
     // A sealed part's final counts are always reachable: a recovered part had no watchdog to print
     // them. The screen is a pure function of the sealed files, so it adds no counter.
     if matches!(state, State::Sealed { .. })
