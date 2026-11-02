@@ -29,14 +29,34 @@ pub fn end_screen(entry_dir: &Path) -> Result<String, NotSealed> {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default();
-    screen(
+    let shown = screen(
         &st,
         server.as_ref(),
         up::read(entry_dir).as_ref(),
         &run,
         &super::goalcup_log(entry_dir),
         super::now(),
-    )
+    )?;
+    let mut extra = Vec::new();
+    extra.extend(text::not_masked(super::not_masked_count(entry_dir)));
+    if server
+        .as_ref()
+        .is_some_and(|s| s.connector.id == "hermes-cli")
+    {
+        extra.push(text::HERMES_SUBAGENTS.to_owned());
+    }
+    Ok(with_extra(shown, &extra))
+}
+
+/// Puts `extra` lines before the screen's last line (the details line).
+fn with_extra(shown: String, extra: &[String]) -> String {
+    if extra.is_empty() {
+        return shown;
+    }
+    let body = shown.trim_end_matches('\n');
+    let at = body.rfind('\n').map_or(0, |i| i + 1);
+    let lines: String = extra.iter().map(|l| format!("  {l}\n")).collect();
+    format!("{}{lines}{}\n", &body[..at], &body[at..])
 }
 
 /// The end screen as a function of the sealed `status.json`, `server.json`, `upload.json`, the run

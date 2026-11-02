@@ -18,7 +18,7 @@ use super::{
     ConnectorSource, RunMode, Server, awake, fail, finish, folder, log, push, say, skill, text,
 };
 use crate::connector::{self, Connector, Env, LaunchPlan};
-use crate::mask::{Masker, SecretValue, launch_values};
+use crate::mask::{Masker, SecretValue, launch_values, skipped_values};
 use crate::pipeline::Mono;
 use crate::watchdog::{self, CaPem, StartFacts};
 
@@ -303,6 +303,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
         lines.extend(file.as_deref().map(|f| text::from_file(what, f)));
     }
     lines.push(text::harness_home(&name, &plan.home));
+    lines.extend(text::not_masked(skipped_values(&values) as usize));
     lines.extend(sleep_warning);
     let _ = writeln!(out, "{}", lines.join("\n"));
     let part = Part {
@@ -352,6 +353,11 @@ pub(super) fn start_facts(
     values: &[SecretValue],
     part: Part,
 ) -> StartFacts {
+    // Best effort, like the log: a failed write only leaves status and the end screen silent.
+    let _ = std::fs::write(
+        super::not_masked_file(&part.entry_dir),
+        skipped_values(values).to_string(),
+    );
     plan.env.insert(
         "GOALCUP_TIME_LEFT_FILE".to_owned(),
         part.entry_dir

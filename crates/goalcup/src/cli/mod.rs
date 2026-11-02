@@ -168,6 +168,20 @@ pub fn goalcup_log(entry_dir: &Path) -> PathBuf {
     entry_dir.join("goalcup.log")
 }
 
+/// `runs/<run>/<entry>/not-masked`: how many key values the start could not add to masking, one
+/// number, so `status` and the end screen can say it without the start event.
+pub fn not_masked_file(entry_dir: &Path) -> PathBuf {
+    entry_dir.join("not-masked")
+}
+
+/// The number in [`not_masked_file`]; 0 when the file is missing or unreadable.
+pub fn not_masked_count(entry_dir: &Path) -> usize {
+    std::fs::read_to_string(not_masked_file(entry_dir))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0)
+}
+
 /// `runs/<run>/<entry>/status.json` (PRD-02 section 6, seam S4).
 pub fn status_json(entry_dir: &Path) -> PathBuf {
     entry_dir.join("status.json")
