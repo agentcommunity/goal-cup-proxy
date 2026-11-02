@@ -333,7 +333,8 @@ fn rows(c: &Connection) -> Option<Rows> {
 }
 
 /// The (id, parent) rows of a thread database by `spec`'s columns alone, with a parent, each
-/// named as the wire names it. A missing parent column reads as no parent.
+/// kept only as [`hints::id`] allows, then named as the wire names it. A missing parent column
+/// reads as no parent.
 fn links(c: &Connection, spec: &hints::ThreadDb) -> Option<BTreeMap<String, String>> {
     let have = columns(c, spec.table)?;
     let col = |k: &'static str| have.contains(k).then_some(k);
@@ -344,11 +345,12 @@ fn links(c: &Connection, spec: &hints::ThreadDb) -> Option<BTreeMap<String, Stri
         spec.table
     );
     let named = |s: String| {
-        if spec.hash {
-            Some(format!("{:016x}", XxHash3_64::oneshot(s.as_bytes())))
+        let s = hints::id(&s)?;
+        Some(if spec.hash {
+            format!("{:016x}", XxHash3_64::oneshot(s.as_bytes()))
         } else {
-            hints::id(&s)
-        }
+            s
+        })
     };
     let got = all(c, &sql, |r| Ok((text(r, 0)?, text(r, 1)?)))?;
     let pair = |(i, p): (Option<String>, Option<String>)| Some((named(i?)?, named(p?)?));
