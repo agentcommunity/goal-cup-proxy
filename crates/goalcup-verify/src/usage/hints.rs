@@ -5,9 +5,9 @@ use serde_json::Value;
 
 /// A native session format this build reads: Codex `sessions:**/rollout-*.jsonl`, Claude Code
 /// `transcripts:**/*.jsonl`, the `meta:**/*.meta.json` snapshots, and Hermes's `state:state.db*`
-/// database copies (snapshot streams), Gemini CLI's `chats:**/*.jsonl` session files (thread
-/// links only), and Hermes's delegation files: `task-<n>.log` plain-text logs (read by path only,
-/// never parsed) and the `manifest.json` snapshots (delegation id and task indexes).
+/// database copies (snapshot streams), Gemini CLI's `chats:**/*.jsonl` session files (calls,
+/// threads and parent links), and Hermes's delegation files: `task-<n>.log` plain-text logs (read
+/// by path only, never parsed) and the `manifest.json` snapshots (delegation id and task indexes).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reader {
     CodexRollout,
@@ -66,9 +66,9 @@ const WIRE_IDS: &[(&str, &[&str], &[&str])] = &[
 
 /// For a connector this build reads threads for: (its wire requests carry their thread, as
 /// [`WIRE_IDS`] says; native calls join the wire by the reply's request id, as Claude Code's do).
-/// Hermes has neither: its calls join the entry's wire calls by time alone. Gemini has no native
-/// call rows (the chat file's per-call shape is unmeasured), so its wire calls stay `WireOnly`;
-/// the reader is here for the threads and parent links of its chat files.
+/// Hermes and Gemini have neither: their calls join the entry's wire calls by time, a wire call
+/// whose usage equals the native call's first (Gemini's chat `tokens` equal the reply's
+/// `usageMetadata`). A Gemini wire call no chat file holds (a utility call) stays `WireOnly`.
 pub(super) fn join_of(connector: Option<&str>) -> Option<(bool, bool)> {
     match connector? {
         "claude-code-cli" => Some((false, true)),

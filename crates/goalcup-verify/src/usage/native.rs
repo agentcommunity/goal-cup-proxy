@@ -1,5 +1,6 @@
-//! The native leg (PRD-09 sections 4 and 5): Codex rollouts and Claude Code transcripts read back
-//! out of the record's `native` streams, Claude Code agent labels out of its `snapshot` streams.
+//! The native leg (PRD-09 sections 4 and 5): Codex rollouts, Claude Code transcripts and Gemini
+//! CLI chat files read back out of the record's `native` streams, Claude Code agent labels out of
+//! its `snapshot` streams.
 //! Bytes are deduped by (path, gen, offset) across boots (PRD-01 section 15 point 5); only lines
 //! that end in a newline are parsed, and a hole drops the partial line. Rows carry their session
 //! file `path` (U1 allows it, but it can name the participant's folders, so section 7 keeps it out
@@ -50,6 +51,8 @@ pub(super) struct Native {
     codex: Vec<CallRow>,
     /// Claude Code calls by `message.id`.
     msgs: BTreeMap<String, Msg>,
+    /// Gemini CLI calls by message `id`, the last copy kept (each message is written twice).
+    gemini: BTreeMap<String, CallRow>,
     /// Claude Code agent id to its session and the last `agentType` a meta snapshot gave.
     agents: BTreeMap<String, (String, Option<String>)>,
     /// Hermes database copies.
@@ -154,14 +157,6 @@ impl Native {
                         let Ok(v) = serde_json::from_slice::<Value>(&line) else {
                             continue;
                         };
-                        if f.gemini {
-                            // No per-call rows: only line 1's session id is kept (later lines
-                            // carry message ids).
-                            if first {
-                                f.sid = id_at(&v, "/sessionId");
-                            }
-                            continue;
-                        }
                         let at = v["timestamp"].as_str().and_then(ts);
                         let row = || {
                             let mut r = CallRow::new(Leg::Native, &ctx.entry, boot, Kind::Call);
@@ -169,7 +164,14 @@ impl Native {
                             (r.outcome, r.whole) = (Outcome::Ok, true);
                             r
                         };
-                        if f.codex {
+                        if f.gemini {
+                            // Line 1 gives the session id (later lines carry message ids).
+                            if first {
+                                f.sid = id_at(&v, "/sessionId");
+                            } else if let Some((id, r)) = gemini(&v, row) {
+                                self.gemini.insert(id, r);
+                            }
+                        } else if f.codex {
                             self.codex.extend(f.rollout(&v, at, row));
                         } else {
                             claude(&mut self.msgs, &v, at, row);
@@ -326,7 +328,8 @@ impl Native {
             let (tokens, extra) = split(c, CLAUDE);
             real.then_some((CallRow { tokens, extra, ..r }, rid))
         });
-        let all = self.codex.into_iter().map(|r| (r, None)).chain(claude);
+        let plain = self.codex.into_iter().chain(self.gemini.into_values());
+        let all = plain.map(|r| (r, None)).chain(claude);
         let rows = all.map(|(r, rid)| {
             let (thread, parent) = r.path.as_ref().and_then(|p| owner.get(p)).cloned().unzip();
             let (parent, wall_end) = (parent.flatten(), r.wall_start);
@@ -487,6 +490,29 @@ fn claude(
     (r.wall_start, *id) = (r.wall_start.max(at), id.take().or(id_at(v, "/requestId")));
     r.model = model_name(m.get("model")).or(r.model.take());
     Some(())
+}
+
+/// One Gemini CLI chat line: a `gemini` message with `tokens` is a call, by its message `id`.
+/// User, `$set`, `$patch` and `$rewindTo` lines are not. The counts are split as the wire's
+/// `usageMetadata` is: input less the cached part, output with the thoughts.
+fn gemini(v: &Value, row: impl FnOnce() -> CallRow) -> Option<(String, CallRow)> {
+    let t = (v["type"] == "gemini").then_some(&v["tokens"])?;
+    let n = |k: &str| t[k].as_u64();
+    let (cached, thoughts) = (n("cached"), n("thoughts"));
+    let tokens = Tokens {
+        input: less(Some(n("input")?), cached),
+        cached,
+        cache_write: None,
+        output: n("output").map(|o| o.saturating_add(thoughts.unwrap_or(0))),
+        reasoning: thoughts,
+    };
+    let id = id_at(v, "/id")?;
+    let r = CallRow {
+        tokens,
+        model: model_name(v.get("model")),
+        ..row()
+    };
+    Some((id, r))
 }
 
 /// Usage member names per the token table: input, cached, cache write, output, reasoning.

@@ -472,7 +472,8 @@ impl Calls {
             }
         }
         // Each native call, in time order, takes the earliest unmatched ok wire call that ends
-        // 120 s before to 5 s after it; of its own thread where the wire names threads.
+        // 120 s before to 5 s after it; of its own thread where the wire names threads. A wire
+        // call in that span whose usage equals the native call's goes first.
         let mut wires: Vec<usize> = (0..rows.len()).filter(|&w| ok(&rows[w])).collect();
         wires.sort_by_key(|&w| rows[w].wall_end);
         let mut order: Vec<usize> = (0..nat.len()).filter(|&n| pair[n].is_none()).collect();
@@ -490,7 +491,10 @@ impl Calls {
                 !taken[w] && (!per_thread || nr.thread.is_some() && rows[w].thread == nr.thread)
             };
             let from = wires.partition_point(early);
-            if let Some(&w) = wires[from..].iter().take_while(near).find(free) {
+            let mut span = wires[from..].iter().take_while(near).filter(free);
+            let first = span.clone().next();
+            let same = |&&w: &&usize| same_usage(&rows[w].tokens, &nr.tokens);
+            if let Some(&w) = span.find(same).or(first) {
                 (taken[w], pair[n]) = (true, Some(w));
                 joined_by_time += u64::from(by_id);
             }
@@ -591,6 +595,17 @@ impl Calls {
             ..base
         }
     }
+}
+
+/// The native usage `n` is said and agrees with the wire's `w`: the same whole input and output,
+/// a count not said read as 0.
+fn same_usage(w: &Tokens, n: &Tokens) -> bool {
+    let key = |t: &Tokens| {
+        let c = |x: Option<u64>| x.unwrap_or(0);
+        let input = c(t.input).saturating_add(c(t.cached));
+        (input.saturating_add(c(t.cache_write)), c(t.output))
+    };
+    *n != Tokens::default() && key(w) == key(n)
 }
 
 /// Parent thread id to its child ids, from the threads that name a parent; `None` when none does.
