@@ -521,7 +521,7 @@ submit_delay = 2
 subagent_word = "sub-agent"
 keep_going = true                         # cycle mode types "keep going" for this harness (a few, where it makes sense)
 [direct]
-files = { }                               # provider and model config copied into the isolated home, as a participant writes it
+files = { }                               # provider and model config copied into the isolated home, as a participant writes it; {home} and {workspace} are filled
 env = { }                                 # non-secret values exported in the launch shell before goalcup start, as a participant does
 [gateway]                                 # absent: the gateway case is n/a
 pre_keys = ""                             # optional; a [gateway] or [dodger] section may carry its own pre_keys, which wins over the top-level one
