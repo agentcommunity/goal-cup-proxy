@@ -395,8 +395,9 @@ candidates.
 | 2 | 3 | Credential-named variables of the environment goalcup builds for the harness (PRD-11 `LaunchPlan.env`; the whole participant environment if owner question 2, old 13, stays yes) | no | only with owner yes (question 3) | `env` |
 | 3 | 2 | Other credential-named values in the workspace key files (`.env`, `.env.*`, `project.rs:330-346` reads them already) | no | only with owner yes (question 3) | `workspace` |
 | 4 | 4 | The harness's own key files, PRD-11 `secret_files` (`auth.json`, `oauth_creds.json`, `secrets.yaml`, `settings.json` and so on) | no | only with owner yes (question 3) | `harness` |
+| 5 | 5 | The body lines of a PEM private key held as a value in the workspace key files (amendment of 2026-11-02, below; no name gate) | no | yes (default build), last at the cut | `workspace` |
 
-**One gate for every source.** A value is used when all of these hold:
+**One gate for every source, except PEM private key body lines (below).** A value is used when all of these hold:
 
 - its name is credential-named: the last segment of the key path in a JSON, TOML or YAML file
   (`access_token` in `tokens.access_token`, `apiKey` in `providers.deepseek.apiKey`), or the variable
@@ -420,8 +421,17 @@ beside the keys (`settings.json`, `config.json`, `providers.json`). Masking thos
 star the model name in every request and break PRD-09's usage reader. PRD-11 therefore passes each
 candidate with its key path (ask, last section) and PRD-05 applies the gate.
 
+**PEM private key bodies (amendment of 2026-11-02, finding F1 of the mini test wave).** A workspace
+key-file value that opens with a `-----BEGIN ...PRIVATE KEY-----` line, quoted over several lines or
+written on one line with escaped `\n` breaks, gives each body line of 20 to 256 base64 characters as one
+`workspace` value, without the name gate (a PEM private key is a credential by its content). They come
+last at the cut, after the environment values, so they never push out a named value. A tool output that
+drops the BEGIN line is then still masked by exact value. PEM keys in any other file stay caught only
+from a BEGIN line (section 10, a stated loss).
+
 **Order, duplicates and the guard.** Values are taken in the "Order at the cut" column of the table:
-`GH_TOKEN`, then the other workspace key-file values, then the environment values. Duplicates are
+`GH_TOKEN`, then the other workspace key-file values, then the environment values, then the PEM
+private key body lines. Duplicates are
 dropped (the same key in the environment and in `.env` counts once), up to 32 values. The reader
 (`launch_values`) dedupes, order and cut at 32 before anything is sent, so at most
 32 values ever reach the first control line (amendment of 2026-11-01). The number left out past 32
@@ -480,6 +490,7 @@ messages and session files, JSON-escaped up to three levels (the rules take up t
 | `env` | shaped keys by their rules, and `NAME=value` lines the shell rule catches (`API_KEY=`, `TOKEN=`, `SECRET=`, `PASSWORD=`). With the owner's yes to question 3, also credential-named values by exact value |
 | `cat ~/.codex/auth.json` in the isolated home | JWTs (`jwt`) and `"refresh_token": "…"` (JSON rule) masked |
 | A PEM private key, printed with line numbers or escaped | masked, body up to 15,872 bytes (`redact.rs:111-125`) |
+| A PEM private key body held as a value in a workspace key file (`.env`, `.env.*`), printed without its BEGIN line (a redacting `sed`) | masked by exact value (amendment of 2026-11-02): each body line of 20 to 256 base64 characters is a `workspace` value without the name gate, ranked after every named value at the cut of 32 (section 9). A headerless PEM body from any other file stays raw: the `private_key` rule matches only from a BEGIN line (a stated loss) |
 | `curl -H "Authorization: Basic …"` inside a command line | not masked in a body (no Basic rule there). Masked in a real request header |
 | A key the model repeats across SSE or WebSocket deltas | not masked: JSON framing sits between the pieces (`TODO.md:302-312`). PRD-08's scan joins deltas and flags it |
 | A key glued after a letter, digit or `_` (and `-` if the owner adds it) | not masked (section 4) |
@@ -1111,7 +1122,7 @@ A1 reports it as a stated loss instead of failing on it.
   sent. The number left out crosses as one count-only entry, so `skipped` and the start screen line
   stay right. Value bytes cross the control line as a compact JSON string.
 - **Order at the cut.** `GH_TOKEN`, then the other workspace key-file values, then the environment
-  values (the conductor's ruling after review 5: the `cat .env` leak path is the one that must not be
+  values, then the PEM private key body lines (amendment of 2026-11-02) (the conductor's ruling after review 5: the `cat .env` leak path is the one that must not be
   cut on a busy shell). The source numbers in the section 9 table stay; its order column changes.
   The old reason, provider keys first because the environment is source 2, is gone.
 - **Gate.** It also refuses a value that looks like a model id or a host: lowercase letters, digits
