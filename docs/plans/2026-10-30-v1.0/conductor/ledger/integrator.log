@@ -372,3 +372,5 @@
 11:26Z | integrator conductor | train | stall-fix train merged 7fdaf9a3 (gate fast PASS 430s). Paynest pass 4: opencode, crush, gemini, openclaw, 2 at a time, 8 USD stop.
 12:04Z | integrator conductor | wave | Paynest pass 4 (2.22 USD est, keyscan 0): opencode PASS (19/19 subagents linked), crush PASS (4/4; init answer worked), gemini INC (security-warning approval screen), openclaw INC (no tool use in 15 min). Reports lane updating ACCEPTANCE and MORNING.
 12:05Z | integrator conductor | reports | ACCEPTANCE.md and MORNING.md on v1.0/integration at 2eeaccd6 (docs only, keyscan 0)
+12:07Z | integrator conductor | wave L | A2 rerun with the Paynest prompt (one-hour, kills at 10 and 30, watchdog kill and recover at 45, cap 8 USD) on H6 binaries from worktree long3, to measure X2 (subagents and concurrency); evidence only, not a release row
+13:11Z | integrator | result | A2 pass 3 (H6, Paynest, run r5095e871faedf7bd entry eb0db7de184dbe232): C1 to C6 PASS, 13 subagents, 12 at once, 3.65 USD, gaps 380 ms / 57329 ms quiet kill (harness idle) / watchdog_lost 119788 ms, faults INC on pad status sampling, keyscan 0. Evidence only, not a release row. Reports updated.

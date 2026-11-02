@@ -259,3 +259,4 @@
 12:05Z | pad paynest4 | run | gemini-cli direct, 7fdaf9a3, paynest prompt: INCONCLUSIVE, stalled on package.json build-file write approval (Allow once) despite unattended mode, 3 requests; ~0.11 USD
 12:05Z | pad paynest4 | run | openclaw-cli direct, 7fdaf9a3, paynest prompt: INCONCLUSIVE, prompt submitted but only "pondering" with 61 requests, no tool turn, no subagents; ~0.28 USD
 12:05Z | pad paynest4 | wave | Paynest wave 4 on 7fdaf9a3: opencode and crush PASS, gemini and openclaw INCONCLUSIVE (new stalls); keyscan 0; ~2.22 USD est
+13:11Z | integrator | result | A2 pass 3 (H6, Paynest, run r5095e871faedf7bd entry eb0db7de184dbe232): C1 to C6 PASS, 13 subagents, 12 at once, 3.65 USD, gaps 380 ms / 57329 ms quiet kill (harness idle) / watchdog_lost 119788 ms, faults INC on pad status sampling, keyscan 0. Evidence only, not a release row. Reports updated.
