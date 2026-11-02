@@ -14,13 +14,13 @@
 
 - Target layout `docs/plans/2026-10-30-v1.0/conductor/` (below: `$C`). Work on branch `v1.0/conductor-handover` from `origin/v1.0/integration` (at `04044320` or later) in worktree `$WT=$GC_WT/conductor-handover`; never edit `/home/user/goal-cup-proxy`'s own checkout.
 - Push only `v1.0/*` branches, merge commits only, never force. No production, `main`, tags or website database writes.
-- The tool commits reach integration only through `merge.sh` (they are not docs-only), as ONE small train of their own (this branch only, one gate), not folded into the code-wave train: the new session needs these tools first, and the mini-test wave runs them from `/root/gc-tools` (Task 10 Step 8). `handoff.sh` keeps its direct docs push for the ledger and reports.
+- The tool commits reach integration only through `merge.sh` (they are not docs-only), inside the ONE train (no gate of its own): the conductor writes one request whose `branch` is the comma-joined list of every code-wave branch (mini plan Task 11 Step 3); this lane writes no request. Nothing tonight waits for this plan: the wave runs the tools already on the conductor (mini plan Task 9). `handoff.sh` keeps its direct docs push for the ledger and reports.
 - No key on any command line, in any file, log or commit. Keys reach a box only through `sbx.mjs put-env` (0600). `GH_TOKEN`, `DATABASE_URL`, `CLOUDFLARE_*`, `GOALCUP_TEST_APPROVAL_KEY`, `GOALCUP_TEST_MEMBER_ID` are unset for every box call except the one `put-env` that needs that one value.
 - Never commit `pad-out/`, `runs/`, `dbfetch/idx/`, `.env*`, key files or `node_modules/`. Copy out only `REPORT.txt` files from pad folders.
 - Never edit `OWNER-DECISIONS.md`; draft lines go to `$C/owner-decisions-draft.md`.
 - Docs: plain English, no em dashes, no model names or model ids in new prose (records copied verbatim, the ledger and reports, are exempt).
 - Commit trailers in this session: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` and `Claude-Session: https://claude.ai/code/session_01V2hUmG4Ccnfp953KQMAUS6`. In the scripts this becomes `GC_SESSION` (required to commit) and `GC_COAUTHOR` (default `Claude Opus 5.5 <noreply@anthropic.com>`).
-- Box rules (owner-approved execution shape, 1 Nov, overrides the spec): no box per task or fix round; reviewers are read-only; this slice gets ONE box at its end (Task 10 Step 4, `--vcpus 2 --minutes 15`) that proves every red commit fails and the head passes; its merge is the one small train of its own (Task 10 Step 7), one gate, queued as soon as the slice box and the final review pass. Tests never run on the conductor machine. Conductor-side actions that are not tests: `keyscan.py` with the real env values and the `box.mjs snaps`/`spend` API calls (no box).
+- Box rules (owner-approved execution shape, 1 Nov, overrides the spec): no box per task or fix round; reviewers are read-only; this slice gets ONE box at its end (Task 10 Step 4, `--vcpus 2 --minutes 15`) that runs `cargo fmt --all --check`, proves every red commit fails and the head passes; it merges in the one train (Task 10 Step 7). Tests never run on the conductor machine. Conductor-side actions that are not tests: `keyscan.py` with the real env values and the `box.mjs snaps`/`spend` API calls (no box).
 - Every task commits its test alone first, with ` [red]` at the end of the subject, then the implementation; `test/red-green.sh` (Task 10) replays those commits in the one box. Commit messages carry the two trailer lines above; push after each task: `git -C "$WT" push -q origin HEAD:v1.0/conductor-handover`.
 - Secret names the new environment needs (names only, `SECRETS.md`, `keyscan.NAMES`): `VERCEL_TOKEN`, `VERCEL_TEAM_ID`, `VERCEL_PROJECT_ID`, `CLAUDE_API_KEY`, `OPENAI_API_KEY`, `DEEPSEEK_API_KEY`, `GEMINI_API_KEY`, `AI_GATEWAY_API_KEY`, `DATABASE_URL`, `CLOUDFLARE_ACCOUNT_ID`, `CLOUDFLARE_API_TOKEN`, `GOALCUP_TEST_APPROVAL_KEY`, `GOALCUP_TEST_MEMBER_ID`, `GH_TOKEN`. (The spec lists the first nine; the last five are read by `scripts/pad/pad:35-38` and `scripts/fetch-run.sh` and were missing from it.)
 
@@ -48,7 +48,11 @@
 | `keyscan.py` (new) | scan and `--scrub`; replaces every `keyscan.py`, `scrub.py`, `scrub2.py` copy | 7 |
 | `handoff.sh` (modify), `ledger/`, `reports/` | state folder to repo behind keyscan; restore counterpart in `install.sh --night` | 8 |
 | `handoff-head.md` (modify), `STATE.md`, `SECRETS.md`, `snapshots.md`, `owner-decisions-draft.md`, `NEW-SESSION-PROMPT.md`, `FINISH-PLAN.md`, `reports/README.md` | what the next session reads | 9 |
+| `rowinfo.py` (new, from `/root/gc-night/gw3/rowinfo.py`, no literal paths) | reads one pad row folder: checks, why, models, spend, subagents, hosts | 5 |
+| `TOOLS.md` (modify) | points at the top-level tools and `install.sh`; a hold is a request moved to `mrq/held/` | 1 |
 | `test/t.sh`, `test/test_*.sh`, `test/test_*.mjs`, `test/test_keyscan.py`, `test/run-all.sh`, `test/fresh-clone.sh` | the checks | 1 to 10 |
+
+Layout (decided): one copy of each tool at the top of `$C`, the ledger in `$C/ledger/`, reports in `$C/reports/`. Commit `9606cf4a` put a second layout on the branch (`$C/tools/`, `$C/state/`); Task 1 Step 3 removes it: `git rm -r -q $C/tools` (each file there is a top-level copy or is recreated by Tasks 2 to 7 from its old-machine source) and `git mv` of `state/lanes/*` to `ledger/`, `state/reports/*` to `reports/`, `state/reviews/LATEST.md` to `reports/review-latest.md`, the other `state/reviews/*` to `reports/reviews/`, `state/next-pad-verify.md` to `reports/next-pad-verify.md`, `state/FINISH-PLAN.md` to `FINISH-PLAN.md`, and `state/{STATUS-REPORT,STOCKTAKE,WRITING-PLANS}.md` to `reports/`. History stays.
 
 Not committed (decided): `snaps.mjs`, `snaps2.mjs` (folded into `box.mjs`), `dbfetch/query.sql` (byte-identical to the SQL block of `scripts/fetch-run.sh` on `04044320`; `run.sh` extracts it), `dbfetch/priv.sql` (a one-off privilege probe), `rung1/rung1-patch.diff` (merged rig history).
 
@@ -57,8 +61,9 @@ Not committed (decided): `snaps.mjs`, `snaps2.mjs` (folded into `box.mjs`), `dbf
 ### Task 1: Shared paths and the session trailer
 
 **Files:**
-- Create: `$C/lib.sh`, `$C/mq-driver.sh` (from `/root/gc-tools/mq-driver.sh`), `$C/test/t.sh`, `$C/test/test_lib.sh`
-- Modify: `$C/merge.sh:12-16,41,50`, `$C/mergeq.sh:3,8,27-28`, `$C/scribe.sh:4,20-22`, `$C/handoff.sh:4,11-14,31-33` (paths and trailer only; its copy list grows in Task 8)
+- Create: `$C/lib.sh`, `$C/mq-driver.sh` (`git mv` from `$C/tools/mq-driver.sh`), `$C/test/t.sh`, `$C/test/test_lib.sh`
+- Modify: `$C/merge.sh:12-16,41,50`, `$C/mergeq.sh:3,8,27-28`, `$C/scribe.sh:4,20-22`, `$C/handoff.sh:4,11-14,31-33` (paths and trailer only; its copy list grows in Task 8), `$C/TOOLS.md:3,25,27-35,39`
+- Move: `$C/tools/`, `$C/state/` (the Layout note above)
 
 **Interfaces:**
 - Produces (`lib.sh`, sourced as `. "$(dirname "$0")/lib.sh"`): `GC_TOOLS` (the folder holding `lib.sh`, absolute); sources `$GC_TOOLS/env.sh` if present; `GC_NIGHT=${GC_NIGHT:-$HOME/gc-night}`; `GC_WT=${GC_WT:-$HOME/gc-wt}`; `GC_COAUTHOR=${GC_COAUTHOR:-Claude Opus 5.5 <noreply@anthropic.com>}`; `gc_need_repo` (exit 2 with `GC_REPO unset (install.sh --repo)` unless `GC_REPO` is a git dir); `gc_trailer` (prints `\n\nCo-Authored-By: $GC_COAUTHOR\nClaude-Session: $GC_SESSION`, or prints `GC_SESSION unset or not a claude.ai session URL` to stderr and returns 2 unless `GC_SESSION` matches `^https://claude\.ai/code/session_[A-Za-z0-9]{8,}$`).
@@ -69,7 +74,7 @@ Not committed (decided): `snaps.mjs`, `snaps2.mjs` (folded into `box.mjs`), `dbf
 ```bash
 . "$(dirname "$0")/t.sh"; C=$(cd "$(dirname "$0")/.." && pwd)
 # t_no_root_paths
-if grep -nE '/root/|/home/user|session_01V2' "$C"/*.sh "$C"/*.mjs "$C"/*.js "$C"/*.cjs "$C"/*.py "$C"/dbfetch/*.sh 2>/dev/null; then fail t_no_root_paths "literal path or old session"; else ok t_no_root_paths; fi
+if find "$C" -type f \( -name '*.sh' -o -name '*.mjs' -o -name '*.js' -o -name '*.cjs' -o -name '*.py' \) -not -path '*/node_modules/*' -not -path '*/test/*' -exec grep -nHE '/root/|/home/user|session_01V2' {} + ; then fail t_no_root_paths "literal path or old session"; else ok t_no_root_paths; fi
 # t_trailer_needs_session
 ( unset GC_SESSION; . "$C/lib.sh"; gc_trailer ) 2>/dev/null && fail t_trailer_needs_session "returned 0" || ok t_trailer_needs_session
 ( GC_SESSION=https://example.com/x; . "$C/lib.sh"; gc_trailer ) 2>/dev/null && fail t_trailer_rejects_other_url "returned 0" || ok t_trailer_rejects_other_url
@@ -94,9 +99,9 @@ finish
 ```
 - [ ] **Step 2: Commit the test alone as the red commit (no box)**
 Run: `git -C "$WT" add -A && git -C "$WT" commit -qm "test(conductor): paths and trailer checks [red]"` (trailer lines as in Global Constraints). `test/red-green.sh` later runs `bash $C/test/test_lib.sh` at this commit.
-Expected at the red run: FAIL, `t_no_root_paths` lists `merge.sh:12`, `scribe.sh:4`, `gc-lane.js:19` and others; `t_trailer_needs_session` fails (no `lib.sh`).
+Expected at the red run: FAIL, `t_no_root_paths` lists `merge.sh:12`, `scribe.sh:4`, `gc-lane.js:19`, `tools/*` and others; `t_trailer_needs_session` fails (no `lib.sh`).
 - [ ] **Step 3: Implement `lib.sh`, then switch `merge.sh`, `mergeq.sh`, `scribe.sh`, `mq-driver.sh` to it**
-In all four scripts replace `REPO=`/`NIGHT=`/`Q=` with `$GC_REPO`/`$GC_NIGHT`/`$GC_NIGHT/mrq`, the two `node /root/gc-tools/box.mjs` calls with `node "$GC_TOOLS/box.mjs"`, every literal trailer with `$TRAILER`, and in `handoff.sh` the `/root/gc-tools/` and `/home/user/gc-scripts/` sources with `$GC_TOOLS/` and `${GC_LANE:-$GC_TOOLS/gc-lane.js}`. In `mergeq.sh` pass `$GC_TOOLS` and `$GC_NIGHT` into the `setsid` child as positional arguments (it does not source `lib.sh`). `box.mjs` still fails `t_no_root_paths` until Task 2 and `gc-lane.js` until Task 4.
+In all four scripts replace `REPO=`/`NIGHT=`/`Q=` with `$GC_REPO`/`$GC_NIGHT`/`$GC_NIGHT/mrq`, the two `node /root/gc-tools/box.mjs` calls with `node "$GC_TOOLS/box.mjs"`, every literal trailer with `$TRAILER`, and in `handoff.sh` the `/root/gc-tools/` and `/home/user/gc-scripts/` sources with `$GC_TOOLS/` and `${GC_LANE:-$GC_TOOLS/gc-lane.js}`. In `mergeq.sh` pass `$GC_TOOLS` and `$GC_NIGHT` into the `setsid` child as positional arguments (it does not source `lib.sh`). Do the Layout moves. In `TOOLS.md`: line 3 says the top-level files are the one set, `install.sh` replaces the manual steps at `:27-35`, `:25` points to `box.mjs snaps`, and `:39` reads "a hold is the request moved to `$GC_NIGHT/mrq/held/`" (`mergeq.sh` has no `.held` check). `box.mjs` still fails `t_no_root_paths` until Task 2 and `gc-lane.js` until Task 4.
 - [ ] **Step 4: Commit the implementation (no box; the pass is proven in the slice box, Task 10)**
 Run: `git -C "$WT" add -A && git -C "$WT" commit -qm "feat(conductor): lib.sh paths and GC_SESSION trailer"`. Slice-box command for this task: `bash $C/test/test_lib.sh`.
 Expected in the slice box at this commit: every case `ok` except `t_no_root_paths` (naming only `box.mjs` and `gc-lane.js`); final line `7 passed, 1 failed`.
@@ -151,7 +156,7 @@ Expected: `test_box: 6 passed`; `test_lib` now names only `gc-lane.js` in `t_no_
 **Interfaces:**
 - Produces: `patch-sandbox.sh NODE_MODULES` rewrites line `import { Agent } from "undici";` in `NODE_MODULES/@vercel/sandbox/dist/api-client/base-client.js` to `import { EnvHttpProxyAgent as Agent } from "undici";`; exit 0 with `patched` or `already patched`; exit 5 with `unknown @vercel/sandbox layout: <file>` when neither line is present or the file is missing. This is the patch on the old machine (ESM build, 3.9.1); the CJS build (`base-client.cjs:9`, used by `scripts/pad/sbx.mjs` through `createRequire`) is handled by the preload.
 - Produces: `proxy-preload.cjs`: `const u = require(require('path').join(__dirname, 'node_modules', 'undici')); u.Agent = u.EnvHttpProxyAgent;` (the content of `/root/gc-night/rung1/proxy-preload.cjs` with the path made relative). Callers set `NODE_OPTIONS="--use-openssl-ca --no-warnings --require $GC_TOOLS/proxy-preload.cjs"`.
-- Produces: `install.sh --dest DIR [--repo DIR] [--night DIR] [--wt DIR] [--session URL] [--coauthor TEXT] [--lane-dir DIR] [--skip-npm]`: copies `$C` (minus `test/`, `ledger/`, `reports/`, `node_modules/`) to `DIR`, runs `npm ci --silent` there unless `--skip-npm`, runs `patch-sandbox.sh DIR/node_modules`, writes `DIR/env.sh` (mode 0644) with `export GC_REPO=... GC_NIGHT=... GC_WT=... GC_SESSION=... GC_COAUTHOR=...` for the options given and nothing else, copies `gc-lane.js` into `--lane-dir` when given. Never deletes a file in `DIR` other than `node_modules/` (so a `build-snapshot.id` already there survives). Exit 2 usage, 5 patch refused. (`--night` restore is Task 8.)
+- Produces: `install.sh --dest DIR [--repo DIR] [--night DIR] [--wt DIR] [--session URL] [--coauthor TEXT] [--lane-dir DIR] [--skip-npm]`: copies `$C` (minus `test/`, `ledger/`, `reports/`, `node_modules/`) to `DIR`, runs `npm ci --silent` there unless `--skip-npm`, runs `patch-sandbox.sh DIR/node_modules`, writes `DIR/env.sh` (mode 0644) with `export GC_REPO=... GC_NIGHT=... GC_WT=... GC_SESSION=... GC_COAUTHOR=...` for the options given and nothing else, copies `gc-lane.js` into `--lane-dir` when given. Never deletes a file in `DIR` other than `node_modules/` (so a `build-snapshot.id` already there survives). With `--skip-npm` and no `DIR/node_modules/@vercel/sandbox`, prints `patch skipped: no node_modules` and exits 0; the patch runs only when the SDK is present. Exit 2 usage, 5 patch refused. (`--night` restore is Task 8.)
 
 - [ ] **Step 1: Write the failing test** `test/test_install.sh`
 ```bash
@@ -173,6 +178,9 @@ CLAUDE_API_KEY=sk-test-0123456789abcdef bash "$C/install.sh" --dest "$d/tools" -
 grep -q "GC_SESSION=https://claude.ai/code/session_TESTabcd123" "$d/tools/env.sh" && ! grep -q 0123456789abcdef "$d/tools/env.sh" && [ ! -e "$d/tools/test" ] && ok t_install_env_has_no_secret || fail t_install_env_has_no_secret ""
 # t_installed_help_runs
 node "$d/tools/box.mjs" --help >/dev/null && ok t_installed_help_runs || fail t_installed_help_runs ""
+# t_skip_npm_without_sdk_ok: a clean worktree has no node_modules
+cp -r "$C" "$d/bare"; rm -rf "$d/bare/node_modules"
+bash "$d/bare/install.sh" --dest "$d/tools3" --skip-npm | grep -qx 'patch skipped: no node_modules' && ok t_skip_npm_without_sdk_ok || fail t_skip_npm_without_sdk_ok ""
 finish
 ```
 (The test runs on a clean clone in the box, so `$C/node_modules` is the fake one it makes.)
@@ -183,7 +191,7 @@ Expected at the red run: FAIL, `patch-sandbox.sh: No such file`.
 `install.sh` with `--skip-npm` keeps a `node_modules` already in the source folder by copying it; without it, `npm ci` in `DIR`.
 - [ ] **Step 4: Commit the implementation (no box; the pass is proven in the slice box, Task 10)**
 Run: `git -C "$WT" add -A && git -C "$WT" commit -qm "feat(conductor): install.sh, sandbox proxy patch, relative preload"`. Slice-box command for this task: `bash $C/test/test_install.sh`.
-Expected: `6 passed, 0 failed`.
+Expected: `7 passed, 0 failed`.
 - [ ] **Step 5: Push the branch**
 
 ### Task 4: gc-lane.js parameters
@@ -224,7 +232,7 @@ Expected: `test_gc_lane: 4 passed`; `test_lib: 8 passed, 0 failed`.
 ### Task 5: Pad drivers
 
 **Files:**
-- Create: `$C/padrun.sh` (from `/root/gc-night/gw3/padrun.sh`), `$C/padbox.sh` (from `/root/gc-night/rung1/padbox.sh`), `$C/test/test_pad_drivers.sh`
+- Create: `$C/padrun.sh` (from `/root/gc-night/gw3/padrun.sh`), `$C/padbox.sh` (from `/root/gc-night/rung1/padbox.sh`), `$C/rowinfo.py` (from `/root/gc-night/gw3/rowinfo.py`, paths made relative; `t_no_root_paths` covers it), `$C/test/test_pad_drivers.sh`
 
 **Interfaces:**
 - Consumes: `lib.sh` (Task 1), `proxy-preload.cjs` (Task 3), `keyscan.py --scrub` (Task 7; until then `padbox.sh` checks `[ -f "$GC_TOOLS/keyscan.py" ]` and fails the scrub step loudly if absent).
@@ -247,7 +255,7 @@ finish
 - [ ] **Step 2: Commit the test alone as the red commit (no box)**
 Run: `git -C "$WT" add -A && git -C "$WT" commit -qm "test(conductor): pad drivers [red]"` (trailer lines as in Global Constraints). `test/red-green.sh` later runs `bash $C/test/test_pad_drivers.sh` at this commit.
 Expected at the red run: FAIL, `padrun.sh: No such file`.
-- [ ] **Step 3: Implement `padrun.sh` and `padbox.sh`**
+- [ ] **Step 3: Implement `padrun.sh` and `padbox.sh`; copy `rowinfo.py`**
 - [ ] **Step 4: Commit the implementation (no box; the pass is proven in the slice box, Task 10)**
 Run: `git -C "$WT" add -A && git -C "$WT" commit -qm "feat(conductor): portable pad drivers"`. Slice-box command for this task: `bash $C/test/test_pad_drivers.sh && bash $C/test/test_lib.sh`.
 Expected: `4 passed, 0 failed`; `test_lib` still all passed.
@@ -331,7 +339,7 @@ Expected: `Ran 7 tests ... OK`; pad and dbfetch tests still pass.
 
 **Interfaces:**
 - Consumes: `lib.sh` (Task 1), `keyscan.py` (Task 7), `install.sh` (Task 3).
-- Produces (`handoff.sh`, after `TRAILER=$(gc_trailer) || exit 2` and `gc_need_repo`): in its worktree copies into `$C`: from `$GC_TOOLS` the files `box.mjs spend.mjs merge.sh mergeq.sh mq-driver.sh scribe.sh handoff.sh lib.sh install.sh patch-sandbox.sh proxy-preload.cjs padrun.sh padbox.sh keyscan.py package.json package-lock.json .gitignore build-snapshot.id handoff-head.md` and `dbfetch/{idx.sh,install.sh,run.sh}`; `gc-lane.js` from `${GC_LANE:-$GC_TOOLS/gc-lane.js}`; `ledger/<lane>.log` and `ledger/<lane>.log.scribed` from `$GC_NIGHT/lanes/` (every one present; `.pending` never); `reports/<folder>.txt` from each `$GC_NIGHT/*/REPORT.txt`; `reports/review-latest.md` from `$GC_NIGHT/reviews/LATEST.md`; `reports/next-pad-verify.md` from `$GC_NIGHT/backlog/`; `FINISH-PLAN.md` from `$GC_NIGHT/finish/`; appends `| <folder> | not summarised yet |` to `reports/README.md` for any report without a row. Then `python3 keyscan.py "$C"`: exit 1 or 3 stops with exit 6 (`handoff: keyscan refused`), nothing committed or pushed; `GC_KEYSCAN_ALLOW_EMPTY=1` lets exit 3 pass (tests only). Then writes `HANDOFF.md` as today and commits with `$TRAILER`, pushes `HEAD:v1.0/integration`.
+- Produces (`handoff.sh`, after `TRAILER=$(gc_trailer) || exit 2` and `gc_need_repo`): in its worktree copies into `$C`: from `$GC_TOOLS` the files `box.mjs spend.mjs merge.sh mergeq.sh mq-driver.sh scribe.sh handoff.sh lib.sh install.sh patch-sandbox.sh proxy-preload.cjs padrun.sh padbox.sh keyscan.py rowinfo.py package.json package-lock.json .gitignore build-snapshot.id handoff-head.md` and `dbfetch/{idx.sh,install.sh,run.sh}`; `gc-lane.js` from `${GC_LANE:-$GC_TOOLS/gc-lane.js}`; `ledger/<lane>.log` and `ledger/<lane>.log.scribed` from `$GC_NIGHT/lanes/` (every one present; `.pending` never); `reports/<folder>.txt` from each `$GC_NIGHT/*/REPORT.txt`; `reports/review-latest.md` from `$GC_NIGHT/reviews/LATEST.md`; `reports/next-pad-verify.md` from `$GC_NIGHT/backlog/`; `FINISH-PLAN.md` from `$GC_NIGHT/finish/`; appends `| <folder> | not summarised yet |` to `reports/README.md` for any report without a row. Then `python3 keyscan.py "$C"`: exit 1 or 3 stops with exit 6 (`handoff: keyscan refused`), nothing committed or pushed; `GC_KEYSCAN_ALLOW_EMPTY=1` lets exit 3 pass (tests only). Then writes `HANDOFF.md` as today and commits with `$TRAILER`, pushes `HEAD:v1.0/integration`.
 - Produces (`install.sh --night DIR`): creates `DIR/{lanes,mrq/done,gate-logs,status,reviews,builds,finish}` and an empty `DIR/integration.lock`; for each `ledger/*.log` copies it and its `.scribed` (if any) into `DIR/lanes/` only when `DIR/lanes/<name>` does not exist (never overwrites, prints `kept existing <name>`).
 
 - [ ] **Step 1: Write the failing test** `test/test_handoff.sh` (fake origin and repo from `fake_repo`; fake night with `lanes/integrator.log` (3 lines) + `.scribed` (`2`), `lanes/pad-model.log` without `.scribed`, `lanes/x.log.pending`, `gw3/REPORT.txt`, `gw3/pad-out/secret.txt`, `gw3/.env`, `finish/FINISH-PLAN.md`; tools from `install.sh --skip-npm`)
@@ -342,7 +350,7 @@ git -C "$d/repo" fetch -q origin; T=$(git -C "$d/repo" ls-tree -r --name-only or
 for f in ledger/integrator.log ledger/integrator.log.scribed ledger/pad-model.log reports/gw3.txt FINISH-PLAN.md mq-driver.sh keyscan.py package-lock.json; do echo "$T" | grep -qx "$C/$f" || fail t_handoff_bundle "missing $f"; done
 echo "$T" | grep -qE 'pad-out|\.env|\.pending|node_modules' && fail t_handoff_bundle "copied a forbidden file" || ok t_handoff_bundle
 # t_handoff_trailer
-git -C "$d/repo" log -1 --format=%B origin/v1.0/integration | tail -1 | grep -qx "Claude-Session: $S" && ok t_handoff_trailer || fail t_handoff_trailer ""
+git -C "$d/repo" log -1 --format='%(trailers:key=Claude-Session,valueonly)' origin/v1.0/integration | grep -qx "$S" && ok t_handoff_trailer || fail t_handoff_trailer ""
 # t_handoff_keyscan_refuses: a planted value stops it, nothing pushed
 before=$(git -C "$d/repo" rev-parse origin/v1.0/integration); echo "k=sk-test-0123456789abcdef" >> "$d/night/lanes/integrator.log"
 CLAUDE_API_KEY=sk-test-0123456789abcdef GC_SESSION=$S GC_REPO=$d/repo GC_NIGHT=$d/night bash "$d/tools/handoff.sh"; rc=$?
@@ -361,7 +369,7 @@ Expected at the red run: FAIL at `t_handoff_bundle` (`missing ledger/integrator.
 - [ ] **Step 3: Implement the `handoff.sh` copy list, keyscan gate, README rows, and `install.sh --night`**
 - [ ] **Step 4: Commit the implementation (no box; the pass is proven in the slice box, Task 10)**
 Run: `git -C "$WT" add -A && git -C "$WT" commit -qm "feat(conductor): handoff copies ledger and reports behind keyscan; install restores state"`. Slice-box command for this task: `bash $C/test/test_handoff.sh && bash $C/test/test_install.sh`.
-Expected: `5 passed, 0 failed`; install test still `6 passed`.
+Expected: `5 passed, 0 failed`; install test still `7 passed`.
 - [ ] **Step 5: Push the branch**
 
 ### Task 9: What the next session reads
@@ -374,11 +382,11 @@ Expected: `5 passed, 0 failed`; install test still `6 passed`.
 - Consumes: `keyscan.NAMES` (Task 7), `box.mjs snaps` and `spend` (Task 2), `install.sh` options (Tasks 3, 8), `gc-lane.js` args (Task 4).
 - Produces:
   - `handoff-head.md` gains a "Sandbox proxy patch" section: what (`base-client.js` ESM import to `EnvHttpProxyAgent`, CJS through `proxy-preload.cjs`), why (the SDK's `undici.Agent` ignores `HTTPS_PROXY`), and that `install.sh` applies it; and a "Start in a new container" section: `install.sh --dest ... --repo ... --night ... --wt ... --session ...`, `export NODE_OPTIONS=...` for `sbx.mjs`, `box.mjs snaps`. Paths written as `$GC_NIGHT`, `$GC_TOOLS`, `$GC_WT`.
-  - `STATE.md`: the ledger summary at its write time: integration head; merged packages since 31 Oct by PRD (from `ledger/integrator.log` merge lines); open branches (`v1.0/prd-05-masking-exact-trie-matcher`); rulings `OWN-1` to `OWN-11`, next `OWN-12`; the four answered owner asks (22:05Z, 22:03Z, 22:27Z, 20:32Z) and the open asks list from spec section 5; the spend line from `box.mjs spend --since 2026-10-30T00:00:00Z --model-usd 27 --ledger`.
-  - `SECRETS.md`: the 14 names, one per line as `` - `NAME`: what reads it ``, plus "push access to `v1.0/*`" and "network access to the Vercel API", and the rule "check by name only".
+  - `STATE.md`: the ledger summary at its write time: integration head; merged packages since 31 Oct by PRD (from `ledger/integrator.log` merge lines); open branches (`v1.0/prd-05-masking-exact-trie-matcher`); rulings `OWN-1`, `OWN-2`, `OWN-3`, `OWN-5` to `OWN-11` (there is no `OWN-4`), next `OWN-12`; the four answered owner asks (22:05Z, 22:03Z, 20:32Z, and the 19:17Z gateway rule behind the 22:00Z Codex pin note) and the open asks list from spec section 5; the spend line from `box.mjs spend --since 2026-10-30T00:00:00Z --model-usd 27 --ledger`.
+  - `SECRETS.md`: the 14 names, one per line as `` - `NAME`: what reads it ``, plus "push access to `v1.0/*`" and "network access to the Vercel API", the rule "check by name only", and one line of non-secret prerequisites: Node 22 with npm, `python3.11`, `python3` 3.9 or later, `git`, `gh`, `flock`, `tar`, `npx wrangler`.
   - `snapshots.md`: the output of `node box.mjs snaps` (ids, expiry; build and pad ids marked).
-  - `owner-decisions-draft.md`: one numbered line per owner answer not yet in `OWNER-DECISIONS.md`, each ending with its ledger time: 06:17Z (keys and box length), 17:44Z and 18:04Z (exact-value masking, sources 1 to 3), 18:56Z (Hermes `state.db` until a link reader), 19:17Z and 19:31Z (gateway model and the cheap-model rule), 20:32Z (deltas-only stated loss), 20:35Z (sandbox cost rule), 22:03Z (Hermes C2 on task logs), 22:05Z (cap 32, then the single-pass matcher), and the section of `OWNER-DECISIONS.md` it belongs in; a head line saying the owner copies these, agents never edit that file. Owner wording is quoted, so model names may appear here.
-  - `NEW-SESSION-PROMPT.md`: `/root/gc-night/finish/NEW-SESSION-PROMPT.md` rewritten so that: step 1 is `install.sh --dest $HOME/gc-tools --repo <checkout> --night $HOME/gc-night --wt $HOME/gc-wt --session <this session's URL> --coauthor "<this session's co-author line>" --lane-dir <working dir>` (with `--night` only when `$HOME/gc-night` is absent); the stop condition names `ledger/integrator.log`, `package.json`, `install.sh` and the `handoff-head.md` patch section; step 3 is `box.mjs snaps`; lane starts pass `session` and `paths`; the model pin is described as "the pinned cheap model in the rig's harness files", with no model ids; secrets point to `SECRETS.md`; "first action: one ledger line `Conductor resumed in a new session at <time>Z on <head>.`".
+  - `owner-decisions-draft.md`: one numbered line per owner answer not yet in `OWNER-DECISIONS.md`, each starting with its ledger time (as the committed draft does): 06:17Z (keys and box length), 17:44Z and 18:04Z (exact-value masking, sources 1 to 3), 18:56Z (Hermes `state.db` until a link reader) and 19:42Z (no other file carries the links, so the `state.db` drop was unparked and merged at 20:12Z as `88329c47`; the 18:19Z "not merged" line is marked superseded), 19:17Z and 19:31Z (gateway model and the cheap-model rule), 20:32Z (deltas-only stated loss), 20:35Z (sandbox cost rule), 22:03Z (Hermes C2 on task logs), 22:05Z (cap 32, then the single-pass matcher), and the section of `OWNER-DECISIONS.md` it belongs in; a head line saying the owner copies these, agents never edit that file. Owner wording is quoted, so model names may appear here.
+  - `NEW-SESSION-PROMPT.md`: `/root/gc-night/finish/NEW-SESSION-PROMPT.md` rewritten so that: step 1 is `install.sh --dest $HOME/gc-tools --repo <checkout> --night $HOME/gc-night --wt $HOME/gc-wt --session <this session's URL> --coauthor "<this session's co-author line>" --lane-dir <working dir>` (with `--night` only when `$HOME/gc-night` is absent); the stop condition names `ledger/integrator.log`, `package.json`, `install.sh` and the `handoff-head.md` patch section; step 3 is `box.mjs snaps`; lane starts pass `session` and `paths`; the model pin is described as "the pinned cheap model in the rig's harness files", with no model ids; models per task named by class only (most capable, mid-size, smallest), with Claude Code rows on the pin in `scripts/pad/harnesses/claude-code-cli.toml:24-30`; "if `v1.0/conductor-handover` is not on integration, install the tools from that branch, then queue its merge through `merge.sh` (one gate); never push a local merge"; secrets point to `SECRETS.md`; "first action: one ledger line `Conductor resumed in a new session at <time>Z on <head>.`".
   - `reports/README.md`: a table `| Report | Head | What it shows |`, one row per `reports/*.txt` copied by Task 10, each row read from that report's first three lines.
 
 - [ ] **Step 1: Write the failing test** `test/test_docs.sh`
@@ -411,32 +419,32 @@ Run: `git -C "$WT" add -A && git -C "$WT" commit -qm "docs(conductor): state, se
 Expected: `7 passed, 0 failed`.
 - [ ] **Step 5: Push the branch**
 
-### Task 10: The slice box, keyscan of the tree, merge train and first handoff
+### Task 10: The slice box, keyscan of the tree, the one train and first handoff
 
 **Files:**
 - Create: `$C/test/run-all.sh`, `$C/test/red-green.sh`, `$C/test/fresh-clone.sh`
 
 **Interfaces:**
 - Consumes: everything above.
-- Produces: `test/run-all.sh` runs every `test/test_*.sh`, `test/test_*.mjs` and `python3 -m unittest discover -s test -p 'test_*.py'` from the repo root, prints one `PASS <file>` or `FAIL <file>` line each, exit 1 on any failure. `test/red-green.sh BASE` for each commit in `BASE..HEAD` whose subject ends ` [red]`: checks it out in a scratch worktree, runs the one test file that commit added, and requires a nonzero exit (`RED-OK <subject>`, else `RED-MISSING <subject>` and exit 1); then runs `run-all.sh` at HEAD. `test/fresh-clone.sh`: with a new temp `HOME`, runs `install.sh --dest $HOME/gc-tools --repo ~/w --night $HOME/gc-night` (real `npm ci`), then asserts `grep -c EnvHttpProxyAgent $HOME/gc-tools/node_modules/@vercel/sandbox/dist/api-client/base-client.js` is 1, `node $HOME/gc-tools/box.mjs --help` exits 0, `GC_REPO=~/w bash $HOME/gc-tools/mergeq.sh 1` exits 0 on an empty queue, and `grep -rnE '/root/|/home/user' $HOME/gc-tools --include='*.sh' --include='*.mjs' --include='*.js' --include='*.cjs' --include='*.py'` prints nothing; prints `no ledger yet` when `$C/ledger/` is absent, else asserts `$HOME/gc-night/lanes/integrator.log` exists.
+- Produces: `test/run-all.sh` runs every `test/test_*.sh`, `test/test_*.mjs` and `python3 -m unittest discover -s test -p 'test_*.py'` from the repo root, prints one `PASS <file>` or `FAIL <file>` line each, exit 1 on any failure. `test/red-green.sh BASE` (BASE is a commit, sha or name) walks `git rev-list --reverse BASE..HEAD`; for each commit whose subject ends ` [red]`: checks it out in a scratch worktree, runs the `test/test_*` file that commit added, and requires a nonzero exit (`RED-OK <subject>`, else `RED-MISSING <subject>` and exit 1); then runs `run-all.sh` at HEAD. `test/fresh-clone.sh`: with a new temp `HOME`, runs `install.sh --dest $HOME/gc-tools --repo ~/w --night $HOME/gc-night` (real `npm ci`), then asserts `grep -c EnvHttpProxyAgent $HOME/gc-tools/node_modules/@vercel/sandbox/dist/api-client/base-client.js` is 1, `node $HOME/gc-tools/box.mjs --help` exits 0, `GC_REPO=~/w bash $HOME/gc-tools/mergeq.sh 1` exits 0 on an empty queue, and `grep -rnE '/root/|/home/user' $HOME/gc-tools --include='*.sh' --include='*.mjs' --include='*.js' --include='*.cjs' --include='*.py'` prints nothing; asserts `$HOME/gc-night/lanes/integrator.log` exists and its `.scribed` equals `$C/ledger/integrator.log.scribed` (the ledger is in `$C/ledger/` from Task 1).
 
 - [ ] **Step 1: Write `run-all.sh`, `red-green.sh`, `fresh-clone.sh`** as above.
 - [ ] **Step 2: Commit them** (`chore(conductor): slice box scripts`; no red commit: these are the harness, proven by the box run itself).
 - [ ] **Step 3: Set up the box runner**
 `ln -s /root/gc-tools/node_modules "$WT/$C/node_modules"; BOXJS=$WT/$C/box.mjs; BOXV="--vcpus 2"`
 - [ ] **Step 4: The one slice box**
-Run (conductor, starts one box): `J=$(mktemp "$GC_WT/job.XXXXXX"); printf 'set -e\nbash %s/test/red-green.sh origin/v1.0/integration\nbash %s/test/fresh-clone.sh\n' "$C" "$C" > "$J"; node "$BOXJS" run --repo "$WT" --ref HEAD --script "$J" --minutes 15 $BOXV; rm -f "$J"` (the bundle carries `origin/v1.0/integration` as `refs/remotes/b/...`; `red-green.sh` takes the merge base of HEAD with it when the name is missing).
-Expected: nine `RED-OK` lines (Tasks 1 to 9), every `PASS` line from `run-all.sh` (test_lib 8, test_box 6, test_install 6, test_gc_lane 4, test_pad_drivers 4, test_dbfetch 3, test_keyscan 7, test_handoff 5, test_docs 7), then the fresh-clone asserts with `no ledger yet`, `[box] exit 0`. On a failure: fix every finding in one batch, then one more box (the owner's one fix round).
+Run (conductor, starts one box): `BASE=$(git -C "$WT" rev-parse origin/v1.0/integration); J=$(mktemp "$GC_WT/job.XXXXXX"); printf 'set -e\ncargo fmt --all --check\nbash %s/test/red-green.sh %s\nbash %s/test/fresh-clone.sh\n' "$C" "$BASE" "$C" > "$J"; node "$BOXJS" run --repo "$WT" --ref HEAD --script "$J" --minutes 15 $BOXV; rm -f "$J"`. The box sees no branch names (the bundle holds one temporary ref), so the base goes in as a sha; its commit is in the bundle as an ancestor of HEAD.
+Expected: nine `RED-OK` lines (Tasks 1 to 9), every `PASS` line from `run-all.sh` (test_lib 8, test_box 6, test_install 7, test_gc_lane 4, test_pad_drivers 4, test_dbfetch 3, test_keyscan 7, test_handoff 5, test_docs 7), then the fresh-clone asserts including the restored ledger, `[box] exit 0`. On a failure: fix every finding in one batch, then one more box (the owner's one fix round).
 - [ ] **Step 5: Keyscan the tree and the history (conductor, real env, no box)**
 Run: `python3 "$WT/$C/keyscan.py" "$WT"` and `L=$(mktemp); git -C "$WT" log -p --since=2026-10-30 HEAD > "$L"; python3 "$WT/$C/keyscan.py" "$L"; rm -f "$L"`
 Expected: both `keyscan: 0 hit(s), 14 keys checked, unset: none`. A hit stops the task and goes to the owner.
 - [ ] **Step 6: Final whole-branch review (read-only, no box)**
 One review of `git diff origin/v1.0/integration...HEAD` against this plan's Global Constraints and Review Focus. Every finding is fixed in one batch (and rerun in the one fix-round box if it touches code) before Step 7.
-- [ ] **Step 7: Queue the merge as its own small train**
-Write `{"branch": "v1.0/conductor-handover", "message": "conductor handover: portable tools, proxy patch, keyscan, state docs", "refresh_lock": false}` to `$GC_NIGHT/mrq/$(date -u +%H%M%S)-conductor-handover.req` (via a `.tmp` name and `mv`). The conductor runs it at once as a train of this one branch (one gate on its head); it does not wait for, or join, the code-wave train. Branches already queued for the code-wave train stay queued and rebase on the result.
-Expected: `<id>.res` with `"exit": 0`; the ledger shows `merge ... v1.0/conductor-handover ...`.
+- [ ] **Step 7: Ready for the one train (no request of its own)**
+Push, then one ledger line `<HH:MM>Z | conductor-handover | ready for the train | <head 8>`. Write no `.req`: `mergeq.sh` runs `merge.sh` once per request and each run is a gate, so the conductor writes ONE request for the whole train (mini plan Task 11 Step 3) with this branch in its comma-joined `branch` list. If the train is already gone when this lane is ready, the branch rides the next train (the table train, long-runs Task 8 Step 6); never a train of its own.
+Expected: the train's `<id>.res` with `"exit": 0`; the ledger shows `merge ... v1.0/conductor-handover ...`.
 - [ ] **Step 8: Install the merged tools and push the first full handoff (conductor, no box)**
-Only when no merge is in flight (no `$GC_NIGHT/mrq/*.claimed`). Lanes started after this pass `session` and `paths` (Task 4).
+After the train merges and only when no merge is in flight (no `$GC_NIGHT/mrq/*.claimed`) and no row is running from the old tools. Lanes started after this pass `session` and `paths` (Task 4).
 ```bash
 git -C /home/user/goal-cup-proxy fetch -q origin
 git -C /home/user/goal-cup-proxy worktree add -q --detach "$GC_WT/handover-install" origin/v1.0/integration
@@ -455,8 +463,9 @@ Expected: `scribed <n> lines`, then `handoff pushed <sha>` (its keyscan 0 hits).
 2. Step scan: each code step names its file, signature and pinned values; test steps carry assertions.
 3. Type consistency: `gc_trailer`, `gc_need_repo`, `GC_*` names, `sessionMinutes`, `ledgerLine`, `keyscan.NAMES`, `scan`, `scrub`, `install.sh` options and `args.paths` keys match across tasks.
 4. Review Focus: all five have tests in their owning tasks (1, 4, 7, 7, 8, 3).
-5. Box use and merge shape (re-checked against the owner-approved execution shape): one slice box (Task 10 Step 4), at most one more for the single fix round, one gate for the small tool train (not the code-wave train), no box per task. The Execution section names a lane, order and model for every task.
+5. Box use and merge shape (re-checked against the owner-approved execution shape and the two 1 Nov reviews): one slice box (Task 10 Step 4, with `cargo fmt --all --check` and the base passed as a sha), at most one more for the single fix round, no gate of its own (the branch is one name in the conductor's one train request), no box per task. The Execution section names a lane, order and model class for every task.
 6. Proportion: bodies given only for exact copy (the patch line, the preload, trailer text, ledger line format) and for the test assertions.
+7. Review fixes applied: the box base is a sha (B1); one train request, none from the lane (B2); `install.sh --skip-npm` without an SDK exits 0 (B3); the new-session prompt names model classes, so `t_no_model_ids` holds (B4); the trailer test reads the trailer, not the last line (B5); one layout, `tools/` and `state/` moved in Task 1 (F1); `rowinfo.py` travels (F2); the Hermes `state.db` outcome and the pin citation in the draft (F3, F4); no local merge by a fresh session (F9); `TOOLS.md` hold wording (F8).
 
 ---
 
@@ -466,14 +475,14 @@ Lane script: `docs/plans/2026-10-30-v1.0/conductor/gc-lane.js` (the current one 
 
 | Lane | Tasks | Starts | Model |
 |---|---|---|---|
-| tools portability | 1, 2, 3, 4 (in order; 1 first) | now | sonnet |
-| run scripts | 5, 6 (write against the Interfaces blocks of Tasks 1, 3, 7) | now, parallel | sonnet |
-| state files | 7, then 8 and 9 | 7 now, parallel; 8 and 9 wait for the tools lane (they edit `install.sh`, `handoff.sh`, `handoff-head.md`) | sonnet |
-| keyscan runs | Task 7 CLI runs, Task 9 Step 3 and Task 10 Step 5 scans | after the lane that needs them | haiku |
-| copying | verbatim copies (Task 6 `idx.sh`, `install.sh`; Task 9 `snaps`; Task 10 Step 8 install and handoff) | with its task | haiku |
-| assembly | merge the three lane branches into `v1.0/conductor-handover` (merge commits), fix conflicts, push | when all lanes are done | sonnet |
-| slice box | Task 10 Steps 1 to 5 | after assembly | sonnet |
-| final review | Task 10 Step 6, whole branch, read-only | after the slice box passes | default (most capable) |
-| small train | Task 10 Steps 7 and 8 | after a clean review | sonnet |
+| tools portability | 1, 2, 3, 4 (in order; 1 first) | now | mid-size |
+| run scripts | 5, 6 (write against the Interfaces blocks of Tasks 1, 3, 7) | now, parallel | mid-size |
+| state files | 7, then 8 and 9 | 7 now, parallel; 8 and 9 wait for the tools lane (they edit `install.sh`, `handoff.sh`, `handoff-head.md`) | mid-size |
+| keyscan runs | Task 7 CLI runs, Task 9 Step 3 and Task 10 Step 5 scans | after the lane that needs them | smallest |
+| copying | verbatim copies (Task 6 `idx.sh`, `install.sh`; Task 9 `snaps`; Task 10 Step 8 install and handoff) | with its task | smallest |
+| assembly | merge the three lane branches into `v1.0/conductor-handover` (merge commits), fix conflicts, push | when all lanes are done | mid-size |
+| slice box | Task 10 Steps 1 to 5 | after assembly | mid-size |
+| final review | Task 10 Step 6, whole branch, read-only | after the slice box passes | most capable |
+| ready and install | Task 10 Step 7 (ledger line); Step 8 after the one train merges | after a clean review | mid-size |
 
-Order: the three build lanes run together (beside the other plans' code-wave lanes), then assembly, one slice box, final review, small train. The small train and the Task 10 Step 8 install come before the H1 build: the mini-test wave and the one-hour runs use `/root/gc-tools/padrun.sh`, `keyscan.py` and `proxy-preload.cjs`. Boxes: 1 slice box (2 with the fix round), 1 gate. No task here is core design, so the most capable model is used only for the final review (and for the owner-asked breaker, if one is requested).
+Order: the three build lanes run together (beside the other plans' code-wave lanes), then assembly, one slice box, final review, ready for the one train. Off the critical path: the composite wave runs tonight on the tools already on the conductor; the Task 10 Step 8 install comes after the train merges, and the one-hour runs use the installed `$GC_TOOLS`. Boxes: 1 slice box (2 with the fix round), no gate of its own. No task here is core design, so the most capable model is used only for the final review (and for the owner-asked breaker, if one is requested).

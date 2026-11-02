@@ -4,9 +4,9 @@
 
 **Goal:** Check and merge the masking lane's single-pass trie matcher for exact values (PRD-05). Task 4 (one literal tracker per stream, no change to what is masked) is deferred to after 1.0 unless the one-hour runs show the recorder falling behind.
 
-**Architecture:** The lane's branch `v1.0/prd-05-masking-exact-trie-matcher` (head `21419832`, 4 code commits and 1 docs commit on top of `04044320`) already does the replacement. Up to 480 per-form regexes are gone. One trie over every form (`RunSecrets` in `values.rs`) does a set simulation that takes the line-break grammar in every gap. `find_all` feeds both the whole-record matcher and the release scan, through `rules::exact_candidates` and `Policy::claims`. The hold walks the same trie (`LiteralWalk`). Wave A checks this work, adds the missing edge-case tests, measures it (Tasks 1 and 2 share ONE release box) and hands it to the code-wave merge train. Wave B (Task 4, deferred) would replace the per-start `Walk::Literals` candidates with one `LiteralTrack` per `Scanner`.
+**Architecture:** The lane's branch `v1.0/prd-05-masking-exact-trie-matcher` (head `21419832`, 4 code commits and 1 docs commit on top of `04044320`) already does the replacement. Up to 480 per-form regexes are gone. One trie over every form (`RunSecrets` in `values.rs`) does a set simulation that takes the line-break grammar in every gap. `find_all` feeds both the whole-record matcher and the release scan, through `rules::exact_candidates` and `Policy::claims`. The hold walks the same trie (`LiteralWalk`). Wave A checks this work, adds the missing edge-case tests, measures it (Tasks 1 and 2 share ONE release box) and hands it to the one train. Wave B (Task 4, deferred) would replace the per-start `Walk::Literals` candidates with one `LiteralTrack` per `Scanner`.
 
-**Tech Stack:** Rust (crate `goalcup`), `regex` 1.x (kept only as the test oracle for exact values), cargo-nextest, Vercel Sandbox build boxes via `docs/plans/2026-10-30-v1.0/conductor/box.mjs`.
+**Tech Stack:** Rust (crate `goalcup`), `regex` 1.x (kept only as the test oracle for exact values), cargo-nextest, Vercel Sandbox build boxes via the installed `box.mjs` (`$GC_TOOLS/box.mjs`, `/root/gc-tools` tonight; the repo copy has no `node_modules`).
 
 **Spec:** `/root/gc-night/finish/FINISH-PLAN.md` (section 1 item 7, Wave 1 "Masking (PRD-05)", Wave 2 exit "trie merged"), `docs/plans/2026-10-30-v1.0/PRD-05-masking.md` sections 9 to 11 and the amendment "2026-11-01, single-pass exact-value matcher (owner decision)" on the branch, `/root/gc-night/lanes/integrator.log` 22:05Z owner answer.
 
@@ -16,14 +16,14 @@
 - What is masked does not change. That means the same values, the same forms (`encoded_forms`), the same break grammar ("LF or CR LF, raw, or escaped with one or two backslashes before each of `r` and `n`, at most one break per gap", never an escaped break right before a backslash of the form), the same block claims, priorities and rule names (`run_secret`, `fail_closed` last).
 - Exact-value masking uses sources 1 to 3 only. Values are held in memory, never written, hashed or logged. `Debug` prints a count, never a byte.
 - `MIN_VALUE_BYTES = 20`, `MAX_VALUE_BYTES = 256`, `MAX_VALUES = 32`, `MAX_FORM_BYTES = 7 * 256`. A value has 11 forms, 13 with one escape kind, 15 at most.
-- Same-length masking: masked bytes are `*`, one per byte. The quote cut keeps a value's own `"` (and the `\` before it) raw.
+- Same-length masking: masked bytes are `*`, one per byte, the quoted JSON and HTML-safe forms included (`mask_values.rs` `json_masked`, `a_value_with_html_bytes_is_masked_in_html_safe_json`).
 - Streaming: the joined output of a stream equals `mask_whole` however the input is split, as long as no hold reaches `MAX_HELD_BYTES = 16 * 1024` and live candidates stay at or below `MAX_CANDIDATES = 64`. Past either bound the stream fails closed (`fail_closed`).
 - Word guard: exact-value forms carry no guard (the old `Pattern::exact` had `guard: false`). The shared rules keep their left word boundary (OWNER-DECISIONS M1).
 - Targets (PRD-05 A5, section 11): `Masker::new` under 1 s and 64 MiB with 32 values of 256 bytes, and 50 MB/s on one worker. "No speed number fails a gate" (PRD-00). A floor test may only run in a release build.
 - The masker runs off the relay, so masking cost never slows the harness (point 3).
 - No new dependency in `crates/goalcup/Cargo.toml`: "A PRD that needs one more names it in the night log; PRD-02 adds it."
-- B2: at least two independent reviewers read each diff, one for correctness, the seven points and masking, and one for code quality and less code. B10: do not overbuild tests. "Less code is better. Cut before you add."
-- Nothing is compiled on the conductor. Every build and test runs in a Vercel Sandbox box through `box.mjs run`, or in the merge train's one gate. No box per task or per fix round: the lane gets ONE box, at the end of Tasks 1 and 2 together. Reviewers are read-only. The branch merges in the code-wave merge train (one gate on the combined head, bisect on failure), never alone. One build per commit, at most 2 pad boxes at once, no probe boxes, smallest box, short timeouts.
+- B2: at least two independent reviewers read each diff, one for correctness, the seven points and masking, and one for code quality and less code. The branch's code already had Reviewer A and the breaker (ledger 21:54Z, 23:17Z); the new tests and numbers get one correctness reviewer and one code-quality reviewer, and no third pass. B10: do not overbuild tests. "Less code is better. Cut before you add."
+- Nothing is compiled on the conductor. Every build and test runs in a Vercel Sandbox box through `box.mjs run`, or in the one train's gate. No box per task or per fix round: the lane gets ONE box, at the end of Tasks 1 and 2 together. Reviewers are read-only. The branch merges in the one train (the conductor's one request, one gate on the combined head, bisect on failure), never alone; this lane writes no `.req`. One build per commit, at most 2 pad boxes at once, no probe boxes, smallest box, short timeouts.
 - Tests use generated values only, never a real secret. No key on any command line.
 - Push only `v1.0/*` branches. Merge commits only, never force. No writes to `main`, tags, production or the website database. Never edit `OWNER-DECISIONS.md`.
 - No model names and no em dashes in docs. Commit trailers: `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>` and `Claude-Session: https://claude.ai/code/session_01V2hUmG4Ccnfp953KQMAUS6`.
@@ -167,9 +167,9 @@ fn a_value_next_to_invalid_utf8_is_masked_whole_and_streamed() -> Res {
     Ok(())
 }
 ```
-- [ ] **Step 3: Write the Task 1 half of the shared box job** `/root/gc-night/jobs/trie-box.sh` (no box is run here; Task 2 Step 3 runs it). The half runs `cargo nextest run --locked -p goalcup --test mask_values` on the branch head. Then it checks out `04044320` with this test file copied over and runs the same command (the old regex matcher is the oracle).
+- [ ] **Step 3: Write the Task 1 half of the shared box job** `/root/gc-night/jobs/trie-box.sh` (no box is run here; Task 2 Step 3 runs it). The job starts with `cargo fmt --all --check` (two of Sunday's three masking gates failed on format or a missing fixture, not on logic). The half runs `cargo nextest run --locked -p goalcup --test mask_values` on the branch head. Then it checks out `04044320` with this test file copied over and runs the same command (the old regex matcher is the oracle).
 Expected once the shared box has run: both runs PASS, so the output is unchanged. A test that passes on one matcher and fails on the other is a finding. A test that fails on both is a gap that was already there (for example, first-wins selection leaving the tail of value B raw where value A claimed its start). Report it to the conductor as a PRD-05 finding. Do not change selection in this slice, because what is masked must not change. Mark the test `#[ignore = "pre-existing: <finding id>"]`. Exception: on `04044320`, a FAIL of `a_value_of_256_escape_bytes_is_used_and_masked` only on `skipped` is the expected compile-limit difference. Name it in the amendment (Task 3) as the one stated change: such a value is now masked where it was skipped.
-- [ ] **Step 4: Fix all reviewer findings and shared-box test failures in one batch** in the owning file (`values.rs`, `rules.rs` or `stream.rs`). No second box: the fix is checked by the merge train's gate.
+- [ ] **Step 4: Fix all reviewer findings and shared-box test failures in one batch** in the owning file (`values.rs`, `rules.rs` or `stream.rs`). No second box: the fix is checked by the one train's gate.
 Expected: the gate PASSes the combined head.
 - [ ] **Step 5: Commit**
 ```bash
@@ -223,8 +223,8 @@ fn find_all_alone_is_far_above_50_mb_s() {
   - `cargo nextest run --locked --release -p goalcup --no-capture -E 'test(find_all_alone_is_far_above_50_mb_s) | test(exact_values_mask_above_a_floor)'`
   - `cargo test --locked --release -p goalcup --test mask_bench -- --ignored --nocapture by_hand_mask_bench`
 
-Run: `node docs/plans/2026-10-30-v1.0/conductor/box.mjs run --repo <wt> --ref v1.0/prd-05-masking-exact-trie-matcher --script /root/gc-night/jobs/trie-box.sh --minutes 30`
-Expected: PASS, both halves. The output prints `find_all_alone_is_far_above_50_mb_s: <F> MB/s` with F > 50, `Masker::new with 32 values of 256 bytes: <ms>` under 1000, a peak `VmHWM` under 65536 kB, and the generated Codex request lines with no values (S0) and with 32 values (S32).
+Run: `node "$GC_TOOLS/box.mjs" run --repo <wt> --ref v1.0/prd-05-masking-exact-trie-matcher --script /root/gc-night/jobs/trie-box.sh --minutes 30 --vcpus 4`
+Expected: `cargo fmt` clean, PASS, both halves. The output prints `find_all_alone_is_far_above_50_mb_s: <F> MB/s` with F > 50, `Masker::new with 32 values of 256 bytes: <ms>` under 1000, a peak `VmHWM` under 65536 kB, and the generated Codex request lines with no values (S0) and with 32 values (S32).
 - [ ] **Step 4: Record F, S0, S32, R, the `Masker::new` ms and the peak kB** in `/root/gc-night/jobs/trie-t2.numbers`, as numbers only, never a value byte. R does not start Task 4. It is the baseline for Task 4's trigger.
 - [ ] **Step 5: Commit**
 ```bash
@@ -239,7 +239,7 @@ git commit -m "test(mask): a release-only floor for the trie matcher alone"
 
 **Interfaces:**
 - Consumes: the Task 2 numbers and the Task 1 stated change, if there is one
-- Produces: the trie matcher merged into `v1.0/integration` through the code-wave merge train (the FINISH-PLAN Wave 2 exit "trie merged"). The conductor then builds the wave head on it, once.
+- Produces: the trie matcher merged into `v1.0/integration` through the one train (the FINISH-PLAN Wave 2 exit "trie merged"), so it is in H2, the build the one-hour runs use. The composite 10-minute wave does not wait for it (owner 22:05Z: "before the 2-hour runs").
 
 - [ ] **Step 1: Edit the two PRD-05 passages.** Add F next to the stream rate. Say that the matcher alone is above 50 MB/s, and that the 50 MB/s stream target is held back by the shared rules (14.6 MB/s alone) and by the hold (R). Name the 256-escape-byte value change if Task 1 found it. Name Task 4 as deferred to after 1.0, with its trigger (Wave B). Do not edit PRD-02: the core docs lane owns the cost line there (FINISH-PLAN Wave 1, "Core docs"), and it gets these numbers from `/root/gc-night/jobs/trie-t2.numbers`. Use no model names and no em dashes.
 - [ ] **Step 2: Check the docs text without a box:** `grep -n $'\xe2\x80\x94' docs/plans/2026-10-30-v1.0/PRD-05-masking.md`
@@ -250,7 +250,7 @@ git add docs/plans/2026-10-30-v1.0/PRD-05-masking.md
 git commit -m "docs(prd-05): measured cost of the single-pass matcher"
 git push origin v1.0/prd-05-masking-exact-trie-matcher
 ```
-- [ ] **Step 4: Join the merge train.** The conductor diffs the branch against `v1.0/integration`, reads its note and queues it with the other code-wave lane branches through `mergeq.sh`. The train runs ONE gate (`sh scripts/gate.sh fast`, the floor tests skip themselves in that debug build) on the combined head. On failure the conductor bisects the train.
+- [ ] **Step 4: Ready for the one train.** Ledger `ready for the train`; no `.req`. The conductor diffs the branch against `v1.0/integration`, reads its note and names it in its ONE train request (mini plan Task 11 Step 3: `branch` is the comma-joined list, so `mergeq.sh` runs `merge.sh` once and the train runs ONE gate (`sh scripts/gate.sh fast`, the floor tests skip themselves in that debug build) on the combined head). On failure the conductor bisects the train by requeueing a comma-joined subset.
 Expected: the train's `<id>.res` reads PASS, and `git merge-base --is-ancestor origin/v1.0/prd-05-masking-exact-trie-matcher origin/v1.0/integration` exits 0. The merge is a merge commit.
 
 ---
@@ -332,7 +332,7 @@ Run: no box. Commit the test first; the Step 4 job (the task's ONE box) runs on 
 Expected on the test commit: FAIL to compile with "cannot find type `LiteralTrack`".
 - [ ] **Step 3: Implement `LiteralTrack` in `values.rs`** using the Produces signatures. `step` runs one iteration of `find_all`'s inner loop over `live`, plus a root start at `off`. It keeps `live` sorted by start, with the earliest start per equal `State`. Then wire it into `stream.rs` as listed under Files. In `release`, the cut is `min(candidates' starts, literals.hold_from(), end)`. In `finish_cut`, a discontinuity uses `literals.secret_from()` beside the candidates' `secret_from`. Delete `LiteralWalk` from non-test code, and `Walks` with it.
 - [ ] **Step 4: Run the masking suites, then the speed check, in one box**
-Run: `node docs/plans/2026-10-30-v1.0/conductor/box.mjs run --repo <wt> --ref v1.0/prd-05-masking-literal-hold --script /root/gc-night/jobs/trie-t4.sh --minutes 30`, with the job running `cargo nextest run --locked -p goalcup mask` (every masking unit and integration test, including Task 1's five and `the_trie_finds_what_the_per_form_matchers_found`). Then it runs Task 2's release job.
+Run: `node "$GC_TOOLS/box.mjs" run --repo <wt> --ref v1.0/prd-05-masking-literal-hold --script /root/gc-night/jobs/trie-t4.sh --minutes 30 --vcpus 4`, with the job running `cargo fmt --all --check` and `cargo nextest run --locked -p goalcup mask` (every masking unit and integration test, including Task 1's five and `the_trie_finds_what_the_per_form_matchers_found`). Then it runs Task 2's release job.
 Expected: PASS. `by_hand_mask_bench` prints S32/S0 >= 0.8 on the generated Codex request. `exact_values_mask_above_a_floor` and `backslash_runs_before_values_never_fail_closed` show no `fail_closed` byte. If R stays below 0.8, keep the change only if it is shorter than the code it removes (less code). Otherwise drop the branch and write the reason into the PRD-05 amendment.
 - [ ] **Step 5: Amend PRD-05** section 11 and the amendment with the new S32 and R, and state that what is masked is unchanged. The one difference is that `fail_closed` can fire no earlier than before, because equal literal states from different starts now count once.
 - [ ] **Step 6: Commit, review, push, queue**
@@ -341,7 +341,7 @@ git add crates/goalcup/src/mask/values.rs crates/goalcup/src/mask/stream.rs docs
 git commit -m "perf(mask): one literal tracker per stream instead of a candidate per start"
 git push origin v1.0/prd-05-masking-literal-hold
 ```
-Two reviewers read the diff (B2). Then the conductor joins it to a merge train, as in Task 3 Step 4. Expected: the train's `<id>.res` PASS, merged with a merge commit.
+Two reviewers read the diff (B2). Then the conductor names it in a train request, as in Task 3 Step 4. Expected: the train's `<id>.res` PASS, merged with a merge commit.
 
 ---
 
@@ -350,24 +350,33 @@ Two reviewers read the diff (B2). Then the conductor joins it to a merge train, 
 1. **(Owner) The per-stream "far above 50 MB/s" target is not reachable in PRD-05's exact-value scope.** One stream of the shared rules alone measures 14.6 MB/s. This plan holds the matcher alone to more than 50 MB/s (Task 2), and the stream with 32 values to at least 0.8 of the no-value rate (Task 4). The 50 MB/s per stream stays with PRD-05 section 11 items 3 (dispatch) and 4 (PRD-02's pool).
 2. **(Owner) "Aho-Corasick" became the lane's own trie with a set simulation, and no crate was added.** A literal multi-pattern matcher cannot take a line break inside a form, and the manifest is PRD-02's. `aho-corasick 1.1.5` is already in `Cargo.lock` (pulled in by `regex`) if the owner wants the crate instead. Confirm the trie.
 3. **The floor tests run in every tier, while PRD-05's PRD-14 row says `mask_bench.rs` has "no floor and never fails the gate".** Both floor tests skip themselves in the debug builds that `gate.sh fast` and `full` run, so they never fail the gate. Keep them, or mark them `#[ignore]`.
-4. **Task 4 is deferred** to after 1.0 unless the one-hour runs show the recorder falling behind (see Wave B). The one-hour runs wait only for the trie (Task 3).
+4. **Task 4 is deferred** to after 1.0 unless the one-hour runs show the recorder falling behind (see Wave B). The one-hour runs wait only for the trie (Task 3, in the one train).
+
+---
+
+## Self-review
+
+1. Spec coverage: owner 22:05Z single-pass matcher checked (Task 1), measured alone and in the stream (Task 2), written into PRD-05 and merged in the one train before the one-hour runs (Task 3); Wave B deferred with its trigger (Task 4).
+2. Box and merge shape (owner execution shape and the 1 Nov reviews): one release box at `--vcpus 4` through the installed `box.mjs`, starting with `cargo fmt --all --check`; no gate of its own; no lane request, the conductor's one train request names the branch; the `04044320` oracle checkout works in the box because that commit is an ancestor in the bundle.
+3. Reviews: the new diff gets B2's two reviewers (one most capable, one mid-size) and no third pass, since the branch's code already had two.
+4. Type consistency: `RunSecrets::new`, `find_all`, `Rng`, `text`, `F`, `S0`, `S32`, `R` match across Tasks 1, 2 and 4.
+5. Global Constraints: the quote-cut sentence now matches the passing quoted-form tests.
 
 ---
 
 ## Execution
 
-Lane script: `docs/plans/2026-10-30-v1.0/conductor/gc-lane.js`. One lane, the existing branch `v1.0/prd-05-masking-exact-trie-matcher`, running in parallel with the other code-wave lanes. Tasks 1 to 3 are sequential inside the lane. The lane gets no box per task and none per fix round: ONE release box runs Tasks 1 and 2 together, at the end of the slice. Reviewers are read-only. Task 3 ends when the branch joins the code-wave merge train (one gate on the combined head, bisect on failure). Task 4 is not scheduled; it starts only on the Wave B trigger, after 1.0, as its own lane after Task 3 is merged.
+Lane script: `docs/plans/2026-10-30-v1.0/conductor/gc-lane.js`. One lane, the existing branch `v1.0/prd-05-masking-exact-trie-matcher`, running in parallel with the other code-wave lanes. Tasks 1 to 3 are sequential inside the lane. The lane gets no box per task and none per fix round: ONE release box runs Tasks 1 and 2 together, at the end of the slice. Reviewers are read-only. Task 3 ends when the branch is in the one train (one request, one gate on the combined head, bisect on failure). Task 4 is not scheduled; it starts only on the Wave B trigger, after 1.0, as its own lane after Task 3 is merged.
 
 | Task | Work | Model |
 |---|---|---|
-| 1 | Two read-only reviewers on the diff (correctness and masking; code quality) | default (most capable) |
-| 1 | Write the five tests, the shared box job, apply the batched fixes | sonnet |
-| 2 | Write the release-only test, run the shared box, read and record the numbers | sonnet |
-| 2 | Keyscan of `trie-t2.numbers` before it is shared | haiku |
-| 3 | PRD-05 edits, push, hand to the merge train | sonnet |
-| 3 | Merge-train assembly and bisect | sonnet |
-| 4 (deferred) | `LiteralTrack`, `stream.rs` wiring, its two reviewers | default (most capable) |
-| 4 (deferred) | Tests run, PRD-05 amendment | sonnet |
-| whole lane | Final whole-branch review before the train | default (most capable) |
+| 1 | Read-only reviewer on the new tests and numbers: correctness and masking | most capable |
+| 1 | Read-only reviewer: code quality and less code | mid-size |
+| 1 | Write the five tests, the shared box job, apply the batched fixes | mid-size |
+| 2 | Write the release-only test, run the shared box, read and record the numbers | mid-size |
+| 2 | Keyscan of `trie-t2.numbers` before it is shared | smallest |
+| 3 | PRD-05 edits, push, ready for the one train | mid-size |
+| 4 (deferred) | `LiteralTrack`, `stream.rs` wiring, its two reviewers | most capable |
+| 4 (deferred) | Tests run, PRD-05 amendment | mid-size |
 
-Boxes: 1 release box (2 with its fix round), no gate or build of its own. The trie reaches the waves through H1, the code-wave train head the mini-test plan builds once.
+Boxes: 1 release box (2 with its fix round), no gate or build of its own. The trie reaches the one-hour runs through H2, the one train's head the mini-test plan builds once.

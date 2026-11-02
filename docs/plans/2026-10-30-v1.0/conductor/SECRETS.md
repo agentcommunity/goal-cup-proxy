@@ -25,3 +25,10 @@ Never write a value into any file in this repository. Set these in the container
 ## Network
 
 Full outbound access is needed: GitHub, the sandbox API, npm and crates registries, the Worker staging host, R2, the AI Gateway host and each model host. In the old container all traffic went through `HTTPS_PROXY`, which is why the sandbox SDK needs the patch in TOOLS.md. The conductor cannot reach Postgres directly; it reaches the database only through a short-lived sandbox that holds `DATABASE_URL` at mode 0600, removed after the query, and the box is deleted (owner approved 1 November, 04:45Z).
+
+## Prerequisites (not secrets)
+
+- Network: see the list above. Push access: `GH_TOKEN` can push `v1.0/*` branches of `agentcommunity/goal-cup-proxy` (nothing else is pushed).
+- Secret names to set: the ten rows in the table above, plus `HTTPS_PROXY` if the container is behind a proxy (the sandbox SDK needs the patch in TOOLS.md).
+- Node 22 with npm (the repo and `@vercel/sandbox` need it; the box snapshot also has Node 22), `python3.11` for `padrun.sh` (`python3` 3.9 or newer with the standard library is enough for `keyscan.py`, `scrub*.py`, `rowinfo.py`, `summ.py`), `git`, `gh`, `flock`, `tar`, and `npx wrangler` for the staging Worker deploy.
+- Check with `node --version`, `python3.11 --version`, `git --version`, `gh --version`, `command -v flock tar`. Do not compile or test the product on the conductor; builds and tests run only in sandboxes.
