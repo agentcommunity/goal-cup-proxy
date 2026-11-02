@@ -52,6 +52,20 @@ fi
 } > "$dest/env.sh"
 chmod 0644 "$dest/env.sh"
 
+# --night restores the ledger into a night folder; an existing file is never replaced.
+if [ -n "$night" ]; then
+  mkdir -p "$night"/{lanes,mrq/done,gate-logs,status,reviews,builds,finish} || exit 1
+  : >> "$night/integration.lock"
+  for f in "$SRC"/ledger/*.log; do
+    [ -f "$f" ] || continue
+    for g in "$f" "$f.scribed"; do
+      [ -f "$g" ] || continue
+      b=$(basename "$g")
+      if [ -e "$night/lanes/$b" ]; then echo "kept existing $b"; else cp "$g" "$night/lanes/$b"; fi
+    done
+  done
+fi
+
 if [ -n "$lane" ]; then
   mkdir -p "$lane" && cp "$SRC/gc-lane.js" "$lane/gc-lane.js" || exit 1
 fi
