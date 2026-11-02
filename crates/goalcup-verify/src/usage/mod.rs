@@ -14,7 +14,7 @@ mod sqlite;
 mod sse;
 mod wire;
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
@@ -472,7 +472,8 @@ impl Calls {
             }
         }
         // Each native call, in time order, takes the earliest unmatched ok wire call that ends
-        // 120 s before to 5 s after it; of its own thread where the wire names threads.
+        // 120 s before to 5 s after it; of its own thread where the wire names threads. A wire
+        // call in that span whose usage equals the native call's goes first.
         let mut wires: Vec<usize> = (0..rows.len()).filter(|&w| ok(&rows[w])).collect();
         wires.sort_by_key(|&w| rows[w].wall_end);
         let mut order: Vec<usize> = (0..nat.len()).filter(|&n| pair[n].is_none()).collect();
@@ -490,7 +491,10 @@ impl Calls {
                 !taken[w] && (!per_thread || nr.thread.is_some() && rows[w].thread == nr.thread)
             };
             let from = wires.partition_point(early);
-            if let Some(&w) = wires[from..].iter().take_while(near).find(free) {
+            let mut span = wires[from..].iter().take_while(near).filter(free);
+            let first = span.clone().next();
+            let same = |&&w: &&usize| same_usage(&rows[w].tokens, &nr.tokens);
+            if let Some(&w) = span.find(same).or(first) {
                 (taken[w], pair[n]) = (true, Some(w));
                 joined_by_time += u64::from(by_id);
             }
@@ -517,11 +521,13 @@ impl Calls {
         // Zero native calls is not a readable leg when the wire had calls, or when native streams
         // were read (threads) or a model host was named not on the wire.
         let seen = rows.iter().any(ok) || !leg.threads.is_empty() || !base.not_on_wire.is_empty();
+        // A connector with wire ids only has no native reader at all.
         let none = (nat.is_empty() && seen).then_some(Reason::NoNative);
-        let reason = leg
-            .unreadable
-            .then_some(Reason::SnapshotUnreadable)
-            .or(none);
+        let reason = match leg.unreadable {
+            _ if !hints::reads_native(c) => Some(Reason::NoReader),
+            true => Some(Reason::SnapshotUnreadable),
+            false => none,
+        };
         let mut threads = leg.threads;
         let mut per: HashMap<&str, (u64, u64)> = HashMap::new();
         for x in &nat {
@@ -534,9 +540,19 @@ impl Calls {
             (t.native_calls, t.native_only) = per.get(t.id.as_str()).copied().unwrap_or_default();
         }
         let known: HashSet<String> = threads.iter().map(|t| t.id.clone()).collect();
-        let wire_only: BTreeSet<&String> = rows.iter().filter_map(|r| r.thread.as_ref()).collect();
-        for id in wire_only.into_iter().filter(|id| !known.contains(*id)) {
+        // A thread only the wire names takes the parent of its first row that names one, else the
+        // one its thread database gives. A parent named with no rows of its own is no thread here
+        // (its calls may sit in another entry): the children map still names it.
+        let mut wire_only: BTreeMap<&String, Option<&String>> = BTreeMap::new();
+        for r in &rows {
+            if let Some(id) = r.thread.as_ref() {
+                let p = wire_only.entry(id).or_default();
+                *p = p.or(r.parent.as_ref());
+            }
+        }
+        for (id, parent) in wire_only.into_iter().filter(|(id, _)| !known.contains(*id)) {
             threads.push(Thread {
+                parent: parent.or_else(|| leg.parents.get(id)).cloned(),
                 reason,
                 ..Thread::new(id)
             });
@@ -555,10 +571,11 @@ impl Calls {
         }
         let (db_set, native_until, harness_exited) =
             (leg.set).map_or((None, None, None), |u| (Some(u.id), u.until, u.exited));
+        let children = leg.children.or_else(|| wire_kids(&threads));
         CallTable {
             rows,
             threads,
-            children: leg.children,
+            children,
             task_logs: leg.task_logs,
             reason,
             native_form: reason.map_or(
@@ -578,6 +595,28 @@ impl Calls {
             ..base
         }
     }
+}
+
+/// The native usage `n` is said and agrees with the wire's `w`: the same whole input and output,
+/// a count not said read as 0.
+fn same_usage(w: &Tokens, n: &Tokens) -> bool {
+    let key = |t: &Tokens| {
+        let c = |x: Option<u64>| x.unwrap_or(0);
+        let input = c(t.input).saturating_add(c(t.cached));
+        (input.saturating_add(c(t.cache_write)), c(t.output))
+    };
+    *n != Tokens::default() && key(w) == key(n)
+}
+
+/// Parent thread id to its child ids, from the threads that name a parent; `None` when none does.
+fn wire_kids(threads: &[Thread]) -> Option<BTreeMap<String, Vec<String>>> {
+    let mut kids: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for t in threads {
+        if let Some(p) = &t.parent {
+            kids.entry(p.clone()).or_default().push(t.id.clone());
+        }
+    }
+    (!kids.is_empty()).then_some(kids)
 }
 
 #[derive(Parser)]

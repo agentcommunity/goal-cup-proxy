@@ -1,11 +1,12 @@
-//! The native leg (PRD-09 sections 4 and 5): Codex rollouts and Claude Code transcripts read back
-//! out of the record's `native` streams, Claude Code agent labels out of its `snapshot` streams.
+//! The native leg (PRD-09 sections 4 and 5): Codex rollouts, Claude Code transcripts, Gemini CLI
+//! chat files and Qwen Code chats read back out of the record's `native` streams, Claude Code
+//! agent labels out of its `snapshot` streams, and Kimi Code's per-agent wire files.
 //! Bytes are deduped by (path, gen, offset) across boots (PRD-01 section 15 point 5); only lines
 //! that end in a newline are parsed, and a hole drops the partial line. Rows carry their session
 //! file `path` (U1 allows it, but it can name the participant's folders, so section 7 keeps it out
 //! of the output files); otherwise only ids, labels, model names and numbers leave this file.
 //! Vendor pages: Codex `protocol.rs` at rust-v0.165.0; Claude Code "Explore the .claude
-//! directory" and "Subagents".
+//! directory" and "Subagents"; Kimi Code `packages/agent-core-v2/docs/wire-manifest.d.ts`.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -37,6 +38,8 @@ pub(super) struct NativeLeg {
     pub(super) unreadable: bool,
     /// The Hermes database copy that was read.
     pub(super) set: Option<Used>,
+    /// A thread database's session id to its parent id, as the wire names them (Crush, Goose).
+    pub(super) parents: BTreeMap<String, String>,
 }
 
 /// A Claude Code call: its row, usage counts (largest per member) and `requestId`.
@@ -47,12 +50,18 @@ type Msg = (CallRow, BTreeMap<String, u64>, Option<String>);
 pub(super) struct Native {
     streams: HashMap<(u64, u64), Src>,
     files: BTreeMap<(String, u64), File>,
-    codex: Vec<CallRow>,
+    /// Codex and Qwen Code calls, each whole in one line.
+    calls: Vec<CallRow>,
+    /// Kimi Code calls, and the parent thread each `subagent.spawned` gives a child thread.
+    kimi: Vec<CallRow>,
+    spawns: BTreeMap<String, String>,
     /// Claude Code calls by `message.id`.
     msgs: BTreeMap<String, Msg>,
+    /// Gemini CLI calls by message `id`, the last copy kept (each message is written twice).
+    gemini: BTreeMap<String, CallRow>,
     /// Claude Code agent id to its session and the last `agentType` a meta snapshot gave.
     agents: BTreeMap<String, (String, Option<String>)>,
-    /// Hermes database copies.
+    /// Hermes database copies, or a thread database's (a connector has one or the other).
     sets: Sets,
     /// Hermes delegation task log paths (plain text, never parsed), and the task indexes each
     /// delegation manifest names, by delegation id.
@@ -82,6 +91,10 @@ struct Meta {
 struct File {
     codex: bool,
     gemini: bool,
+    qwen: bool,
+    kimi: bool,
+    /// Kimi Code: the time of the last `llm.request`, for the `usage.record` after it.
+    asked: Option<u64>,
     /// Gemini: the next line out is line 1 of the file (it starts at offset 0 and no hole came
     /// before it), and the session id that line gave.
     head: bool,
@@ -117,7 +130,7 @@ impl Native {
                     (StreamKind::Snapshot, Some(Reader::ClaudeMeta | Reader::HermesManifest)) => {
                         Src::Snap(file.0, Some(Vec::new()))
                     }
-                    (StreamKind::Snapshot, Some(Reader::HermesDb)) => {
+                    (StreamKind::Snapshot, Some(Reader::HermesDb | Reader::ThreadDb)) => {
                         return self.sets.open(key(sid), &m);
                     }
                     (
@@ -125,12 +138,16 @@ impl Native {
                         Some(
                             r @ (Reader::CodexRollout
                             | Reader::ClaudeTranscript
-                            | Reader::GeminiChat),
+                            | Reader::GeminiChat
+                            | Reader::QwenChat
+                            | Reader::KimiWire),
                         ),
                     ) => {
                         let f = File {
                             codex: r == Reader::CodexRollout,
                             gemini: r == Reader::GeminiChat,
+                            qwen: r == Reader::QwenChat,
+                            kimi: r == Reader::KimiWire,
                             head: r == Reader::GeminiChat && m["from"].as_u64().unwrap_or(0) == 0,
                             next: m["from"].as_u64().unwrap_or(0),
                             ..File::default()
@@ -154,14 +171,6 @@ impl Native {
                         let Ok(v) = serde_json::from_slice::<Value>(&line) else {
                             continue;
                         };
-                        if f.gemini {
-                            // No per-call rows: only line 1's session id is kept (later lines
-                            // carry message ids).
-                            if first {
-                                f.sid = id_at(&v, "/sessionId");
-                            }
-                            continue;
-                        }
                         let at = v["timestamp"].as_str().and_then(ts);
                         let row = || {
                             let mut r = CallRow::new(Leg::Native, &ctx.entry, boot, Kind::Call);
@@ -169,8 +178,20 @@ impl Native {
                             (r.outcome, r.whole) = (Outcome::Ok, true);
                             r
                         };
-                        if f.codex {
-                            self.codex.extend(f.rollout(&v, at, row));
+                        if f.kimi {
+                            let (asked, spawns) = (&mut f.asked, &mut self.spawns);
+                            self.kimi.extend(kimi(asked, spawns, &file.0, &v, row));
+                        } else if f.gemini {
+                            // Line 1 gives the session id (later lines carry message ids).
+                            if first {
+                                f.sid = id_at(&v, "/sessionId");
+                            } else if let Some((id, r)) = gemini(&v, row) {
+                                self.gemini.insert(id, r);
+                            }
+                        } else if f.codex {
+                            self.calls.extend(f.rollout(&v, at, row));
+                        } else if f.qwen {
+                            self.calls.extend(qwen(&v, row));
                         } else {
                             claude(&mut self.msgs, &v, at, row);
                         }
@@ -224,7 +245,13 @@ impl Native {
     /// The native rows, threads and children of the entry. A file that names no thread keeps its
     /// rows, with `thread` `None`, so no native call leaves the count.
     pub(super) fn finish(self, ctx: &Ctx) -> NativeLeg {
-        let h = (self.sets.finish(&ctx.entry, ctx.first, ctx.segment > 0)).unwrap_or_default();
+        let (h, parents) = match hints::thread_db(ctx.connector.as_deref()) {
+            Some(spec) => (Default::default(), self.sets.links(&spec)),
+            None => {
+                let h = self.sets.finish(&ctx.entry, ctx.first, ctx.segment > 0);
+                (h.unwrap_or_default(), BTreeMap::new())
+            }
+        };
         let (mut owner, mut threads) = (HashMap::new(), BTreeMap::new());
         let mut kids: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
         let (mut repeats_skipped, mut copied_skipped) = (0, 0);
@@ -253,6 +280,20 @@ impl Native {
                     (m.id.or_else(|| file_uuid(&path)), m.parent, depth, m.label)
                 }
                 None if f.codex => (file_uuid(&path), None, None, None),
+                None if f.qwen => {
+                    let (id, parent, depth) = qwen_thread(&path);
+                    (id, parent, depth, None)
+                }
+                None if f.kimi => {
+                    let (id, parent, depth) = kimi_thread(&path);
+                    // A spawn record's parent agent wins; past `main`, the depth is unknown.
+                    let spawn = id.as_ref().and_then(|i| self.spawns.get(i)).cloned();
+                    let depth = match &spawn {
+                        Some(p) if Some(p) != parent.as_ref() => p.ends_with("/main").then_some(1),
+                        _ => depth,
+                    };
+                    (id, spawn.or(parent), depth, None)
+                }
                 None if f.gemini => {
                     let (id, parent) = gem[&(path.clone(), rev)].clone();
                     // The folder is a main's full session id, or the id a main file's name ends in.
@@ -290,6 +331,10 @@ impl Native {
             // Keyed by path: after a source_changed generation, older rows take the newest one's.
             owner.insert(path, (id, parent));
         }
+        // A Kimi Code child a spawn names, with or without a file of its own.
+        for (c, p) in &self.spawns {
+            kids.entry(p.clone()).or_default().insert(c.clone());
+        }
         for (id, (session, label)) in self.agents {
             let t = threads.entry(id.clone()).or_insert_with(|| named(&id));
             (t.label, t.depth) = (label.or(t.label.take()), t.depth.or(Some(1)));
@@ -326,10 +371,12 @@ impl Native {
             let (tokens, extra) = split(c, CLAUDE);
             real.then_some((CallRow { tokens, extra, ..r }, rid))
         });
-        let all = self.codex.into_iter().map(|r| (r, None)).chain(claude);
+        let own = self.calls.into_iter().chain(self.kimi);
+        let plain = own.chain(self.gemini.into_values());
+        let all = plain.map(|r| (r, None)).chain(claude);
         let rows = all.map(|(r, rid)| {
             let (thread, parent) = r.path.as_ref().and_then(|p| owner.get(p)).cloned().unzip();
-            let (parent, wall_end) = (parent.flatten(), r.wall_start);
+            let (parent, wall_end) = (parent.flatten(), r.wall_end.or(r.wall_start));
             let r = CallRow {
                 thread,
                 parent,
@@ -361,6 +408,7 @@ impl Native {
             totals: h.totals,
             unreadable: h.unreadable,
             set: h.set,
+            parents,
         }
     }
 }
@@ -489,6 +537,89 @@ fn claude(
     Some(())
 }
 
+/// One Gemini CLI chat line: a `gemini` message with `tokens` is a call, by its message `id`.
+/// User, `$set`, `$patch` and `$rewindTo` lines are not. The counts are split as the wire's
+/// `usageMetadata` is: input less the cached part, output with the thoughts.
+fn gemini(v: &Value, row: impl FnOnce() -> CallRow) -> Option<(String, CallRow)> {
+    let t = (v["type"] == "gemini").then_some(&v["tokens"])?;
+    let n = |k: &str| t[k].as_u64();
+    let (cached, thoughts) = (n("cached"), n("thoughts"));
+    let tokens = Tokens {
+        input: less(Some(n("input")?), cached),
+        cached,
+        cache_write: None,
+        output: n("output").map(|o| o.saturating_add(thoughts.unwrap_or(0))),
+        reasoning: thoughts,
+    };
+    let id = id_at(v, "/id")?;
+    let r = CallRow {
+        tokens,
+        model: model_name(v.get("model")),
+        ..row()
+    };
+    Some((id, r))
+}
+
+/// One Qwen Code chat row: an `assistant` row with `usageMetadata` is one call. The
+/// prompt count includes the cached part, which is taken out of `input`. Unlike the Gemini shape,
+/// `output` is `candidatesTokenCount` alone: Qwen copies the chat `completion_tokens`, reasoning
+/// included, into it (measured: total = prompt + candidates, candidates = wire output).
+fn qwen(v: &Value, row: impl FnOnce() -> CallRow) -> Option<CallRow> {
+    let u = (v["type"] == "assistant").then_some(&v["usageMetadata"])?;
+    let (mut tokens, extra) = split(extra(u.as_object()?, &[]), QWEN);
+    tokens.input = less(tokens.input, tokens.cached);
+    Some(CallRow {
+        model: model_name(v.get("model")),
+        tokens,
+        extra,
+        ..row()
+    })
+}
+
+/// One Kimi Code wire line (flat: `type`, `agentId`, `time` in epoch ms) of the agent file at
+/// `path`. An `llm.request` keeps its time for the `usage.record` after it, which is one call
+/// that starts at the request and ends at the record (the wire join pairs by the end); a line
+/// another agent's id names is not this file's. A `subagent.spawned` gives the child's
+/// parent agent (`parentAgentId`, else this file's agent). Ids, model, times and numbers only.
+fn kimi(
+    asked: &mut Option<u64>,
+    spawns: &mut BTreeMap<String, String>,
+    path: &str,
+    v: &Value,
+    row: impl FnOnce() -> CallRow,
+) -> Option<CallRow> {
+    let (sid, name) = kimi_agent(path)?;
+    let time = v["time"].as_u64().and_then(|t| t.checked_mul(1_000_000));
+    let mine = id_at(v, "/agentId").is_none_or(|a| a == name);
+    match v["type"].as_str()? {
+        "llm.request" if mine => *asked = time,
+        "usage.record" if mine => {
+            let n = |k: &str| v["usage"][k].as_u64();
+            let tokens = Tokens {
+                input: n("inputOther"),
+                cached: n("inputCacheRead"),
+                cache_write: n("inputCacheCreation"),
+                output: n("output"),
+                reasoning: None,
+            };
+            return Some(CallRow {
+                model: model_name(v.get("model")),
+                tokens,
+                wall_start: asked.take().or(time),
+                wall_end: time,
+                ..row()
+            });
+        }
+        "subagent.spawned" => {
+            let at = |a: &str| hints::id(&format!("{sid}/{a}"));
+            let by = id_at(v, "/parentAgentId").unwrap_or_else(|| name.to_string());
+            spawns.insert(at(&id_at(v, "/subagentId")?)?, at(&by)?);
+        }
+        _ => {}
+    }
+    None
+}
+
 /// Usage member names per the token table: input, cached, cache write, output, reasoning.
 const CODEX: [&str; 5] = [
     "input_tokens",
@@ -496,6 +627,13 @@ const CODEX: [&str; 5] = [
     "",
     "output_tokens",
     "reasoning_output_tokens",
+];
+const QWEN: [&str; 5] = [
+    "promptTokenCount",
+    "cachedContentTokenCount",
+    "",
+    "candidatesTokenCount",
+    "thoughtsTokenCount",
 ];
 const CLAUDE: [&str; 5] = [
     "input_tokens",
@@ -556,6 +694,52 @@ fn gemini_thread(path: &str, sid: Option<&str>) -> (Option<String>, Option<Strin
     match parts.get(i + 1).filter(|_| i + 2 < parts.len()) {
         Some(dir) => (stem(file), hints::id(dir)),
         None => (sid.and_then(hints::id).or_else(|| stem(file)), None),
+    }
+}
+
+/// The Qwen Code thread of a chat path `chats:<cwd>/…`: (id, parent, depth), from the path alone
+/// (docs/harnesses/qwen-cli.md section 4, as measured in a recorded run).
+/// `<cwd>/chats/<session id>.jsonl` is a main thread (depth 0);
+/// `<cwd>/subagents/<session id>/agent-<id>.jsonl` is subagent `<id>`, a child of that session
+/// (depth 1). The rows of a subagent file carry the parent's `sessionId`, so no row names the
+/// thread. Any other file names no thread; its calls are kept with none.
+fn qwen_thread(path: &str) -> (Option<String>, Option<String>, Option<u32>) {
+    let rel = path.split_once(':').map_or(path, |p| p.1);
+    let (dirs, file) = rel.rsplit_once('/').unwrap_or(("", rel));
+    let stem = file.strip_suffix(".jsonl").unwrap_or_default();
+    match dirs.split('/').collect::<Vec<_>>()[..] {
+        [.., "subagents", s] => match stem.strip_prefix("agent-") {
+            Some(id) => (hints::id(id), hints::id(s), Some(1)),
+            None => (None, None, None),
+        },
+        [.., "chats"] => (hints::id(stem), None, Some(0)),
+        _ => (None, None, None),
+    }
+}
+
+/// The (session, agent name) of a Kimi Code wire path
+/// `wire:<workspace>/<session>/agents/<name>/wire.jsonl` (Kimi Code "Data locations").
+fn kimi_agent(path: &str) -> Option<(&str, &str)> {
+    let rel = path.split_once(':').map_or(path, |p| p.1);
+    let parts: Vec<&str> = rel.split('/').collect();
+    match parts[..] {
+        [.., sid, "agents", name, "wire.jsonl"] => Some((sid, name)),
+        _ => None,
+    }
+}
+
+/// The Kimi Code thread of a wire path: (`<session>/<name>`, parent, depth). `main` is the root
+/// (depth 0); an `agent-<n>` is a subagent of the session's `main` (depth 1). A
+/// `subagent.spawned` record can name another parent agent (custom agents may nest).
+fn kimi_thread(path: &str) -> (Option<String>, Option<String>, Option<u32>) {
+    let Some((sid, name)) = kimi_agent(path) else {
+        return (None, None, None);
+    };
+    let id = |n: &str| hints::id(&format!("{sid}/{n}"));
+    match name {
+        "main" => (id(name), None, Some(0)),
+        n if n.starts_with("agent-") => (id(n), id("main"), Some(1)),
+        n => (id(n), None, None),
     }
 }
 

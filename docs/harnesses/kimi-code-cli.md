@@ -33,6 +33,7 @@ Source words: "docs" is [moonshotai.github.io/kimi-code](https://moonshotai.gith
 
 - JSONL, one `wire.jsonl` per agent: `agents/main/wire.jsonl` for the main agent and `agents/agent-N/wire.jsonl` for each subagent; `state.json` holds title, last prompt and timestamps (docs). The connector reads `session_index.jsonl` at the home root as row `index` and every `wire.jsonl` under `sessions/` as row `wire`.
 - The workspace id is `wd_<slug>_<12 hex>` or `wm_<uuid>`; the session id is the folder name (docs).
+- Subagents, as the verifier reads them (2.4.1, measured file plus `packages/agent-core-v2/docs/wire-manifest.d.ts`): each wire line is a flat JSON object with `type`, `agentId` and `time` (epoch ms). The thread of a file is `<session>/<agent name>`; `agent-<n>` is a child of `<session>/main`, and a `subagent.spawned` line (`subagentId`, `parentAgentId`) names the parent agent where custom agents nest. Each `usage.record` (`usage.inputOther`, `inputCacheRead`, `inputCacheCreation`, `output`) is one call, timed by the `llm.request` before it, and joins the wire by time: the wire body's `prompt_cache_key` names only the session, which main and subagents share, and no header names the agent.
 
 ## 5. Auth
 

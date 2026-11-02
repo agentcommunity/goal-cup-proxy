@@ -30,6 +30,7 @@ The connector sets both variables to the isolated home, so `settings.json`, `.en
 ## 4. Session format and identity
 
 - JSONL, one file per session, `projects/<sanitized-cwd>/chats/<sessionId>.jsonl`. Qwen's own subagents write `projects/<cwd>/subagents/<sessionId>/agent-<id>.jsonl` and `agent-<id>.meta.json` (source). The connector reads every `.jsonl` under `projects` as it grows, and the `.meta.json` files whole when they change.
+- The rows of a subagent file carry the parent's `sessionId`, so the verifier names a subagent thread from its file (`agent-<id>`) and its parent from the folder. Each `assistant` row with `usageMetadata` is one model call (`promptTokenCount` includes `cachedContentTokenCount`); calls join the wire by time, since the requests carry no session header (measured). Calls of Qwen's internal memory-extractor agents have no file and stay wire-only. A subagent started by a subagent is unmeasured: its file place is not known, and the verifier gives every subagent file depth 1.
 - How the session id first appears on screen: unknown.
 
 ## 5. Auth
