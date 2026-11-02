@@ -1,9 +1,14 @@
-# Acceptance A3 (PRD-16 section 9): Hermes through Vercel AI Gateway (its built-in ai-gateway provider), the chat TUI, half
-# an hour of the many-subagents prompt. `key` names the harness's own key; the gateway case uses the gateway key.
-# Run from the repository root: the prompt path is relative to it.
+# a3.toml: A3, Hermes on DeepSeek through the gateway, one-hour composite (owner 1 Nov 23:12Z)
+# Acceptance A3 (PRD-16 section 9): Hermes through Vercel AI Gateway (its built-in ai-gateway provider), the chat TUI,
+# an hour of the many-subagents prompt with the same kills as A2. `key` names the harness's own key; the gateway case
+# uses the gateway key. Run from the repository root: the prompt path is relative to it.
 harness = "hermes-cli"
 key = "deepseek"
 case = "gateway"
 mode = "full"
-minutes = 30
+minutes = 60
+keep_going = 3
+cap_usd = 15
+box_extra_minutes = 15
 prompt = "scripts/pad/prompts/many-subagents.txt"
+steps = ["kill-recorder@10", "kill-recorder@30", "kill-watchdog-recover@45", "keep-going"]

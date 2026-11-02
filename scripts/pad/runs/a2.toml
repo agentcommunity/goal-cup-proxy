@@ -1,10 +1,14 @@
+# a2.toml: A2, Claude Code direct, one-hour composite (owner 1 Nov 23:12Z)
 # Acceptance A2 (PRD-16 section 9): Claude Code, direct, Claude key, an hour of the many-subagents prompt, the recorder
-# killed at minute 30, then the watchdog killed at 45 and the recorder at 46, with `goalcup recover` at 47.
+# killed at minutes 10 and 30, then the watchdog killed at 45 with `goalcup recover`. Pinned smallest model only.
 # Run from the repository root: the prompt path is relative to it.
 harness = "claude-code-cli"
 key = "claude"
 case = "direct"
 mode = "full"
 minutes = 60
-steps = ["kill-recorder@30", "kill-watchdog-recover@45"]
+keep_going = 3
+cap_usd = 15
+box_extra_minutes = 15
 prompt = "scripts/pad/prompts/many-subagents.txt"
+steps = ["kill-recorder@10", "kill-recorder@30", "kill-watchdog-recover@45", "keep-going"]

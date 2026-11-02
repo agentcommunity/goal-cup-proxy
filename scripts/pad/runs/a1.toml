@@ -8,6 +8,7 @@ key = "openai"
 case = "direct"
 mode = "full"
 minutes = 120
+cap_usd = 15
 keep_going = 3
 prompt = "full"
 steps = ["keep-going"]
