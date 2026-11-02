@@ -605,6 +605,19 @@ class StatedLoss(unittest.TestCase):
             self.assertEqual(row["facts"]["stated_loss_known_hits"], 1)
         self.assertEqual(self.run_row([self.KNOWN_BODY], [self.DELTAS])["checks"]["C3"], "FAIL")  # same hit in a request body
 
+    def test_c3_leak_is_not_counted_again_by_the_faults_line(self):  # A3: exit 2 from the secrets check alone
+        gap = {"start": "2026-10-30T10:01:59.9Z", "end": "2026-10-30T10:02:01.2Z"}
+        extra = {"verify/secrets.json": {"known_hits": [self.KNOWN_BODY], "shape_hits": [], "big_masks": [], "masks": dict(SecretCheck.PLANTED)},
+                 "verify/secrets-conductor.json": {"hits": 0},
+                 "verify/exits.json": {"secrets": 2, "secrets-out": 0, "secrets-plain": 0},
+                 "verify/check-local.json": {"exit": 2, "entries": [{"entry": "e1", "seal_reason": "harness_exit",
+                     "counts": {"model_requests": 5, "gaps": {"recorder_down": 1}}, "checks": [
+                         {"id": "gap_has_end", "result": "pass"}, {"id": "history_complete", "result": "pass"},
+                         {"id": "secrets", "result": "fail"},
+                         {"id": "inv6", "result": "named", "facts": {"gaps": [gap]}}]}]}}
+        row = CrashRows.row("kill-recorder", gap, code=2, extra=extra, known_box=True)
+        self.assertEqual((row["checks"]["C3"], row["faults"], row["result"]), ("FAIL", "PASS", "FAIL"), row["why"])
+
     def test_exit_2_without_a_stated_loss_still_fails(self):
         self.assertEqual(self.run_row(code=2)["faults"], "FAIL")  # exit 2 with no stated loss behind it
 
