@@ -52,6 +52,7 @@ OVERRIDES = ("cap_usd", "box_extra_minutes", "box_vcpus")  # a row may replace t
 FAULTS, SPAN = pc.FAULTS, pc.SPAN  # section 3.1: kind to the minutes it lasts by default; the kinds that take +<minutes>
 # pad-run's box steps: the faults of section 3.1, the watcher steps, and the mode's own
 BOX_STEPS = {"pre", "start", "wait-calls", "look", "seal", "wait-upload", "wait-recovery", "keep-going", "exec"} | set(FAULTS)
+READ_ONLY = {"look", "wait-calls", "wait-recovery", "wait-upload", "spend", "verify"}  # safe to run twice; a kill, seal or paste never is
 PRICED = tuple(k for k in pc.S7_TOKENS if k != "reasoning")  # PRD-09 section 4; output holds reasoning, never added again
 LEDGER = threading.Lock()  # spend lines: runs and the spend check write in parallel
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -690,9 +691,12 @@ class Run:
             fd, script = tempfile.mkstemp(suffix=".sh", dir=self.tmp)  # its own file: the spend check runs beside a step
             with os.fdopen(fd, "w") as f:
                 f.write("exec python3.11 ~/pad/pad-run ~/run %s\n" % step)
-            for attempt in range(3):  # a transport error with no PADSTEP line is retried; a step that printed one never is
+            # A transport error with no PADSTEP line is retried for read-only steps only: the response may be lost after
+            # the step ran, and a kill, recover or paste must never be sent twice. A step that printed a line is never rerun.
+            again = step.split()[0].split("@")[0] in READ_ONLY
+            for attempt in range(3):
                 r = self.sbx("exec", self.name, "--script", script, limit=limit)
-                if ("%s " % tag) in (r.stdout or "") or not TRANSPORT.search((r.stdout or "") + (r.stderr or "")) or attempt == 2:
+                if ("%s " % tag) in (r.stdout or "") or not TRANSPORT.search((r.stdout or "") + (r.stderr or "")) or attempt == 2 or not again:
                     break
                 self.log("sbx exec %s retry %d: transport error, no %s line" % (self.name, attempt + 1, tag))
                 time.sleep(EXEC_RETRY_WAIT)

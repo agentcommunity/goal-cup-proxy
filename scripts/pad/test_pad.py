@@ -158,9 +158,9 @@ class SealPaneFallback(unittest.TestCase):
 
 
 class ExecRetry(unittest.TestCase):
-    """A step's `sbx exec` that fails in transport with no PADSTEP line is called again; one that printed PADSTEP never is."""
+    """A read-only step whose `sbx exec` fails in transport with no PADSTEP line is called again; a kill, or a step that printed PADSTEP, never is."""
 
-    def box(self, outs):
+    def box(self, outs, step="look"):
         run = object.__new__(pad.Run)
         run.s, run.name, run.meta, run.logged, run.n = {"where": "sandbox"}, "pad-x", {}, [], 0
         run.tmp = tempfile.mkdtemp()
@@ -173,7 +173,7 @@ class ExecRetry(unittest.TestCase):
             return subprocess.CompletedProcess([verb], 0, out, err)
         run.sbx = sbx
         with mock.patch.object(pad.time, "sleep") as sleep:
-            got = run.box("kill-recorder@30", 60)
+            got = run.box(step, 60)
         return run, got, sleep
 
     def test_fetch_failed_then_a_line_is_ok(self):
@@ -183,6 +183,10 @@ class ExecRetry(unittest.TestCase):
         self.assertEqual(run.n, 2)
         self.assertTrue([ln for ln in run.logged if "retry" in ln])
         sleep.assert_called_once_with(5)
+
+    def test_a_kill_is_never_sent_again(self):
+        run, got, _ = self.box([("", "sbx exec: fetch failed")] * 3, "kill-recorder@30")
+        self.assertEqual((got[0], run.n), ("error", 1))
 
     def test_a_step_that_printed_a_line_is_not_run_again(self):
         step = 'PADSTEP {"result": "ok", "saw": ""}\n'

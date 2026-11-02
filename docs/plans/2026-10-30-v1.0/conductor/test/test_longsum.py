@@ -121,6 +121,11 @@ class T(unittest.TestCase):
         d = fixture(self.t + "/b", why=["faults FAIL: did not stand back up (wait-recovery)"])
         self.assertTrue(longsum.summary(d, stub(gaps))["x4"].startswith("FAIL"))
 
+    def test_x4_recovery_not_observed_on_a_quiet_kill_is_inconclusive(self):
+        gaps = [gap_before(10, 969, 400), gap_before(30, 900, 500), gap(46, 40000, cause="watchdog_lost")]
+        d = fixture(self.t, quiet30=True, why=["faults INCONCLUSIVE: no work in flight at the kill at 30; recovery not observed: wait-recovery INCONCLUSIVE (quiet kill)"])
+        self.assertTrue(longsum.summary(d, stub(gaps))["x4"].startswith("INCONCLUSIVE"))
+
     def test_x4_late_end_fails_but_not_for_a_quiet_kill(self):
         gaps = [gap_before(10, 969, 400), gap_before(30, 900, 9000), gap(46, 40000, cause="watchdog_lost")]
         self.assertTrue(longsum.summary(fixture(self.t), stub(gaps))["x4"].startswith("FAIL"))
