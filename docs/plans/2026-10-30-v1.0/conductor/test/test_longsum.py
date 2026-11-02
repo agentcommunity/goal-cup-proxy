@@ -115,11 +115,16 @@ class T(unittest.TestCase):
 
     def test_x4_faults_inconclusive_is_inconclusive(self):
         gaps = [gap(10, 900), gap(30, 1200), gap(46, 40000, cause="watchdog_lost")]
-        d = fixture(self.t, why=["faults INCONCLUSIVE: recovery not observed: wait-recovery not run"])
+        d = fixture(self.t, why=["faults INCONCLUSIVE: recovery not observed: wait-recovery INCONCLUSIVE, ok"])
         self.assertTrue(longsum.summary(d, stub(gaps))["x4"].startswith("INCONCLUSIVE"))
         os.makedirs(self.t + "/b")
         d = fixture(self.t + "/b", why=["faults FAIL: did not stand back up (wait-recovery)"])
         self.assertTrue(longsum.summary(d, stub(gaps))["x4"].startswith("FAIL"))
+
+    def test_x4_any_faults_inconclusive_wording_is_inconclusive(self):
+        gaps = [gap(10, 900), gap(30, 1200), gap(46, 40000, cause="watchdog_lost")]
+        d = fixture(self.t, why=["faults INCONCLUSIVE: no work in flight at the kill at 30"])
+        self.assertTrue(longsum.summary(d, stub(gaps))["x4"].startswith("INCONCLUSIVE"))
 
     def test_x4_recovery_not_observed_on_a_quiet_kill_is_inconclusive(self):
         gaps = [gap_before(10, 969, 400), gap_before(30, 900, 500), gap(46, 40000, cause="watchdog_lost")]

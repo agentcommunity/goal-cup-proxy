@@ -158,11 +158,11 @@ class SealPaneFallback(unittest.TestCase):
 
 
 class ExecRetry(unittest.TestCase):
-    """A read-only step whose `sbx exec` fails in transport with no PADSTEP line is called again; a kill, or a step that printed PADSTEP, never is."""
+    """An `sbx exec` that fails in transport with no PADSTEP line: the box is asked whether the attempt began; only if not is it sent again."""
 
     def box(self, outs, step="look"):
         run = object.__new__(pad.Run)
-        run.s, run.name, run.meta, run.logged, run.n = {"where": "sandbox"}, "pad-x", {}, [], 0
+        run.s, run.name, run.meta, run.logged, run.n, run.verbs = {"where": "sandbox"}, "pad-x", {}, [], 0, []
         run.tmp = tempfile.mkdtemp()
         self.addCleanup(shutil.rmtree, run.tmp, True)
         run.log = run.logged.append
@@ -170,32 +170,41 @@ class ExecRetry(unittest.TestCase):
         def sbx(verb, *args, limit=None, name=None, env=None):
             out, err = outs[run.n]
             run.n += 1
+            run.verbs.append(open(args[args.index("--script") + 1]).read())
             return subprocess.CompletedProcess([verb], 0, out, err)
         run.sbx = sbx
         with mock.patch.object(pad.time, "sleep") as sleep:
             got = run.box(step, 60)
         return run, got, sleep
 
-    def test_fetch_failed_then_a_line_is_ok(self):
-        step = 'PADSTEP {"result": "ok", "saw": ""}\n'
-        run, got, sleep = self.box([("", "sbx exec: fetch failed"), (step, "")])
-        self.assertEqual(got[0], "ok")
-        self.assertEqual(run.n, 2)
-        self.assertTrue([ln for ln in run.logged if "retry" in ln])
+    FAIL, STEP, NONE = ("", "sbx exec: fetch failed"), ('PADSTEP {"result": "ok", "saw": ""}\n', ""), ("PADNONE\n", "")
+
+    def test_never_began_is_sent_again(self):
+        run, got, sleep = self.box([self.FAIL, self.NONE, self.STEP])
+        self.assertEqual((got[0], run.n), ("ok", 3))
+        self.assertTrue([ln for ln in run.logged if "never began" in ln])
         sleep.assert_called_once_with(5)
+        self.assertEqual(run.verbs[0], run.verbs[2])  # the same attempt id and step
 
-    def test_a_kill_is_never_sent_again(self):
-        run, got, _ = self.box([("", "sbx exec: fetch failed")] * 3, "kill-recorder@30")
-        self.assertEqual((got[0], run.n), ("error", 1))
+    def test_a_kill_whose_response_was_lost_is_not_sent_again_and_its_result_is_read(self):
+        done = ('PADSTEP {"result": "ok", "saw": "killed"}\n', "")
+        run, got, _ = self.box([self.FAIL, done], "kill-recorder@30")
+        self.assertEqual((got[:2], run.n), (("ok", "killed"), 2))
+        self.assertIn("kill-recorder@30", run.verbs[0])
+        self.assertNotIn("kill-recorder", run.verbs[1])  # the second call only asks
 
-    def test_a_step_that_printed_a_line_is_not_run_again(self):
-        step = 'PADSTEP {"result": "ok", "saw": ""}\n'
-        run, got, _ = self.box([(step, "sbx exec: fetch failed")])
+    def test_a_kill_that_began_and_cannot_be_read_is_an_error_not_a_second_kill(self):
+        run, got, _ = self.box([self.FAIL] + [("PADBEGUN\n", "")] * 8, "kill-recorder@30")
+        self.assertEqual(got[0], "error")
+        self.assertEqual(run.n, 9)  # one kill, eight questions
+
+    def test_a_step_that_printed_a_line_is_not_asked_about(self):
+        run, got, _ = self.box([('PADSTEP {"result": "ok", "saw": ""}\n', "sbx exec: fetch failed")])
         self.assertEqual((got[0], run.n), ("ok", 1))
 
     def test_three_attempts_at_most(self):
-        run, got, _ = self.box([("", "fetch failed")] * 3)
-        self.assertEqual((got[0], run.n), ("error", 3))
+        run, got, _ = self.box([self.FAIL, self.NONE, self.FAIL, self.NONE, self.FAIL])
+        self.assertEqual((got[0], run.n), ("error", 5))
 
 
 class Walk(unittest.TestCase):
