@@ -1052,5 +1052,26 @@ class PromptVariant(unittest.TestCase):
         self.assertEqual(pad.load_settings(dict(BASE, prompt=path), PADCFG)["prompt"], path)
 
 
+class KeyFileMerge(unittest.TestCase):
+    def kimi_line(self):
+        return pad.read_toml(os.path.join(HERE, "harnesses", "kimi-code-cli.toml"))["key_line"].replace("{key}", "PADSENTINEL")
+
+    def test_key_text_keeps_the_row_setup_wrote(self):
+        out = padrun.key_text("/iso/config.toml", 'default_permission_mode = "auto"\n', self.kimi_line())
+        self.assertIn('default_permission_mode = "auto"', out)
+        self.assertIn('api_key = "PADSENTINEL"', out)
+        self.assertLess(out.index("default_permission_mode"), out.index("[providers.deepseek]"))
+
+    def test_key_text_same_key_once_pad_value_wins(self):
+        out = padrun.key_text("/iso/config.toml", 'default_model = "other"\n', self.kimi_line())
+        self.assertEqual(out.count("default_model"), 1)
+        self.assertIn('default_model = "ds"', out)
+
+    def test_key_text_with_no_old_file_is_the_line(self):
+        self.assertEqual(padrun.key_text("/iso/.env", "", "AI_GATEWAY_API_KEY=PADSENTINEL"), "AI_GATEWAY_API_KEY=PADSENTINEL\n")
+        self.assertEqual(json.loads(padrun.key_text("/h/auth.json", "", '{"deepseek": {"type": "api", "key": "K"}}')),
+                         {"deepseek": {"type": "api", "key": "K"}})
+
+
 if __name__ == "__main__":
     unittest.main()

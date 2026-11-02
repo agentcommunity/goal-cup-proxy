@@ -66,6 +66,11 @@ def merge_config(name, old, new):
     return "\n".join([ln for ln in old_top if key(ln) not in mine] + new_top + old_tab + new_tab) + "\n"
 
 
+def key_text(path, old, line):
+    """The key file's text: the pad's key line beside any rows goalcup setup wrote there (the pad's value wins a same key)."""
+    return merge_config(os.path.basename(path), old, line)
+
+
 def replace_known(text, values):
     """Every form of every known value in `text` becomes `[known:<n>]`; returns (text, count)."""
     count = 0
@@ -283,7 +288,10 @@ class Run:
                 raise Step("FAIL", "harness login exit %d" % r.returncode)
         elif route == "file":
             with open(key) as f:
-                write(get("key_file").replace("{home}", home), get("key_line").replace("{key}", f.read().strip()) + "\n")
+                line = get("key_line").replace("{key}", f.read().strip())
+            path = get("key_file").replace("{home}", home)
+            old = open(path).read() if os.path.isfile(path) else ""  # keep the rows goalcup setup wrote (Kimi approvals)
+            write(path, key_text(path, old, line))
         for name in s["key_files"]:  # the run's own copies; env: the launch shell reads the file, then removes it
             if not (route == "env" and name == s["route_key"]):
                 os.remove(os.path.join(self.keys, name))

@@ -509,7 +509,7 @@ install = "npm i -g @openai/codex@<pinned version>"
 key_kind = "openai"                       # which --key the harness takes
 key_route = "login"                       # how the key reaches the harness, as its docs say: "login", "file" or "env"
 login = "codex login --with-api-key"      # "login": run with HOME and CODEX_HOME of the isolated home; the key file goes to stdin, never an argument
-key_file = ""                             # "file": a path in the isolated home, e.g. "{home}/.gemini/.env"; written 0600
+key_file = ""                             # "file": a path in the isolated home, e.g. "{home}/.gemini/.env"; written 0600, beside any rows `goalcup setup` wrote there (the pad's value wins a same key)
 key_line = ""                             # "file": the line written there, e.g. "GEMINI_API_KEY={key}"
 key_env = ""                              # "env": e.g. "ANTHROPIC_API_KEY"; the launch shell runs export NAME="$(cat <file>)" just before goalcup start, never echoed, never in argv, a log or a row
 ready_text = ""                           # text on screen when the harness can take input; empty: wait ready_wait seconds
