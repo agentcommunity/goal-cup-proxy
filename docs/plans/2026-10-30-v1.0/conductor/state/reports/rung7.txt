@@ -1,0 +1,97 @@
+goalcup 1.0 test-pad rungs 7 (gateway), 4 (recorder crash, rerun with F1) and 8 (dodger, rerun with F2 and the S6 counts fix)
+Claude Code (claude-code-cli 2.1.312) and Codex (codex-cli 0.165.0). Worktree /root/gc-wt/rung7, detached at 5825d6d8 (includes a3e48613).
+  The worktree is clean again: the local rung-7 patch is reverted and saved as local-rung7.patch. Nothing was committed or pushed.
+Binaries: build box gold-well-loon-qin7or built release goalcup and goalcup-verify from 5825d6d8 (build.log). No key in the build box.
+  A first build box, beige-recent-magpie-EnNRRC, was orphaned when I stopped its job (my --out path was wrong). The classifier blocked
+  stopping it by hand, so it ran out at its 30 min timeout. It held no key and is not in the listing now.
+Every run: mode micro, prompt smoke, minutes 3, server staging, where sandbox (the conductor half here approved), no test repo.
+Keys entered pad boxes only by sbx put-env (0600). GH_TOKEN was dropped. DATABASE_URL went to fetch-run on the conductor only.
+Copy-outs scrubbed with scrub2.py (now also covers AI_GATEWAY_API_KEY). keyscan of pad-out: 0 hits, 9 keys checked. Pad cleanup left no live box.
+
+Common to all rows (expected): fetch FAIL "psql: could not translate host name <hidden>" -> C4 FAIL (or INCONCLUSIVE on rows the
+  harness-did-no-work rule covers), and C2/C5 INCONCLUSIVE "no usage summary". Upload COMPLETE on every row: wait-upload "final: sealed".
+  OWNER: environment and the owner's database grant. Ids for a later refetch are in refetch-ids.txt.
+
+(A) RUNG 7 GATEWAY (case gateway, Vercel AI Gateway, key AI_GATEWAY_API_KEY)
+  codex   box pad-8df903  run rb3219dfebc185dea  entry e8d7e6b2657c8d60d  (unmodified rig)
+    C1-C6 all INCONCLUSIVE "the harness did no work (commits 0, model requests 12)" | sealed / 12 / seal_command | verifier exit 0
+    Proof of routing and capture: counts.hosts {ai-gateway.vercel.sh: 12} and no api.openai.com conn. listed_hosts_decrypted pass:
+    13 listed conns, 13 decrypted, 0 blind. End screen: "12 model requests written: ai-gateway.vercel.sh 12. Nothing was lost."
+    Every reply was "403 Forbidden: Free tier users do not have access to this model ... url: https://ai-gateway.vercel.sh/codex/v1/responses"
+    (model openai/gpt-6-astra). So the 403 replies were decrypted and recorded like direct ones, but no task ran.
+  claude  box pad-2af8c7  run r99215c5be01e9141  entry e8c3fff92dd89c5a0  (unmodified rig)
+    all INCONCLUSIVE | sealed / 2 / harness_exit | Claude Code exited 1 at the trust screen with "No, exit" chosen. RIG FAULT G1 below.
+  claude  box pad-e1d319  run rb152160acd1084b2  entry ee77c8562b2625ee1  (local patch v1)
+    all INCONCLUSIVE | sealed / 5 / seal_command | Past trust, then a screen not seen before: "Make auto mode your default permission
+    mode?" took the paste and Enter, so the prompt was lost (5 startup requests, all to api.anthropic.com, no calls).
+  claude  box pad-4a0c47  run rf7d5b5b123924537  entry ea1642027b779316b  (local patch v2: the row to read)
+    all INCONCLUSIVE, C1 "provider_refused: 401 or 403 from the model host" | sealed / 8 / seal_command | verifier exit 0
+    Proof of routing and capture: counts.hosts {ai-gateway.vercel.sh: 2, api.anthropic.com: 6}; listed_hosts_decrypted pass (decrypted
+    = listed). Pane: "API Error: 403 Free tier users do not have access to this model". End screen: "8 model requests written:
+    api.anthropic.com 6, ai-gateway.vercel.sh 2. Nothing was lost."
+    The 6 requests to api.anthropic.com: the r7b row, where no prompt ever ran, made 5 of the same at startup, so they look like Claude
+    Code's startup requests, not model calls. To confirm from the fetched copy: check.py's "model calls not through the gateway" test
+    (c_host and c_kind in the usage call rows) and the conn rows for kind gateway.
+  -> Rung 7: on both harnesses the requests go to ai-gateway.vercel.sh and are decrypted and recorded like direct ones (verifier exit 0,
+     no gap). The rows cannot PASS: the gateway team has no paid credits (G2), and on Claude Code the rig's first-run keys are wrong (G1).
+
+(B) RUNG 4 RECORDER CRASH, rerun with F1 (5825d6d8)
+  codex   box pad-f68224  run r30986055494e067c  entry e4f29beee768ae72a  steps kill-recorder@0
+    PASS INC PASS FAIL INC PASS, faults PASS | sealed / 14 / seal_command, off spans 1 ms 453 | verifier exit 1 (kill row), boots 2
+    Kill: recorder 202 killed_at 06:29:19.131, "1.1 s after a written request", not quiet. One closed recorder_down gap, cause killed,
+    06:29:18.735 to 06:29:19.188 (453 ms), ending 0.06 s after the kill. Restart: recorder 443, boot 1, same harness pid 214;
+    wait-recovery "recorder 443 back 3.4 s after the kill, gap 453 ms, work 11 > 7". New requests after the restart: 11, then 14.
+    Pane: "Recording was off 1 time, 0 s in total." Task committed (commits 1).
+  claude  box pad-7ec83b  run rd6dae28fc10809d6  entry e07f7cadac06913c1  steps kill-recorder@0
+    PASS INC PASS FAIL INC PASS, faults PASS | sealed / 23 / seal_command, off spans 1 ms 546 | verifier exit 1, boots 2
+    Kill: recorder 151 killed_at 06:44:37.858, 0.9 s after a written request. One closed gap 06:44:37.500 to 06:44:38.046 (546 ms),
+    ending 0.19 s after the kill. Restart: recorder 352, boot 1, harness pid 163 unchanged; "back 3.3 s after the kill, work 12 > 9".
+    Requests 9 -> 16 -> 19 -> 23 after the restart. Pane: "Recording was off 1 time, 0 s in total."
+  claude  box pad-d18567  run r7087fabd2ede2f2d  entry edb4df0564233d08e  steps kill-recorder@1 (the rung as written)
+    PASS INC PASS FAIL INC PASS, faults FAIL "did not stand back up (wait-recovery)" | sealed / 20 / seal_command, off 1 span 1471 ms
+    The gap holds: 06:23:57.845 to 06:23:59.317 (1471 ms), ending 0.14 s after the kill at 06:23:59.175; recorder 153 -> 398, boot 1.
+    But Claude Code had finished the smoke task at 06:22. Two idle background requests (06:23:01, about 06:23:56) counted as work, so
+    the kill was not marked quiet. Requests stayed at 18 until wait-recovery ended (06:26:30); 19 and 20 came at the seal (06:26:32). G3.
+  -> Rung 4 holds on both harnesses with kill@0: one closed gap ending well within 2 s of the kill (0.06 s and 0.19 s, gaps under 2 s),
+     a restart with a new pid at boot 1, and new model requests after the restart. kill@1 with the smoke prompt still misses on Claude Code.
+
+(C) RUNG 8 DODGER, rerun with F2 and the S6 counts fix (a3e48613)
+  claude  box pad-c4a9e5  run rf2eb4ae929219978  entry e92ad52c0a0511b97
+    C1 PASS (was INCONCLUSIVE), INC PASS FAIL INC PASS | sealed / 0 / seal_command | verifier exit 1. wait-calls (F2): "13 pinned tunnels
+    to api.anthropic.com" (it used to time out). counts.hosts {} and counts.tunnel_hosts api.anthropic.com {conns 20, listed pinned};
+    gaps {pinned: 20}. listed_hosts_decrypted named (20 listed, 0 decrypted, 20 blind); history_complete skip.
+    Launch screen: "Host list from a file: /home/vercel-sandbox/run/hosts.toml (not verified)". End screen: "Not recorded, passed through
+    unread: api.anthropic.com (the program refused the recorder; 20 connections, 1.4 MB)" and "No model request was written".
+    Task committed (commits 1). hosts_sha256 ace1ebc9...
+  codex   box pad-0e7a8a  run ra10bf8abd772a791  entry e3f1291b2583e301d
+    C1 PASS, INC PASS FAIL INC PASS | sealed / 0 / seal_command | verifier exit 1. wait-calls "2 pinned tunnels to api.openai.com".
+    counts.tunnel_hosts api.openai.com {conns 3, listed pinned}; gaps {pinned: 3}; counts.hosts {}. End screen: "Not recorded, passed
+    through unread: api.openai.com (the program refused the recorder; 3 connections, 539 kB)". Committed (commits 1). hosts_sha256 396f4879...
+  -> Rung 8 holds on both: the pinned model host is named under "Not recorded". C1 is no longer INCONCLUSIVE for missing counts.
+     Only C4 (fetch) keeps the rows from PASS.
+
+FAILURES AND OWNERS
+G1 (rung 7, Claude Code) OWNER PRD-12 rig. scripts/pad/pad-run:416-417 sends the harness file's top-level pre_keys
+   (scripts/pad/harnesses/claude-code-cli.toml:15, probed for the direct API-key flow) in every case. With ANTHROPIC_AUTH_TOKEN (the
+   [gateway] section, :19-22) there is no API-key screen, so the third key picks "No, exit" on the trust screen, and Claude Code exits 1.
+   After trust there is also a "Make auto mode your default permission mode?" screen. Fix (tried locally in local-rung7.patch, worked
+   on pad-4a0c47): read pre_keys from the case section first, and give [gateway] pre_keys = ['\r', '\r', '\033[B\r', '\033[B\r'].
+G2 (rung 7, both) OWNER the owner's account. The AI Gateway key is on the free tier: "403 Free tier users do not have access to this
+   model" for openai/gpt-6-astra (Codex, scripts/pad/harnesses/gateway/codex-config.toml:3) and for Claude Code's default Opus 5.5.
+   This matches the 28 Oct research (docs/research/results/2026-10-vercel-gateway.md:47). A real gateway row needs paid gateway
+   credits, or a free-tier model in the gateway configs.
+G3 (rung 4, Claude Code at kill@1) OWNER PRD-12 rig. pad-run:603-604 treats any rise in written requests as "work in flight".
+   That kills just after a request has finished. When the smoke task is done before minute 1, an idle background request triggers it,
+   and pad-run:620-621 then wants a new request before the seal. Choices: make the rung kill@0 for the smoke prompt (it passed on both
+   harnesses), or use a longer prompt for rung 4, or let wait-recovery also count requests written by the seal.
+F4 (rung 8, minor, still open) OWNER PRD-10. crates/goalcup/src/cli/text.rs:456 maps "pinned" to "the program refused the recorder".
+   For a pin from the host list that cause is not true. PRD-12 section 2 only needs the host named under "Not recorded", which holds.
+F5 (all rows) OWNER environment and the owner's database grant: fetch blocked, so C4 FAIL and C2/C5 INCONCLUSIVE. Refetch refetch-ids.txt.
+Observation: secrets warn on 2 glued openai_key shapes on the Claude rows (C3 accepts it). Codex r4: listed_hosts_decrypted warn,
+   one long tunnel to the unlisted host ab.chatgpt.com (as before).
+
+SPEND. The pad has a live usd only for r4-claude kill@1: 0.25 USD. Estimates: Claude direct x3 (r4 x2, r8) about 0.75; Codex direct x2
+   about 0.2; gateway rows about 0 (every gateway call answered 403). Total about 1 USD, under the 4 USD cap.
+
+FILES: /root/gc-night/rung7/{REPORT.txt, refetch-ids.txt, local-rung7.patch, build.log, build/, runs/*.toml, logs/*.log,
+   pad-out/ (scrubbed run folders), padrun.sh, summ.py, scrub2.py, keyscan.py}

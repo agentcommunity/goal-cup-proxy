@@ -1,0 +1,183 @@
+08:05Z | pad planner PRD-12 | decision | slice 7 planned: 5 harness files, per-key queue plus R1 nit, K2 fixtures plus A3-1 nit; K7/K11 fixtures wait on PRD-08 slice 6 and PRD-09
+08:05Z | pad queue-and-pad-nits PRD-12 | start | slice 7 queue and R1 nit
+08:07Z | pad queue-and-pad-nits PRD-12 | stop | queue and R1 pushed, test_pad 29 ok in box
+08:08Z | pad k2-fixtures-selftest PRD-12 | start | worktree /root/gc-wt/pad-k2fx
+08:08Z | pad harness-files-c PRD-12 | fix | five harness files pushed; docs hosts mostly unreachable, keys marked unverified
+08:12Z | pad k2-fixtures-selftest PRD-12 | stop | K2 fixtures committed, K2 ran as wanted, selftest exit 3, pushed
+08:13Z | pad merger PRD-12 | start | lane merge begins
+08:23Z | pad merger PRD-12 | stop | merged 3 task branches clean, pushed aef4aaa1; build, clippy, test_pad ok, selftest exit 3 (K2 pass, others no fixtures)
+08:25Z | pad reviewA PRD-12 | start | review of prd-12-pad slice 7 at aef4aaa1
+08:38Z | pad reviewA PRD-12 | stop | review of prd-12-pad slice 7 done: no blocker, 2 fix, 3 nit; box selftest K2 PASS (exit 3, others not run), fixtures regenerate byte-identical
+08:40Z | pad fixer PRD-12 | fix | A-1..B4 fixed, tests green in box, pushed
+08:42Z | pad merge-requester PRD-12 | decision | queued v1.0/prd-12-pad slice 7 as 084219-prd-12-pad
+08:54Z | pad replan PRD-12 | amendment | slice 7 note in PRD-12 and PRD-16: scripts/pad 4303 lines vs row 1350-1450, K7/K11 fixtures pending, selftest exit 3 not a pass
+08:55Z | pad planner PRD-12 | decision | slice 8 planned: one task, K2 re-export plus K7 and K11 fixtures once PRD-08 slice 6 is on integration; no other PRD-12 code left
+08:56Z | pad k7-k11-fixtures PRD-12 | start | checking precondition
+09:02Z | pad k7-k11-fixtures PRD-12 | seam | PRD-08 slice 6 now on integration
+09:19Z | pad k7-k11-fixtures PRD-12 | stop | fixtures pushed; selftest exit 1: K11c, K11d differ (usage readable with no native, tokens null, C2 skip=FAIL); K6b not run (one chunk)
+09:19Z | pad merger PRD-12 | start | merging integration and fixtures branch
+09:25Z | pad merger PRD-12 | stop | merged integration and k7-k11-fixtures, pushed c5712975e76dd50479f267adaeedbeb79503099f; build, clippy, 29 unit tests pass; selftest K11c and K11d differ (check.py treats skip of threads_match, wire_keeps_up, subagents_present as FAIL on wire-only fixtures)
+09:30Z | pad reviewer-A PRD-12 | stop | review of v1.0/prd-12-pad slice 8 at c5712975: selftest exits 1 in a box (K11c, K11d differ; K6b not run); findings returned
+09:31Z | pad fixer PRD-12 | start | fixer starts on A1..A7
+09:37Z | pad fixer PRD-12 | stop | A1,A2,A5,A7 fixed in check.py/selftest; K6b and K11d all-six stay not run (need PRD-08 helper: multi-chunk, usage, subagent, S13 fields); selftest exit 3, 29 unit tests ok
+09:39Z | pad reviewerA PRD-12 | start | re-review of prd-12-pad K7/K11 slice, box run of selftest
+09:42Z | pad reviewerA PRD-12 | stop | re-review done at 254e3c38: selftest exit 3 (K6b, K11d not run), 29 unit tests OK; 3 fix findings open
+09:49Z | pad fixer PRD-12 | fix | A8 A9 A10 applied, selftest K11a-c pass, K6b/K11d not run (fixtures), pushed
+09:52Z | pad fixer PRD-12 | start | fixing A11 A12
+09:54Z | pad fixer PRD-12 | fix | A11 A12 fixed, box green, pushed
+09:55Z | pad reviewer-B PRD-12 | review | slice 8 re-check at 34572180: one stale-doc fix, two nits; no box run
+09:58Z | pad stop | PRD-12 Slice 8: the K7 and K11 fixtures and the K2 re-export, built from PRD-08 slice 6's test exports. Data only; no new pad code beyond one selftest line. not merged: findings still open after the last review round: B8 (branch v1.0/prd-12-pad)
+09:59Z | pad fixer PRD-12 | fix | B8, A13, B9 done, unit tests green, selftest controls not run (no verifier build), pushed
+10:00Z | pad reviewer-A PRD-12 | start | re-review slice 8 at a75a5d7399896979150ed5744a275937517fa8a0, selftest box
+10:02Z | pad reviewer-A PRD-12 | stop | re-review done: selftest box K2 K6a K6c K7 K9 K10 K11a-c as wanted, K6b and K11d not run (exit 3), 29 unit tests OK
+10:02Z | pad merge-requester PRD-12 | decision | queued v1.0/prd-12-pad slice 8 as 100256-prd-12-pad; all paths owned
+11:58Z | pad planner PRD-12 | decision | rung 1 readiness: two rig faults found against PRD-10 folder rule (project and GOALCUP_HOME are siblings; .git and pad-setup-check.sh planted before start); slice = move home, plant after start
+11:58Z | pad builder PRD-12 | start | start-folder-rule worktree ready
+12:09Z | pad builder PRD-12 | fix | start-folder-rule pushed; 30 tests green, real-build probe passes folder checks (stops at start not built)
+12:09Z | pad merger PRD-12 | start | merging lane
+12:10Z | pad merger PRD-12 | stop | merged, pushed 4b4578dd, box green
+12:14Z | pad fixer PRD-12 | fix | A1 A3 A4 B1 B2 B3 applied, tests green; A5: harness now starts in a non-repo folder, watch pane text and ready_text timing on rung 1
+12:15Z | pad fixer PRD-12 | fix | A6 A7 A8 R1 fixed, 30 tests green, pushed
+12:16Z | pad merge-requester PRD-12 | seam | queued 121640-prd-12-pad
+12:23Z | pad replan PRD-12 | amendment | slice 9 rung 1 readiness: notes in PRD-12 and PRD-16; pad is 4,344 lines vs row of about 1,400; no seam or ledger change
+12:25Z | pad planner PRD-12 | decision | slice 10 planned: rung 1 rig fixes (GOALCUP_SERVER missing from setup/seal env so setup would probe production; seal step 120 s timeout uncaught; end-screen regex misses singular)
+12:28Z | pad rung1-env-seal PRD-12 | fix | env, seal timeout, end-screen count pushed
+12:30Z | pad fixer PRD-12 | start | fixing A1-A4,B1
+12:31Z | pad fixer PRD-12 | start | fixing A1-A4,B1
+12:31Z | pad fixer PRD-12 | fix | A1-A4,B1 fixed, 32 tests green, pushed
+12:33Z | pad fixer PRD-12 | fix | A1b and A5 fixed, pad tests green in box, pushed
+12:34Z | pad reviewer-A PRD-12 | decision | re-check of slice 10 at 30c1683: A1b and A5 fixed, R1 decline accepted, one new fix (end screen zero matched by warning text)
+12:36Z | pad fixer PRD-12 | fix | N1 end-screen sentence match, B-dup merged into pane(text=); tests green, pushed
+12:37Z | pad merge-requester PRD-12 | seam | queued 123721-prd-12-pad (paths all under scripts/pad)
+19:26Z | pad preparer PRD-12 | start | slice 11 rung 1 rig fixes, apply rung1-patch.diff
+19:28Z | pad preparer PRD-12 | fix | slice 11 rung 1 patch applied, 33 pad tests, build, clippy green in box, pushed 41832d6fc27e4d58ceb5a031b318d396ced0d5ff
+19:28Z | pad fixer PRD-12 | start | fixing RIG-1..4
+19:29Z | pad fixer PRD-12 | fix | RIG-1 tails, RIG-4 merge; RIG-2/3 already on tip; tests green
+19:32Z | pad fixer PRD-12 | fix | RIG-5/6/7, B-2 fixed, tests green, pushed
+19:33Z | pad merge-requester PRD-12 | seam | queued merge request 193335-prd-12-pad for slice 11
+02:26Z | pad planner PRD-12 | decision | slice 12 planned: rung 2 rig faults RIG-5 user agent and plain error body, RIG-6 stop at once when start exits, RIG-7 DATABASE_URL only to fetch-run (already so in code, document and prove)
+02:27Z | pad rig-7-prd-doc PRD-12 | seam | doc note and section 7 fetch credential rule pushed
+02:28Z | pad rig-5-6-7-code PRD-12 | fix | RIG-5/6/7 pushed, 38 pad tests green in box
+02:28Z | pad merger PRD-12 | start | merging integration and task branches
+02:30Z | pad merger PRD-12 | stop | merged integration plus 2 task branches, box green, pushed
+02:32Z | pad fixer PRD-12 | fix | A1 A2 B1 B2 B4 done, 38 tests green, pushed
+02:34Z | pad fixer PRD-12 | fix | A4 R1 R2 fixed, 38 tests green in box, pushed
+02:36Z | pad fixer PRD-12 | fix | A5 dead pane ends server-off status wait; pushed
+02:36Z | pad PRD-12 PRD-12 | stop | PRD-12 PRD-12 slice 12: rung 2 rig faults. RIG-5 (approve() sends a named User-Agent on every pad HTTP call and reports a non-JSON error body plainly), RIG-6 (stop at once and report start-refused when goalcup start exits), RIG-7 (DATABASE_URL reaches only fetch-run on the conductor; prove it and document it). not merged: findings still open after the last review round: A6, A7, A5 (branch v1.0/prd-12-pad)
+02:37Z | pad fixer PRD-12 | fix | A6 start-refused raised with server off, A7 test
+02:38Z | pad merge-requester PRD-12 | seam | queued merge request 023858-prd-12-pad (slice 12, no Cargo.toml change)
+02:47Z | pad replan PRD-12 | amendment | slice 12 replan: size note in PRD-16 and PRD-12 entry, B1 nit only, no plan change
+03:15Z | pad planner PRD-12 | decision | slice 13: RIG-8 paste waits for status.json recording, RIG-9 mask fetch credentials out of said(); one task; branch merged with integration and pushed
+03:17Z | pad builder PRD-12 | fix | RIG-8 paste waits for recording status, RIG-9 child stderr masked; tests green in box
+03:27Z | pad merger-12 PRD-12 | stop | merged integration and rig-8-9-paste-and-mask, box ok, pushed
+03:28Z | pad reviewer-A PRD-12 | stop | review of slice 13 (RIG-8, RIG-9) done: no blocker, box test_pad 42 tests OK
+03:29Z | pad merge-requester PRD-12 | seam | queued 032905-prd-12-pad (slice 13 RIG-8/RIG-9)
+03:37Z | pad replan PRD-12 | amendment | slice 13 replan: size 3221 code + 695 tests vs row 1,350-1,450, nits queued in PRD-12, no plan change
+05:51Z | pad planner PRD-12 | decision | slice: rig faults F1 (kill timing, R1 bound from kill time) and F2 (dodger work signal); prd branch fast-forwarded to integration
+05:53Z | pad builder PRD-12 | fix | F1 kill timing and F2 dodger wait-calls pushed (pc.work not yet on PRD branch)
+05:53Z | pad check-gap PRD-12 | fix | F1 gap-end bound and F2 work() helper pushed; unit tests green in box
+05:54Z | pad merger PRD-12 | start | merging integration and two task branches
+05:54Z | pad merger PRD-12 | stop | pushed b3253a9c, 44 unittest pass
+05:57Z | pad fixer PRD-12 | start | fixing A1-A5 B1-B5
+05:59Z | pad fixer PRD-12 | fix | A1-A5 B1-B3 B4 fixed, tests green, pushed; B5 dropped, B6 skipped
+06:01Z | pad fixer PRD-12 | fix | quiet long-gap kill is INCONCLUSIVE; restarts field cut; pad tests green (44)
+06:02Z | pad fixer PRD-12 | fix | A7 quiet kill no longer fails on missing request; B9 tidied; 46 tests green
+06:03Z | pad merge-requester PRD-12 | seam | queued 060315-prd-12-pad
+06:18Z | pad planner PRD-12 | decision | slice: P1-P6 rig fixes, 3 tasks; prd branch merged with integration
+06:18Z | pad check-c3-echo-scan PRD-12 | start | P2 P3 slice
+06:20Z | pad check-c3-echo-scan PRD-12 | fix | P2 P3 pushed, 49 pad tests green in box
+06:20Z | pad image-rebuild PRD-12 | start | slice 13 P1 image rebuild
+06:21Z | pad harness-files PRD-12 | fix | slice 13 P4-P6 harness data pushed
+06:24Z | pad image-rebuild PRD-12 | decision | sbx.mjs CJS load cannot reach the API from here (fetch failed); using an ESM shim via PAD_NODE_MODULES, no repo change
+06:29Z | pad image-rebuild PRD-12 | stop | image rebuilt, 16/16 pins match, pushed
+06:29Z | pad merger PRD-12 | start | merging lane
+06:34Z | pad merger PRD-12 | stop | merged 3 branches, box green, pushed
+06:36Z | pad reviewerA PRD-12 | stop | slice 13 review done: 1 blocker (C3 passes a headerless PEM body raw in the record), 3 fix; box tests skipped
+06:36Z | pad fixer PRD-12 | start | fixer started on prd-12-pad
+06:38Z | pad fixer PRD-12 | fix | A1-A5,B1-B4,B6 fixed, A4 and A6 declined; 50 tests green in box; pushed
+06:39Z | pad fixer PRD-12 | start | fixing A7 B7 and nits
+06:40Z | pad fixer PRD-12 | fix | A7 B7 and nits done, 50 tests green, pushed
+06:42Z | pad merge-requester PRD-12 | seam | queued 064213-prd-12-pad (slice 13, paths all under scripts/pad, no Cargo.toml)
+06:55Z | pad replan PRD-12 | amendment | slice 13: C3 not-exercised INCONCLUSIVE noted, nits A12 B10 queued, size 4074 vs 1350-1450 reported in PRD-16
+06:57Z | pad planner PRD-12 | decision | slice 14 planned: P0a dbfetch box route, P0b keep rec on failed fetch, G1 per-case pre_keys, G3 rung 4 kill@0; 3 tasks
+06:57Z | pad builder PRD-12 | start | slice14 fetch-via-index-box P0a P0b
+06:57Z | pad builder PRD-12 | start | G1+G3 keys and kill0
+06:59Z | pad builder PRD-12 | fix | G1+G3 pushed, 57 tests green in box
+06:59Z | pad prd-12-fetch-route-doc PRD-12 | seam | docs for slice 14 committed and pushed
+07:02Z | pad builder PRD-12 | fix | P0a P0b done, 62 tests green in box, pushed v1.0/prd-12-pad-fetch-via-index-box
+07:03Z | pad merger-12 PRD-12 | stop | merged 3 task branches, box python tests ok, pushed
+07:06Z | pad fixer PRD-12 | start | fixing A1-A6 B1-B6
+07:09Z | pad fixer PRD-12 | fix | A1 A2 A3 A5 A6 B1-B5 done, 67 tests green in box, pushed; A4 skipped
+07:11Z | pad fixer PRD-12 | start | fixing A7 A4 A8 B7 B8
+07:13Z | pad fixer PRD-12 | fix | A7 A4 A8 B7 B8 done, 68 tests green, pushed
+07:16Z | pad fixer PRD-12 | fix | A9 keep_rec only after wipe ok, bounded by wipe share; B10 B11 done
+07:17Z | pad merge-requester PRD-12 | seam | queued 071736-prd-12-pad
+07:31Z | pad replan PRD-12 | amendment | slice 14: nits A10 B12 queued, size 4613 src+tests (3537 src) vs 1350-1450 reported in PRD-16
+07:32Z | pad planner PRD-12 | decision | slice 15 planned: R5-1 L3+L2 rung 5/5b, R5-2, R5-3, R5-4, selftest exit 3
+07:33Z | pad check-reason-fixes PRD-12 | start | R5-2 R5-3
+07:33Z | pad rung5-shell PRD-12 | decision | L3 launch shell kept for kill-watchdog-recover, 5b script added
+07:35Z | pad check-reason-fixes PRD-12 | fix | R5-2 R5-3 pushed, 52 tests ok
+07:35Z | pad rung5-shell PRD-12 | stop | pushed, 70 tests ok in box
+07:36Z | pad codex-exit-keys PRD-12 | decision | cause is paste-burst Enter; pad-run needs a split send; comment-only commit pushed; exit not run
+07:37Z | pad selftest-exit PRD-12 | stop | selftest still exit 3 in box at integration head; PRD-08 helpers cannot write multi-chunk k7 export or k11-d fetched/usage record; no fixture change
+07:39Z | pad merger PRD-12 | stop | merged 4 task branches, 72 python tests pass in box, pushed
+07:43Z | pad reviewerA PRD-12 | stop | review of slice 15 at cfc6a855: box unit tests 60 OK; probe shows rung 5b row reads C1 FAIL from its own expected gap; 0 blocker, 3 fix, 3 nit
+07:43Z | pad fixer PRD-12 | start | fixing A1-A6 B1-B6
+07:45Z | pad fixer PRD-12 | fix | A1-A6 B1-B6 fixed, tests green in box, pushed
+07:48Z | pad fixer PRD-12 | fix | A7 A8 A9 A10b R1 R2 fixed, 53 tests green, pushed
+07:49Z | pad merge-requester PRD-12 | seam | queued 074936-prd-12-pad for slice 15
+08:03Z | pad replan PRD-12 | amendment | slice 15: size 4697 src+tests (3593 src) vs 1350-1450; notes in PRD-12, PRD-08, PRD-16
+09:28Z | pad planner PRD-12 | decision | sweep2 fixes slice planned: harness data (hermes, crush, cline) and check.py rules (C3 upstream mask, history warn)
+09:30Z | pad harness-data PRD-12 | stop | hermes fixed; crush and cline marked not verified; pushed
+09:30Z | pad merger PRD-12 | start | merging lane PRD-12
+09:49Z | pad merger PRD-12 | stop | pushed df1d7d07; task branch check-c3-upstream-and-history-warn does not exist on origin, not merged
+09:51Z | pad fixer PRD-12 | start | fixer on v1.0/prd-12-pad
+09:52Z | pad fixer PRD-12 | stop | A1..B4 handled, pad unit tests 72 OK, pushed
+09:53Z | pad fixer PRD-12 | fix | table reads not_verified; test added; 74 tests green in box
+09:54Z | pad merge-requester PRD-12 | seam | queued merge request 095421-prd-12-pad for v1.0/prd-12-pad
+10:09Z | pad replan PRD-12 | amendment | sweep2 fixes: notes in PRD-12, PRD-11 (Cline acc 5 unexercised), PRD-16 size (pad 4473 py + 832 data vs 1350-1450)
+10:56Z | pad c3-stated-loss PRD-12 | start | worktree ready
+10:57Z | pad kill-times PRD-12 | seam | kill_minutes per harness (Codex 3,5) pushed v1.0/prd-12-pad-kill-times; 81 unit tests green in box
+10:57Z | pad c3-stated-loss PRD-12 | stop | pushed v1.0/prd-12-pad-c3-stated-loss, 77 tests green; C3U skipped
+10:58Z | pad merger PRD-12 | start | joining pad lane
+10:59Z | pad merger PRD-12 | stop | merged, box ok, pushed c0257fb6fd606c23f5c4c53700989b75d5251e12
+11:04Z | pad fixer PRD-12 | start | fixing A1-A7,B1-B6
+11:07Z | pad fixer PRD-12 | fix | A1-A7,B1-B6 done, 66 tests green in box, pushed; owner question on C3 stated loss open
+11:09Z | pad fixer PRD-12 | fix | A8-A11 R1-R3 fixed, 66 pad tests green in box, pushed
+11:11Z | pad fixer PRD-12 | fix | A12 stated loss keeps C1 exit rule when any check is named; R5 done; tests green, pushed
+11:12Z | pad merge-requester PRD-12 | seam | queued 111232-prd-12-pad
+11:18Z | pad replan PRD-12 | amendment | full-row fixes: notes in PRD-12, PRD-16 (kill minutes wording, C3 open, size pad 4726 py/js + 850 data vs 1350-1450)
+13:55Z | pad builder PRD-12 | start | live-dodger-and-early-pane
+13:56Z | pad builder PRD-12 | fix | live-dodger-and-early-pane pushed, tests green in box
+13:57Z | pad builder PRD-12 | fix | c3-upstream-redaction pushed, 88 pad tests green in box
+13:58Z | pad merger PRD-12 | stop | joined c3 + live-dodger into prd-12-pad, 93 pad tests ok, pushed
+14:01Z | pad fixer PRD-12 | fix | A1-A7,B1-B6 done, tests green in box, pushed; A3 vendor page unreachable
+14:03Z | pad fixer PRD-12 | start | fixing A3 N1 B7 B8
+14:04Z | pad fixer PRD-12 | fix | A3 N1 B7 B8 done, 89 tests green in box, pushed
+14:05Z | pad merge-requester PRD-12 | seam | queued 140547-prd-12-pad
+15:07Z | pad planner PRD-12 | decision | next slice: C3 stated-loss planted loop (F2) and goalcup.log out + post-approval pane (F3); merged integration into prd-12-pad
+15:07Z | pad builder PRD-12 | start | goalcup.log copy and post-approval pane
+15:08Z | pad c3-stated-loss-planted PRD-12 | fix | C3 stated loss no longer FAILs unmasked planted kinds; pushed
+15:08Z | pad builder PRD-12 | fix | goalcup.log in OUT, pane at top of type_prompt; 92 pad tests green, pushed
+15:09Z | pad merger PRD-12 | fix | merged into main checkout by mistake (cd failed), reset it to its prior head 786d68c5; redoing in own worktree
+15:09Z | pad merger PRD-12 | fix | merges first ran in the main checkout by mistake; moved its HEAD back to 786d68c5, redone in own worktree
+15:10Z | pad merger PRD-12 | stop | pushed v1.0/prd-12-pad 4c823337; 94 pad tests ok
+15:13Z | pad fixer PRD-12 | fix | goalcup-new.log carried, C3 loss read simplified, tests green in box, pushed
+15:14Z | pad merge-requester PRD-12 | seam | queued 151435-prd-12-pad
+18:57Z | pad planner PRD-12 | decision | package slice: exact-value C3 (plain hit FAIL, run_secret MASK proof) + masked-upstream PASS; one task in check.py/test_pad.py; prd-12-pad merged with integration
+18:57Z | pad builder PRD-12 | start | c3 exact values and upstream pass
+19:02Z | pad builder PRD-12 | stop | c3 exact values and upstream pass pushed, 97 pad tests green, ready for package merge
+19:02Z | pad merger PRD-12 | stop | merged c3-exact-values-and-upstream-pass into prd-12-pad, 97 pad tests ok in box, pushed
+19:06Z | pad reviewerA PRD-12 | stop | review of prd-12-pad 7ea97ad3 done: 1 blocker (masked-upstream PASS with no exercise evidence), 3 fix, 2 nit; unit tests 67 OK in a box
+19:06Z | pad fixer PRD-12 | start | fixing A1-A6 B1-B5
+19:08Z | pad fixer PRD-12 | fix | A1-A6,B1-B5 done, 99 tests green in box, pushed
+19:11Z | pad fixer PRD-12 | start | fixing A7 A1b A8 A9 B1-B4
+19:13Z | pad fixer PRD-12 | fix | A7 A1b A8 A9 B1-B4 fixed, tests green in box, pushed
+19:13Z | pad fixer PRD-12 | fix | repaired PRD-12 doc edit, pushed
+19:17Z | pad reviewer-A PRD-12 | decision | re-review of prd-12-pad 4f72e151: one blocker (exact-on Hermes run_secret covers gated kinds, PASS without masked_upstream flag); prior findings fixed
+19:18Z | pad fixer PRD-12 | start | fixing A10 A11 R1 R2
+19:19Z | pad fixer PRD-12 | fix | A10 A11 R1 R2 fixed, pushed, 101 pad tests green in box
+19:22Z | pad reviewerA PRD-12 | stop | re-check of prd-12-pad d9843ed8: A10/A11/R1/R2 closed, 101 pad tests OK in box; 2 fix open (masked-upstream PASS for kinds the vendor page does not name, amendment bullet 1 still says run_secret is proof)
+19:22Z | pad PRD-12 | stop | PRD-12 Package with PRD-05 exact-value masking: C3 treats a plain hit of the planted .env value as a LEAK once exact values are on and counts a run_secret MASK as the exercise proof; C3 PASS 'masked upstream' for a redacts_tool_output harness whose planted kinds never reach the wire. F2/F3 are already merged (a31a45e4 on integration). not merged: findings still open after the last review round: A12, A13 (branch v1.0/prd-12-pad)
+19:24Z | pad fixer PRD-12 | fix | A12 A13 A14 fixed, 101 pad tests green in box, pushed
+19:25Z | pad merge-requester PRD-12 | seam | queued 192532-prd-12-pad for v1.0/prd-12-pad

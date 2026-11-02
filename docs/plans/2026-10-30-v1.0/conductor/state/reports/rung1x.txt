@@ -1,0 +1,125 @@
+Rung 1x: PRD-12 P2 (mode micro, case direct, server off, where here, in pad boxes) for every harness beyond Claude Code and Codex.
+Integration 0bf25314 (origin/v1.0/integration, fetched 1 Nov 05:05Z). Worktree /root/gc-wt/rung1x (clean, nothing committed or pushed).
+Binaries: release goalcup + goalcup-verify 1.0.0 built in build box magenta-flat-raccoon-iVMGqE (build.log). Model keys, DATABASE_URL and GH_TOKEN
+were stripped from the build box env. Keys reached pad boxes only through sbx.mjs put-env (0600, ~/.pad-keys/<name>). Every copy-out went through
+scrub.py (all five model keys plus DATABASE_URL/GH_TOKEN/VERCEL/CF). keyscan.py was run on this folder after every wave: 0 hits, 11 keys checked.
+No pad boxes are left (sbx list --prefix pad-r1x is empty). Total pad-estimated spend: 0.30 USD (no row over 0.08).
+
+ENVIRONMENT NOTE (PRD-12 rig): scripts/pad/image.id (snap_Nsdum3e3...) is the 30 Oct image from 2da5c5f9, which has the three core harnesses only.
+No image rebuild was made after harness files for the other 13 were added. So padbox.sh installs each harness from its pad toml `install` line
+inside the box before running pad. Every install matched its pin. Fix: rebuild with scripts/pad/image and commit the new image.id.
+
+RUNNABLE?
+  amp-cli        NOT RUNNABLE: needs an Amp account (pad key_kind "none", ledger T2). Not run.
+  droid-cli      NOT RUNNABLE: needs a Factory account (key_kind "none"). Not run.
+  copilot-cli    runnable: BYOK DeepSeek (Anthropic-format endpoint), COPILOT_OFFLINE, no GitHub login needed (key DEEPSEEK_API_KEY).
+  gemini-cli     runnable: GEMINI_API_KEY, model gemini-4-argon (the only Gemini model in pad.toml rates and the pad snippet).
+  cline, crush, goose, hermes, kilo, kimi-code, openclaw, opencode, opencode2, qwen: runnable on DEEPSEEK_API_KEY, model deepseek-flash.
+  AI_GATEWAY_API_KEY, CLAUDE_API_KEY and OPENAI_API_KEY were not needed: P2 is direct, and no harness here routes direct to those keys.
+
+TABLE (main row; extra diagnosis/fix rows are listed below). "pass@micro" = C1 C3 C5 C6 PASS with C2/C4 INC (micro starts no subagent and the server is off), the best a P2 row can give.
+harness       model           box                               C1   C2  C3   C4  C5   C6   status mode/model_requests/seal.reason  USD   result
+cline-cli     deepseek-flash  pad-r1x-cline-cli-052714          INC  INC INC  INC INC  INC  sealed/0/seal_command                0.00  INC: Cline onboarding screen, provider not configured
+copilot-cli   deepseek-flash  pad-r1x-copilot-cli-052714        FAIL INC FAIL FAIL PASS PASS sealed/6/seal_command               0.01  FAIL (twice: also -diag2, 5 req)
+crush-cli     deepseek-flash  pad-r1x-crush-cli-051704          INC  INC INC  INC INC  INC  sealed/4/seal_command                0.00  INC: stuck at tool Permission dialog
+gemini-cli    gemini-4-argon  pad-r1x-gemini-cli-051704         PASS INC FAIL INC PASS PASS sealed/6/seal_command                0.07  FAIL: REAL GEMINI KEY IN RECORD (3 of 3 runs)
+goose-cli     deepseek-flash  pad-r1x-goose-cli-052153          PASS INC FAIL INC PASS PASS sealed/6/seal_command                0.00  FAIL: model-echo shape in deltas + rig MASK rule
+hermes-cli    deepseek-flash  pad-r1x-hermes-cli-051111         INC  INC INC  INC INC  INC  sealed/0/seal_command                0.00  INC: telemetry screen, prompt lost
+  (fix2, local rig data) pad-r1x-hermes-cli-fix2-*           PASS INC FAIL INC PASS PASS sealed/7/seal_command                0.01  records; own log read per_call; C3 = harness redaction + echo
+kilo-cli      deepseek-flash  pad-r1x-kilo-cli-051704           PASS INC FAIL INC PASS PASS sealed/7/seal_command                0.01  FAIL: 4 PEM body lines raw (see below)
+  (rerun -diag)                                              PASS INC PASS INC PASS PASS sealed/8/seal_command                0.01  pass@micro
+kimi-code-cli deepseek-flash  pad-r1x-kimi-code-cli-052153      INC  INC INC  INC INC  INC  sealed/4/seal_command                0.00  INC: trust screen ate the paste
+  (fix, local rig data)                                      INC  INC INC  INC INC  INC  sealed/5/seal_command                0.00  INC: Kimi refuses pad config (model protocol)
+openclaw-cli  deepseek-flash  pad-r1x-openclaw-cli-052153       INC  INC FAIL INC INC  INC  sealed/8/seal_command                0.01  FAIL: worked outside the project; history orphans
+  (rerun -diag)                                              FAIL INC FAIL INC PASS PASS sealed/21/seal_command               0.02  FAIL (C1 history_complete, C3)
+opencode-cli  deepseek-flash  pad-r1x-opencode-cli-051111       PASS INC INC  INC PASS PASS sealed/7/seal_command                0.00  INC: the model refused to run the setup script (C3 not exercised)
+opencode2-cli deepseek-flash  pad-r1x-opencode2-cli-052714      PASS INC PASS INC PASS PASS sealed/6/seal_command                0.00  pass@micro
+qwen-cli      deepseek-flash  pad-r1x-qwen-cli-051111           PASS INC FAIL INC PASS PASS sealed/10/seal_command               0.02  FAIL: model-echo url_password shape in deltas
+Gemini diag runs: gemini-cli-diag (0.05) and -diag2 (0.08), C1 PASS C3 FAIL C5 PASS C6 PASS, each with the same key hit.
+Every row: C6 counts matched where work was done. No over_cap. No provider errors.
+
+FAILURES BY OWNER
+
+1. SEVERE (point 4). Gemini CLI: the participant's real Gemini API key is stored unmasked in the local record. OWNER PRD-05 masker (crates/goalcup/src/mask;
+   of the owners given, PRD-02 recorder is closest).
+   Evidence: in all three Gemini runs, the verifier reports a known hit with sha12 50db17a44978, equal to sha256(GEMINI_API_KEY)[:12]. -diag2 found
+   6 hits in the request streams DATA 4,12,14,16,19,23. Context, value cut:
+     before='...GCM_INTERACTIVE=never\\nGEMINI_API_KEY='  after='\\nGEMINI_CLI=1\\nGEMINI_CLI_H'
+   Path: the pad's key route writes {home}/.gemini/.env. Gemini CLI loads it into its process env, so the tool shell's `env | sort`
+   (pad-setup-check.sh) prints it, and the output is sent in the next request body. The x-goog-api-key header itself IS masked (meta.rs).
+   Why the masker misses it: the key is the new Google format (53 chars, prefix "AA." pattern: letter, letter, dot). It has no "AIza", so
+   shapes.tsv:26 google_key cannot match. The shell assignment literal shapes.tsv:24 needs [A-Za-z0-9_\-]{16,} right after "=" and stops at the
+   "." in position 2. The default build reads no secret_files (connector/mod.rs:129, owner question 3), so the value is not a known value either.
+   Fix ideas: add a google_key literal for the new format, and/or allow "." in the line 24 value class. Also tell participants (PRD-10) when
+   GEMINI_API_KEY is in the harness env. The PRD-08 verifier caught it correctly.
+
+2. Copilot C1/C4 FAIL listed_hosts_decrypted. OWNER PRD-08 verifier (PRD-03 proxy co-owns the contract). Seen twice.
+   Log line: "2 listed connections: 1 decrypted, 0 sign-in, 1 blind (1 with no GAP of their reason) ... hosts: api.deepseek.com"
+   The blind one is sid 1, OPEN meta {host api.deepseek.com, listed shared, mode tunnel, reason not_tls, fingerprint null}: Copilot opened a
+   connection and closed it before sending a ClientHello (a preconnect). The recorder names no GAP on purpose when no byte moved
+   (crates/goalcup/src/proxy/tunnel.rs:62-65 `if lost == 0 { return; }`; proxy/mod.rs:248-266 comment). But the verifier fails every listed
+   tunnel without a GAP (crates/goalcup-verify/src/honesty.rs:363-383 tunnel_end). Suspected fix: tunnel_end should skip a listed tunnel that
+   moved 0 bytes.
+
+3. Secret shapes the model echoes, split across SSE deltas (qwen url_password, goose url_password, hermes-fix2 masked_key, openclaw masked_key and
+   url_password; Gemini also echoed plants). OWNER PRD-05 masker (a listed known limit: PRD-05 table rows at PRD-05:458 and :636). The verifier
+   joins deltas (goalcup-verify/src/secrets.rs:355-374) and flags them, which is correct. Example: qwen's reply carried
+   "https://pad:f96229...@example.invalid" (a shortened remote password: shape only, known_hits 0).
+   Same class, OWNER PRD-12 rig: check.py:420 also counts the pad's own pane captures (watch/pane-*.txt, "N hits in the box's output folder")
+   for the same echo. Those are the pad's screen copies, not anything goalcup records or uploads.
+
+4. C3 "no MASK of <kind> for a planted value" when the harness or the model redacts first. OWNER PRD-12 rig (scripts/pad/check.py:437).
+   Copilot masks GITHUB_TOKEN, PAD_JWT and the remote URL itself. Hermes shows "sk-pro...PLk2"-style partials and "[REDACTED PRIVATE KEY]".
+   Goose, Kilo and OpenClaw models pipe the script through their own sed. The planted value then never reaches the wire raw, so there is
+   nothing to MASK, and the row still FAILs. Related (kilo first run): the model's mask rewrote the PAD_PEM="-----BEGIN..." line but left the 4 PEM
+   body lines. With no header, no shape can match them, so they are known-value hits (4 values x 5 request streams; sha12 differ from every
+   model key). The rig counts PEM body lines as known values one by one (pad-run:222, plant() pad-run:295-309). Not a goalcup regression, and
+   the rerun passed. The rig should decide whether a headerless PEM line is a goalcup miss.
+
+5. Hermes: the first run did no work. OWNER PRD-12 rig (harnesses/hermes-cli.toml) plus PRD-11 connector (connectors/hermes-cli.toml:34 no_prompts).
+   Panes: "hermes: preparing dependencies for this data root ... Installing Python dependencies" (105 packages, 72 MB from
+   files.pythonhosted.org on every run, because HERMES_HOME is per run). The pad pasted the prompt into that output after its fixed 30 s
+   (pad-run:413-414: no ready_text, so sleep 30). Then the "Help improve Hermes? ... Share with Nous / No thanks" screen stayed up until seal
+   ("Hermes has exited (exit code 1)", 0 requests).
+   A local, uncommitted data fix (padfix/harnesses/hermes-cli.toml: ready_text "Help improve Hermes?", pre_keys Enter then about 15 s) makes it
+   record: C1 PASS (local log read, harness_log per_call), C5 PASS, C6 PASS, 7 requests. With only 3 s after Enter (-fix), the prompt sat
+   unsubmitted in the chat input. Suggest: pre-answer telemetry in no_prompts (key not read; Hermes says "hermes setup telemetry"), and pad
+   ready_text/pre_keys as in padfix. The per-run 72 MB install is a participant-facing delay worth noting in PRD-11 first_screen.
+
+6. Kimi Code. OWNER PRD-12 rig (harnesses/kimi-code-cli.toml).
+   (a) A folder-trust screen ("Trust and continue / Exit") ate the paste. Fixed locally with ready_text "Trust and continue", pre_keys Enter.
+   (b) Then Kimi refuses the pad's config.toml: "Error: Failed to start a session: Model "ds" must declare a wire protocol (config: models.<id>.protocol)".
+       The key_line config (kimi-code-cli.toml key_line) lacks models.ds.protocol. Read from docs only; the value is unmeasured.
+   Minor (PRD-02 counts / PRD-11 host list): with no model call made, the end screen says "4 model requests written: api.kimi.com 4"
+   (5 in -fix). These are Kimi startup calls to a listed host, and the verifier's wire_requests is 0.
+
+7. Crush: stuck at a tool permission dialog. OWNER PRD-11 connector (connectors/crush-cli.toml has no no_prompts).
+   Pane: "Permission Required ... Tool bash ... Allow / Allow for Session / Deny" until seal. Crush had first auto-started its AGENTS.md "init"
+   flow, with our prompt queued behind it. 4 requests recorded, no commit, so C1-C6 INC. Needs an auto-allow (crush.json permissions or --yolo)
+   in no_prompts or args.
+
+8. Cline: never reached a model. OWNER PRD-12 rig (harnesses/direct/cline-cli-config.json, "read from docs only").
+   Pane: "Welcome to Cline. Connect a model provider to get started" with Sign in with Cline / ClinePass / ChatGPT / Bring your own provider.
+   The paste's Enter chose "Sign in with Cline" (device code shown, "Waiting for sign-in..."). Cline ignores the planted
+   data/settings/providers.json, so the shape or path is wrong (connector CLINE_DATA_DIR={home}/data). 0 requests.
+   (The install's version_cmd also printed "/bin/sh: hostname: command not found"; setup still matched 3.0.74.)
+
+9. OpenClaw. OWNER PRD-11 connector (connectors/openclaw-cli.toml), plus PRD-08 verifier history check (suspected), plus PRD-04 native capture.
+   (a) The agent works in its own workspace under OPENCLAW_HOME (AGENTS.md, SOUL.md, ...), not the run's project. The model said "The script
+       lives in the project dir, not the workspace" and committed count.txt there, so the pad saw commits_since_start 0 ("did no work"). The
+       connector/plan should point agents.defaults.workspace at {workspace}.
+   (b) C1 FAIL on -diag: "history_complete fail: thread chain-1: request on stream 5 ... resends answer 1 (tool call): never recorded as a
+       response". Orphans were 7/7 and 19/20 although every response stream is recorded. These are DeepSeek SSE with content-encoding zstd,
+       decoded:true. Suspect OpenClaw rewrites tool-call ids, or the history matcher does not see zstd-decoded tool calls
+       (crates/goalcup-verifier/src/capture_analysis/thread.rs / chat.rs; line not pinned). Other DeepSeek harnesses' history passes.
+   (c) 3-4 named source_changed GAPs per run on the native sqlite streams (form final) give "faults FAIL: named loss other than the expected
+       gaps: source_changed". OWNER PRD-04 native capture.
+
+10. OpenCode 1: C3 INC because the model refused to run pad-setup-check.sh ("deliberately dumps .env.local and the entire process environment").
+    Model behaviour, not a defect; rerun or a prompt note (PRD-12). Minor PRD-10 wording: the end screen says "0 session files, 3.2 MB" when
+    the native opencode.db (form final) was copied (harness-files.json lists db:opencode.db*), and check facts native_files is 0.
+
+FILES
+  REPORT.txt (this), padbox.sh, queue.sh, summ.py, scrub.py, keyscan.py, jobs/ (build.sh, inbox-*.sh, diag.py), runs/<harness>.toml,
+  logs/<row>.log, pad-out/<row>/pad-out/<harness>/direct/<stamp>/ (table.txt, report.txt, row.json, status.json, verify/, watch/),
+  padfix/pad (keep-box-dir for diag only), padfix/harnesses/{hermes,kimi-code}-cli.toml (local rig data fixes; not committed).

@@ -1,0 +1,146 @@
+history_complete always warns on Claude Code rows: root cause and fix
+=====================================================================
+Read-only investigation, 2026-11-01. Code at origin/v1.0/integration 61ef1156. No repo file changed,
+nothing committed or pushed. Records decoded with goalcup-verify dump in two build boxes (no keys
+in the box). Decoded dumps (scrubbed, mode 0600) are kept in /root/gc-night/history-warn/job/ and the
+analysis scripts in /root/gc-night/history-warn/an/.
+
+VERDICT
+-------
+This is not a missed call, and Claude Code does not rewrite the text it resends. The recorder's
+masker stars secret-shaped bytes in the request but not in the streamed response, so the two copies
+of the same answer have different bytes. Nothing about thinking blocks, citations, whitespace or the
+SSE delta joiner is involved: the joiner gives the right text.
+
+The data: rung 3b, run rddadf04700305b92, entry ed2196bedb5e16393
+------------------------------------------------------------------
+- The warn names request sid 67 (POST /v1/messages, opus, 07:36:18.98Z) and "answer 3". That is
+  messages[6], a text-only assistant turn of 1440 bytes: "I ran `./pad-setup-check.sh`. It doesn't
+  really check setup. ..." The answer quotes the planted credentials as placeholders, for example
+  PAD_PEM="-----BEGIN PRIVATE KEY----- …[redacted]… -----END PRIVATE KEY-----" and
+  https://pad:[redacted]@example.invalid.
+- The answer was produced by request sid 57 and recorded in its SSE response, sid 66: 112
+  text_delta events, end_turn. The joined deltas have the full text, with the placeholders raw.
+- The request copy carries three MASK records on sid 67 that fall inside messages[6]:
+  private_key (len 70, at byte 20623), url_password (len 10, at 20714) and url_password (len 10, at
+  20775). Those spans are stars in the request body.
+- Check: take the response text and replace those three spans with stars, one star per UTF-8 byte.
+  The result is byte-identical to the resent request text (1440 = 1440 bytes). So the text-hash key
+  differs only because of the masks.
+- Why the two copies are masked differently: in the request the answer is one contiguous JSON
+  string, so the private_key and url_password shapes match the placeholders and the masker stars
+  them. In the response the same characters are spread over separate text_delta events, for example
+  "pad:[redacted]" then "@example.invalid/p", and "[redacted]… -----" then "END PRIVATE K". JSON
+  framing sits between the pieces, so the byte-stream masker never sees a whole match. PRD-05 states
+  and accepts this limit (risks row: "A key the model repeats across SSE or WebSocket deltas: not
+  masked"), and PRD-08 3.1 relies on it for the deltas scan.
+
+Same cause on every other Claude Code warn row
+----------------------------------------------
+I decoded and re-ran the matcher on 5 more rows: c4 r8a5e602df2c805eb, r8ee90dc54d9093e5,
+rba2255ed466ac959 and rc304eced1052086d, and rung5 r5de6acf9398c1d09. Each has exactly 1
+missing_text and 0 missing_call. In every row:
+- the unmatched turn is the pad answer that quotes the redacted credentials;
+- it has star runs in the request where MASK records lie (private_key 60 to 70 bytes, url_password
+  4 to 10 bytes);
+- the response holds the raw placeholder text, split across deltas.
+Later requests resend the same masked turn too. The verifier counts only the first, because later
+requests join the chain and their resent turns are no longer new.
+
+The Codex rows skip ("history held by the provider", previous_response_id). The Gemini rows pass.
+The warn fires on every Claude row because the pad's prompt always makes the model quote secret
+shapes in a final text answer. Outside the pad it fires whenever a resent text answer contains
+anything secret-shaped.
+
+Why the matcher misses it (code)
+--------------------------------
+crates/goalcup-verify/src/history.rs
+- :75-76  the request turn's text key is SHA-256 of the whole whitespace-collapsed text, stars and
+          all.
+- :102-109 (texts) the response key is SHA-256 of the joined text, raw.
+- :537-560 any byte difference is a miss. Text-only, so the result is warn "text not found in any
+           response".
+The check has no notion of MASK records, even though it reads the same record stream (push,
+:204-239, ignores Record::Mask).
+
+Recommended fix: PRD-08 (verifier), history.rs only
+----------------------------------------------------
+Owner: PRD-08. history.rs is PRD-08 section 3.2 (ledger T4). PRD-09 owns only U1 call pairing and
+thread ids, which work here. PRD-05's masker behaves as specified. Making it mask across SSE deltas
+would be a large change to a documented accepted risk, and the verifier is meant to stay independent
+of the masker (goalcup-verify does not depend on crates/goalcup).
+
+The idea: give masked turns an end-anchored key. A MASK stars bytes in place, and in practice it
+falls mid-answer. So also key every response text by its first and last 64 bytes, and match a
+masked request turn on that key alone.
+
+1. Near :26, add:
+     const END: usize = 64;
+     /// Key of a text's first and last END bytes (None when shorter than 2*END).
+     fn ends(t: &str) -> Option<Key> {
+         let b = t.as_bytes();
+         (b.len() >= 2 * END).then(|| hash(&[b"ends\0", &b[..END], &b[b.len() - END..]].concat()))
+     }
+2. Response side, texts() :105-108: insert hash(t) and also ends(t). Do the same where turn() is
+   used for response objects (keys_of :83-92), so whole JSON responses get both keys.
+3. Request side, only on streams that carried a MASK:
+   - St (:121-130): add `masked: bool`.
+   - push(): set `masked` on Record::Mask { sid, .. } when that sid is an open Req stream, or an Up
+     stream for WebSocket messages. The billing-header mask is in the system block, not in an
+     assistant turn, so it is harmless.
+   - Pass the flag into message() (:383) and into turn() (:44).
+   - In turn() at :75-76: when masked, the text contains '*', and neither of its two END-byte ends
+     contains '*', the key is ends(text). Otherwise it is hash(text) as today.
+   - Unmasked requests are unchanged.
+4. Facts: add "masked_by_ends": n, the count of turns matched this way, so the report says it
+   happened.
+About 20 lines. It is mask-rule-agnostic, needs no text kept in memory and adds 16 bytes per
+response.
+
+Why this is correct:
+- Whitespace collapse inside a masked span ("-----BEGIN ... -----END" holds spaces) and JSON escapes
+  inside it (2 bytes "\n" becoming 2 stars) change only the middle. The first and last 64 bytes are
+  unaffected.
+- A really missed call has no recorded response, so no response has its ends key, and it still
+  warns.
+- A tool-call turn still keys on its ids, so a missed tool call is still a fail.
+- A mask within 64 bytes of either end keeps today's behaviour (warn).
+
+Rejected alternatives:
+- Skip masked turns and count them. This blinds the check for exactly the answers that carry a
+  secret.
+- Re-run the shapes.tsv regexes over the joined response text. The span and fill semantics would
+  have to equal the masker's exactly, which is brittle, and it couples the verifier to the masker.
+- Mask across deltas in PRD-05. This is the documented accepted risk, and the change is big.
+
+Fixtures, in crates/goalcup-verify/tests/check_history.rs (Anthropic shape; reuse rec/chain/call)
+-------------------------------------------------------------------------------------------------
+- a_masked_resend_of_a_streamed_answer_matches:
+  - The SSE response streams a text of more than 128 bytes, about "... https://u:[redacted]@
+    example.invalid ...". The deltas split between "u:" and "[redacted]", and the span sits mid-text.
+  - The next request resends that text with "[redacted]" replaced by 10 '*', and the record has
+    Record::Mask { sid: req, off, len: 10, rule: url_password } on the request stream.
+  - Expect: pass, missing_text 0, masked_by_ends 1.
+- a_masked_resend_whose_call_was_dropped_still_warns:
+  - The same masked request, but the response that produced the text is not in the record (dropped
+    mid-chain, no GAP).
+  - Expect: warn, missing_text 1.
+  - This keeps a real missed text call detectable.
+- a_masked_resend_with_a_dropped_tool_call_still_fails:
+  - The same as above, but the dropped answer also has a tool_use.
+  - Expect: fail, missing_call 1.
+- a_masked_resend_with_a_rewritten_tail_warns:
+  - The ends match at the head only.
+  - Expect: warn. This guards against the ends key turning into a prefix match.
+- Optional real-data guard: a scrubbed excerpt of entry ed2196bedb5e16393, streams 57, 66 and 67
+  with their MASK records, under tests/usage_fixtures/ with provenance.json. Expect
+  history_complete pass with missing_text 0.
+
+Notes
+-----
+- Point 4 is not breached here. What the response stored raw is placeholder text, not a secret
+  value, and secrets-out showed 0 secret hits. The same mechanism does mean that a real key the model
+  streams across deltas is recorded unmasked. That is PRD-05's accepted risk, and the PRD-08 deltas
+  scan is what detects it.
+- After this fix, PRD-08 3.2 item 4 ("PRD-16 may make it fail once R2 and R6 show the text rule
+  holds") becomes reachable. Today the always-firing warn would block it.

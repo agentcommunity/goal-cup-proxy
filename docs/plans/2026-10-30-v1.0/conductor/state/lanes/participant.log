@@ -1,0 +1,130 @@
+08:06Z | participant fixer PRD-11 | fix | A1 A2 B1 fixed, B2 declined, pushed
+08:07Z | participant merge-requester PRD-11 | decision | queued 080717-prd-11-connectors (docs/harnesses only)
+08:17Z | participant replan PRD-11 | amendment | slice 7 replan: PRD-11 and PRD-16 notes; src 1,695 tests 759 unchanged; tier-refresh step done
+08:18Z | participant planner PRD-11 | decision | nothing left to build (tier refresh waits on pad rows, not this build); integration merged into prd branch
+08:19Z | participant planner PRD-10 | decision | slice 6: approve (device flow, open run), push block and sleep lock, seal, interactive setup; start, continue, recover, upload wait for PRD-02 StartFacts/watchdog::run and PRD-06 upload::manual
+08:20Z | participant approve PRD-10 | start | slice 6 approve.rs
+08:26Z | participant approve PRD-10 | done | approve.rs pushed on v1.0/prd-10-cli-approve, box green
+08:26Z | participant push-awake PRD-10 | stop | push.rs and awake lock built, cli_push 9 tests green in box, pushed v1.0/prd-10-cli-push-awake
+08:26Z | participant setup-interactive PRD-10 | start | interactive setup slice begun
+08:30Z | participant seal PRD-10 | seam | seal built on v1.0/prd-10-cli-seal (S8 SIGUSR1 to watchdog, SIGTERM fallback); 9 tests pass in box; text.rs 986->1023, mod.rs 468->468
+08:31Z | participant setup-interactive PRD-10 | stop | pushed v1.0/prd-10-cli-setup-interactive, cli_setup 6 pass with pty, clippy and fmt clean
+08:37Z | participant reviewer-A PRD-10 | decision | reviewed prd-10-cli slice 6 at 65dd0ea2: box build, clippy, fmt and 59 cli tests green; findings are fixes, no blocker
+08:38Z | participant fixer PRD-10 | start | fixing review findings F1-F6, B1-B3
+08:41Z | participant fixer PRD-10 | fix | F1-F6,B2,B3,N1,N2,N4,N7 fixed, cli tests 60/60 green, pushed
+08:44Z | participant fixer PRD-10 | fix | R1 late Ctrl-C after open, R2 R3 R4 done, tests green, pushed
+08:46Z | participant fixer PRD-10 | fix | N1 Ctrl-C after open now stops with a plain line; tests green; S1 size nit skipped
+08:47Z | participant PRD-10 PRD-10 | stop | PRD-10 PRD-10 slice 6: the parts of start that need no watchdog (device approval and open run, push block with --prompt, sleep lock), seal, and the interactive setup not merged: findings still open after the last review round: N2 (branch v1.0/prd-10-cli)
+08:49Z | participant fixer PRD-10 | fix | N2 wording fixed, 276 tests green, pushed
+08:49Z | participant cli PRD-10 | seam | queued merge request 084924-prd-10-cli (slice 6)
+09:00Z | participant replan PRD-10 | amendment | slice 6 replan: PRD-10 and PRD-16 notes; cli src 3,625 vs 2,900 (125%), tests 2,038 vs 1,200; start wiring waits on PRD-02 slice A and PRD-06 slice 4
+09:01Z | participant planner PRD-10 | decision | slice 7: start pre-launch half against StartFacts, upload dispatch (gated on upload::manual on integration), text.rs cut plus nits; watchdog::run, recover, continue, seal-dead-entry still wait
+09:02Z | participant builder PRD-10 | start | upload-dispatch gated: upload/manual.rs not on integration, polling
+09:05Z | participant text-cut-nits PRD-10 | fix | server reason printed once, mod.rs 467; text.rs cut only 6 lines (shortfall)
+09:10Z | participant start-prelaunch PRD-10 | start | slice 7 pre-launch half of start built on v1.0/prd-10-cli-start-prelaunch, first box run
+09:15Z | participant start-prelaunch PRD-10 | stop | pushed v1.0/prd-10-cli-start-prelaunch; box: clippy, fmt, cli_* 65 pass; hand-over still not_built (no watchdog::run)
+10:34Z | participant builder PRD-10 | fix | upload dispatch pushed on v1.0/prd-10-cli-upload-dispatch, box green
+10:37Z | participant merger PRD-10 | stop | merged integration plus 3 task branches, box green, pushed
+10:37Z | participant reviewerA PRD-10 | start | review of prd-10-cli slice 7
+10:41Z | participant reviewerA PRD-10 | stop | review done: box clippy and 28 cli tests pass; 1 blocker (practice start prints READY_MARK then exits 3), fixes on mode and upload NotClosed
+10:41Z | participant fixer PRD-10 | start | fixing A1..B8 on prd-10-cli
+10:46Z | participant fixer PRD-10 | fix | A1-A10,B1-B8 fixed except A7,A8 part; pushed prd-10-cli
+10:50Z | participant reviewer-A PRD-10 | decision | re-review of prd-10-cli slice 7: cli_folder acceptance fails 3 of 5 after the connector-first reorder; blocker returned
+10:51Z | participant fixer PRD-10 | start | fixing A11 A12 and nits on prd-10-cli
+10:55Z | participant fixer PRD-10 | fix | A11 A12 A13 R1-R4 done, goalcup tests 359 green, pushed
+10:58Z | participant reviewer-A PRD-10 | decision | re-review of prd-10-cli ec8267a0: A11/A12/A13 fixed, box 359 pass; one new fix (upload Refused shows status code)
+10:59Z | participant fixer PRD-10 | decision | cli text.rs and cli src stay over the 2,900 row: start screen, upload and status lines serve points 3 and 6 (plain words to the participant); this round cut run_kind, MASK_REFUSED and shared helpers
+11:01Z | participant fixer PRD-10 | fix | A14 R5 R7 R8 A7 R6 fixed; 359 tests pass; pushed
+11:02Z | participant reviewer-A PRD-10 | decision | re-review of prd-10-cli 94d404ae: A14, R5, R7, R8 fixed; declines accepted; no open findings
+11:02Z | participant cli PRD-10 | seam | queued merge request 110222-prd-10-cli for v1.0/prd-10-cli slice 7
+11:12Z | participant replan PRD-10 | amendment | slice 7 replan: PRD-10 and PRD-16 notes; cli src 4,437 vs 2,900 (153%), tests 2,265 vs 1,200; watchdog-dependent start parts still wait
+11:13Z | participant planner PRD-10 | decision | slice 8: text.rs net cut first, then hand-over (watchdog::run), continue/recover/seal-dead; the last two gated on watchdog::run, recover, close_dead_entry reaching integration
+11:13Z | participant builder PRD-10 | start | start-handover worktree /root/gc-wt/participant-start-handover
+11:16Z | participant builder PRD-10 | decision | start-handover coded locally, ready line from status.json watcher; validating on a temp branch merged with prd-02 a-watchdog/a-boot/a-seal
+11:19Z | participant builder PRD-10 | fix | text-net-cut pushed v1.0/prd-10-cli-text-net-cut: cli src 4437 -> 4330, text.rs 1250 -> 1142, box green
+11:19Z | participant builder PRD-10 | seam | start-handover compiles against typed StartFacts (prd-02 a-watchdog+a-boot+a-seal+prd-03-proxy-serve merged on a temp branch); fmt+clippy clean; cli_start/finish/commands green; handover test sees exit code 7 and ready line, but no sealed status.json is on disk after the recorder exits with GOALCUP_SERVER=off (status thread never ticks after the seal), so the end screen falls back; PRD-02 owns a final sealed write
+11:19Z | participant builder PRD-10 | start | continue-recover-seal-dead gated on watchdog::recover and pipeline::close_dead_entry; polling integration
+12:47Z | participant builder PRD-10 | stop | continue-recover-seal-dead not built: watchdog::recover and pipeline::close_dead_entry never reached integration in 90 min poll
+12:50Z | participant builder PRD-10 | stop | start-handover pushed as v1.0/prd-10-cli-start-handover but NOT mergeable: waited 90 min, watchdog::run and typed StartFacts never reached integration; also needs PRD-02 final sealed status.json write for its end-screen test
+12:50Z | participant merger PRD-10 | start | merging prd-10 lane
+12:54Z | participant merger PRD-10 | seam | pushed prd-10-cli 50ddaf5a; start.rs adapted to S17 JSON fields; needs PRD-02 watchdog::run on integration to compile; green with prd-02-core merged in a scratch ref
+12:59Z | participant fixer PRD-10 | decision | hand-over held: reverted from prd-10-cli, kept on v1.0/prd-10-cli-handover (merged with prd-02-core for tests); seam question to PRD-02: ready hook in watchdog::run
+13:20Z | participant fixer PRD-10 | stop | pushed prd-10-cli (revert + text fixes) and prd-10-cli-handover; box green
+13:25Z | participant fixer PRD-10 | fix | A8 off_line, A9 zone letters, A10 tunnel hints, A11 run mode restored; testing in box
+13:27Z | participant fixer PRD-10 | stop | A8-A11 fixed, 399 tests pass in box, pushed; B2 overage 3,983 lines vs ~2,900 noted
+13:27Z | participant fixer PRD-10 | stop | A8-A11 fixed, 399 tests pass in box, pushed; B2 overage 3,983 lines vs ~2,900 noted
+13:28Z | participant cli PRD-10 | seam | merge queued as 132811-prd-10-cli
+13:38Z | participant replan PRD-10 | amendment | slice 8 notes in PRD-10 and PRD-16; cli src 4,362 lines vs 2,900 row, tests 2,358 vs 1,200
+13:39Z | participant planner PRD-10 | decision | slice 9: watchdog::run, recover, close_dead_entry still not on integration (prd-02-core unmerged); plan the gated half again: start hand-over (rebase of prd-10-cli-handover), continue, recover, seal on dead entry
+13:40Z | participant continue-recover PRD-10 | start | slice 9 continue-recover: polling integration for watchdog::recover and pipeline::close_dead_entry
+13:40Z | participant builder PRD-10 | start | slice 9 start-handover: gate (watchdog::run, typed StartFacts) not on integration; polling every 3 min up to 90 min
+14:39Z | participant builder PRD-10 | seam | gate open: watchdog::run + typed StartFacts on integration; recover/close_dead_entry irrelevant to this task
+14:55Z | participant builder PRD-10 | fix | slice 9 start-handover pushed as v1.0/prd-10-cli-start-handover; fmt, clippy, goalcup nextest 415 pass
+14:55Z | participant seal-dead-entry PRD-10 | start | slice 9 task seal-dead-entry waiting for close_dead_entry on integration
+15:11Z | participant continue-recover PRD-10 | stop | 90-minute poll ended, watchdog::recover and pipeline::close_dead_entry never reached origin/v1.0/integration; nothing pushed; replan as slice 10
+16:30Z | participant seal-dead-entry PRD-10 | stop | close_dead_entry never reached origin/v1.0/integration in 95 minutes of polling; nothing pushed; replan as slice 10
+16:31Z | participant merger PRD-10 | start | merged integration and start-handover into prd-10-cli, box check running
+16:40Z | participant merger PRD-10 | stop | pushed e600ef2a, box 437 passed
+16:46Z | participant reviewer-A PRD-10 | decision | review of prd-10-cli slice 9 (start hand-over): box run green 439 tests; fix findings on harness exit 78 read as mask refusal and SIGTERM sealed as seal_command
+16:49Z | participant fixer PRD-10 | stop | fix pass pushed; box tests green (19 passed); B4 partial, B6 left
+16:53Z | participant reviewer-A PRD-10 | decision | re-review of prd-10-cli slice 9 fix pass: earlier findings fixed, two new nits, box fmt+clippy+19 tests pass on c5830f6a
+16:53Z | participant merge-requester PRD-10 | decision | queued 165357-prd-10-cli, paths all PRD-10 owned, no Cargo.toml change
+17:04Z | participant replan PRD-10 | amendment | slice 9 notes in PRD-10, PRD-16, PRD-02; cli src 4,490 lines vs 2,900 row, tests 2,385 vs 1,200; A6/A7 queued for slice 10
+17:04Z | participant planner PRD-10 | decision | slice 10: ungated A6/A7 nits plus gated continue, recover, seal on dead entry (symbols still absent from integration)
+17:05Z | participant builder PRD-10 | start | continue-recover-seal-dead gated; polling integration for close_dead_entry and watchdog::recover
+17:09Z | participant builder PRD-10 | fix | A6 start-failure text and A7 timer kill done on v1.0/prd-10-cli-finish-a6-a7; B8/B9 skipped; closing() gained a not_started param, one-line caller change in start.rs
+18:33Z | participant builder PRD-10 | stop | close_dead_entry and watchdog::recover never reached integration in 90 min; nothing pushed; replan as slice 11
+18:39Z | participant fixer PRD-10 | fix | merged finish-a6-a7 into prd-10-cli, test by behaviour, status read once; 453 pass, pushed
+18:40Z | participant cli PRD-10 | seam | merge requested for v1.0/prd-10-cli slice 10 (id 184018-prd-10-cli)
+18:52Z | participant replan PRD-10 | amendment | PRD-10 and PRD-16 notes after slice 10: gated half becomes slice 11, size report cli 4710 vs ~2900
+18:52Z | participant planner PRD-10 | decision | slice 11 planned: gated half only (continue, recover, seal on dead entry); close_dead_entry is on prd-02-core but not integration, watchdog::recover absent; prd-10-cli merged with integration
+18:53Z | participant builder PRD-10 | start | slice 11 gate closed: close_dead_entry and watchdog::recover not on integration; polling every 3 min up to 90 min
+20:23Z | participant builder PRD-10 | stop | slice 11 gate never opened in 90 min: pipeline::close_dead_entry and watchdog::recover absent on origin/v1.0/integration (prd-02-core unmerged). Nothing built or pushed. Replan as slice 12 after prd-02-core merges.
+05:19Z | participant planner PRD-10 | decision | slice 11 planned: gate open (recover, close_dead_entry on integration); tasks recover, continue (+HF4 test), seal-dead-entry with StillRecording/NotClosed wording; prd-10-cli merged with integration and pushed
+05:20Z | participant builder PRD-10 | start | slice 11 continue task
+05:27Z | participant recover PRD-10 | seam | recover rebuilds facts without connector plan side effects: takes HomeLock itself so plan skips writes and --version but still reads config hosts; workspace is the harness cwd (/proc) else current dir; late Recovered prints success plus 'still starting' line; no fake-exe success test (recover entry in CLI uses current_exe)
+05:27Z | participant recover PRD-10 | stop | slice done, branch v1.0/prd-10-cli-recover pushed, goalcup crate 497 tests pass in box
+05:29Z | participant builder PRD-10 | stop | continue built on v1.0/prd-10-cli-continue; box fmt, clippy, 14 tests green; HomeLocked uses text::refusal; StillRecording/NotClosed upload wording left to text.rs owner
+05:30Z | participant builder PRD-10 | stop | seal-dead-entry pushed v1.0/prd-10-cli-seal-dead-entry, box green
+05:30Z | participant builder PRD-10 | stop | seal-dead-entry pushed, box green
+05:34Z | participant merger PRD-10 | stop | prd-10-cli merged (integration, recover, continue, seal-dead-entry), box green, pushed 7c193970
+05:40Z | participant fixer PRD-10 | start | fixing A1-A11 B1-B7 on prd-10-cli
+05:45Z | participant fixer PRD-10 | fix | A1-A9,B1-B6 fixed, tests+fmt+clippy green in box, pushed
+05:48Z | participant fixer PRD-10 | start | fixer for A12-A14, B8-B11 on prd-10-cli
+05:59Z | participant fixer PRD-10 | stop | A12 A13 A14 B8 B9 B10 fixed, B11 declined; 128 cli tests green, pushed
+06:01Z | participant reviewer-A PRD-10 | decision | re-check of prd-10-cli at 47f37def: A12-A14 fixed, B11 decline accepted, two small new findings (local-run sending line, unchecked watchdog marker); cli_recover/seal/continue/upload 24 passed in box
+06:01Z | participant fixer PRD-10 | start | fixing A15 A16 C1
+06:05Z | participant fixer PRD-10 | fix | A15 A16 C1 done, 509 tests green, pushed
+06:05Z | participant merge-requester PRD-10 | seam | queued merge request 060541-prd-10-cli for slice 11
+06:18Z | participant replan PRD-10 | amendment | slice 11 notes in PRD-10, PRD-16, PRD-15; cli src 5274 (text.rs 1290) vs 2900 row, tests 3094 vs 1200; repo_url test-mode ask still open
+06:19Z | participant planner PRD-10 | decision | slice 12: practice open sends the fixed practice repository url, test without repo sends null, only approve.rs and cli_approve.rs; rest of PRD-10 built
+06:23Z | participant builder PRD-10 | stop | slice 12 done on v1.0/prd-10-cli-open-repo-url-by-mode: practice sends fixed URL, test no repo null, competition checked URL; PRD-10 Amendments note left to docs owner
+06:33Z | participant merger PRD-10 | stop | prd-10-cli fast-forwarded to open-repo-url-by-mode, box green, pushed
+06:37Z | participant fixer PRD-10 | fix | A1 A3 B2 fixed, B1 A2 declined, cli_approve green, pushed
+06:37Z | participant cli PRD-10 | seam | merge queued 063742-prd-10-cli for slice 12 (repo_url per mode)
+06:55Z | participant replan PRD-10 | amendment | slice 12 notes in PRD-10, PRD-07, PRD-14, PRD-16; PRD-10 fully built, cli src 5279 (text.rs 1290) vs 2900 row, tests 3082 vs 1200; B1 spy follow-up to PRD-14 owner
+07:22Z | participant planner PRD-10 | decision | slice 13: recover end-screen pointer, status/seal print end screen for sealed part, recover time 'about', pinned wording
+07:22Z | participant builder PRD-10 | start | recover-text slice
+07:22Z | participant builder PRD-10 | start | sealed-status-end-screen
+07:25Z | participant builder PRD-10 | stop | sealed-status-end-screen pushed, 24 tests green
+07:34Z | participant builder PRD-10 | stop | recover-text pushed, box green
+07:36Z | participant merger PRD-10 | stop | merged integration and two task branches into prd-10-cli, box green, pushed 8e37b8a7
+07:38Z | participant reviewer-A PRD-10 | start | reviewing slice 13 merge request v1.0/prd-10-cli at 8e37b8a7; box check of fmt, clippy, cli_finish/recover/seal/status started
+07:40Z | participant reviewer-A PRD-10 | stop | slice 13 review done: no blocker; box at 8e37b8a7 fmt, clippy -p goalcup, 30/30 cli_finish/recover/seal/status pass; fixes: PRD-10 rows 347/450 and acceptance 3 still say pinned refused the recorder, wording-only tests
+07:43Z | participant fixer PRD-10 | fix | A1-A4,B1-B4 fixed, pushed
+07:44Z | participant merge-requester PRD-10 | seam | queued 074407-prd-10-cli slice 13
+11:48Z | participant planner PRD-10 | decision | next slice: harness version unread is sent as "unknown", start screen says so
+11:52Z | participant builder PRD-10 | fix | unread harness version sent as unknown, start screen says so; pushed v1.0/prd-10-cli-version-unknown
+11:56Z | participant reviewer-A PRD-10 | start | review of prd-10-cli unread version slice
+11:57Z | participant reviewer-A PRD-10 | stop | review done: no blockers, 1 fix (continue screen silent on unread version), nits
+12:01Z | participant fixer PRD-10 | fix | continue says unread version, wire_version helper, tier_line deduped, continue wire test; pushed
+12:02Z | participant merge-requester PRD-10 | seam | queued 120210-prd-10-cli
+12:08Z | participant replan PRD-10 | amendment | unread-version slice: PRD-10 nits A5/B4/B5 noted, FakeWorker body ask to PRD-14, size report in PRD-16; no seam change
+13:55Z | participant planner PRD-10 | decision | next slice: wording N3 under 1 s, N4b pinned end line, N2 version line to goalcup.log, usage not recorded on the wire (OWN-7)
+13:58Z | participant builder PRD-10 | fix | OWN-7 usage not_on_wire pushed, box green
+14:00Z | participant cli PRD-10 | fix | wording N2/N3/N4b/A5 built, box green, pushed v1.0/prd-10-cli-cli-wording-n2-n3-n4b
+14:08Z | participant merger PRD-10 | stop | lane merge pushed, box green
+14:10Z | participant reviewer-A PRD-10 | start | review of v1.0/prd-10-cli N2 N3 N4b OWN-7
+14:12Z | participant reviewer-A PRD-10 | stop | review done, box tests/clippy/fmt green at 9549e87c, no blockers
+14:20Z | participant fixer PRD-10 | fix | A1-A6, B1-B3, B5 fixed, B4 declined, tests green, pushed
+14:21Z | participant merge-requester PRD-10 | stop | queued 142127-prd-10-cli; usage/* paths are PRD-09 files, allowed by integrator ruling OWN-7

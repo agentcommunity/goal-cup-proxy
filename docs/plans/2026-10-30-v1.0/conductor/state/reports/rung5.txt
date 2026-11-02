@@ -1,0 +1,116 @@
+goalcup 1.0 test-pad rung 5 (watchdog kill and `goalcup recover`), plus one kill-both + `goalcup seal` on the dead entry.
+Claude Code 2.1.312 and Codex 0.165.0. Worktree /root/gc-wt/rung5, detached at origin/v1.0/integration 6fb5db63 (includes b8d12325).
+  Clean again now. The local rig changes are reverted and saved in local-rung5.patch. Nothing was committed or pushed.
+Binaries: build box plum-enormous-clownfish-d8youL built release goalcup and goalcup-verify from 6fb5db63 (build.log). No key in it.
+Every run: mode micro, prompt smoke, minutes 5, server staging, where sandbox (the conductor half here approved), direct, no repo.
+Keys went into pad boxes only by sbx put-env 0600. GH_TOKEN and DATABASE_URL were dropped from the pad, so fetch fails inside the rig.
+  DATABASE_URL went only into the index boxes idx-93ba6b and idx-dd4485 (put-env 0600, deleted by idx.sh, box removed).
+  idx-93ba6b was a failed first try: I wrote ~ unquoted, so the files landed under /root in the box and no query ran. That box is removed.
+Copy-outs scrubbed with scrub2.py. keyscan (9 keys): pad-out, dbfetch, c4stage, fetched, c4out all 0 hits. No live pad, idx or build box is left.
+Spend (priced from the fetched copy's usage at pad.toml rates): 0.08 + 0.03 + 0.03 + 0.31 + 0.10 = about 0.54 USD.
+
+LOCAL RIG CHANGES (local-rung5.patch, reverted)
+  L1 pad step_cleanup: before the box rm, tars ~/run/gc/home/runs/*/e*/ (without *.key, *.pem, server.json) and copies it out, so C4 can run later.
+  L2 exec/kill-both-seal.sh: kill -9 of the watchdog and the recorder together, then plain `goalcup status` and `goalcup seal --yes` in the
+     participant's shell (env -i with PAD_SHELL_ENV).
+  L3 pad-run start: when scripts/pad/keep-terminal exists, launch.sh ends with `exec sleep`, so the launch shell outlives goalcup start.
+     Used for the r5t variant only (see F1).
+
+C4 (real server_equals_local). Index: idx-dd4485, query.sql read-only. Fetch here: fetch-run --bucket goalcup-traces-staging --index, all
+  5 exit 0, stderr empty. Verify: keyless build box aquamarine-cruel-possum-gccZuy, goalcup-verify built from 6fb5db63 (sha256 9018ea91...).
+  Commands: check --json --server fetched/<entry> --local local/<entry>, then usage, dump --kind gap|event, secrets, then integration check.py.
+  On all 5 entries: server_equals_local PASS, server_chunks_whole PASS, server_counts_match PASS, db_match true. The gap lines in the
+  server copy match the local ones exactly. Outputs are in c4out/runs/<run>/ (row.before.json and report.before.txt are the in-rig rows).
+
+RUNS
+(1) r5-claude  rung 5 as written, kill-watchdog-recover@0.  box pad-52ee3c  run r1d8fc436c46e8c58  entry ec340bb87ff0a0815
+  Kill: watchdog 126 (= goalcup start) at 07:02:26, mid-turn ("Percolating... thinking"). The launch shell died with it ("Pane is dead
+  (status 137)") and Claude Code lost its terminal. The recorder sealed by itself 8 s later: harness_exit, 9 requests. Commits 0.
+  recover #1 (07:02:27): exit 0 "Recording is on; there is nothing to recover." (correct, the recorder was still alive)
+  m+1 recorder kill: no pid (already sealed). Status said nothing matching. recover #2 (07:04:22): exit 1 "goalcup: This part has ended,
+  so there is nothing to recover. To go on, run: goalcup continue r1d8fc436c46e8c58" (the PRD-10 3.2 sealed refusal, correct).
+  Gaps: after_stop 1 (10.5 kB tail at the seal). Upload: final sealed. Server: 2 chunks, equals_local PASS.
+  C1-C6 INCONCLUSIVE "the harness did no work (commits 0, model requests 9)", C3 PASS. faults INCONCLUSIVE. The real cause is "harness
+  lost its terminal" (F1, F3).
+(2) r5-codex   same.  box pad-aebd87  run r03ff1e90891d3827  entry e9dca4a9e466bda32
+  Watchdog 164 killed at 07:02:09. Same outcome: pane dead, Codex gone, sealed harness_exit, 5 requests, no gap.
+  recover #1 exit 0 "nothing to recover". recover #2 exit 1 "This part has ended ... goalcup continue r03ff1e90891d3827".
+  Upload final sealed. equals_local PASS. Same INCONCLUSIVE row as (1).
+(3) r5t-claude variant: launch shell keeps the terminal (L3), steps kill-watchdog-recover@0 + keep-going.
+    box pad-539859  run r5de6acf9398c1d09  entry e2efa902e2b3150e6
+  Watchdog 125 killed at 07:08:00 while work was in flight (requests 3 -> 10 -> 16 after it). The harness kept running.
+  recover #1 (07:08:01): exit 0 "Recording is on; there is nothing to recover."
+  Recorder 151 killed at 07:08:55.63, 4.6 s after a request. Within 10 s status showed: "PROBLEM: Recording is off since 07:08:54:
+  goalcup stopped, so your agent cannot reach the model service. Your agent is still running. Run: goalcup recover"
+  recover #2 (07:09:56): exit 0
+    "Recording is on again for part 1 of your run with Claude Code, on the same port.
+     It was off from 07:08:54 to 07:09:55 (1 min 1 s); this time is in the record as a gap.
+     Claude Code was not restarted. This part ends when Claude Code exits or at the deadline.
+     Check it any time with: goalcup status"
+  status.jsonl: harness pid 163 and port 33689 unchanged throughout. Recorder 151 -> 407, events prev_boot {cause watchdog_lost}, boot 1.
+  goalcup.log: "recover off_since=07:08:54Z port=33689 outcome=recovered". A watchdog.pid was written again at 07:09.
+  Record: exactly one gap, recorder_down {cause watchdog_lost}, 07:08:52.37 to 07:09:55.70 (63.3 s), start before end, starting 3.3 s
+  before the kill. Requests 17 -> 18 at 07:10:05 (before keep-going), then 25 by the end. A second part file starts at raw 2391441.
+  Seal: harness_exit at 07:13:03 after /exit. Upload final sealed. 4 chunks, equals_local PASS.
+  check.py (with the fetched copy): C1 PASS, C2 PASS (2 threads, 1 subagent), C3 PASS, C4 PASS, C5 PASS, C6 INCONCLUSIVE
+  "end screen requests None, status.json 25"; faults PASS. history warn (7 answers). Row INCONCLUSIVE only because of C6 (F4).
+(4) r5t-codex  same variant.  box pad-7fae89  run r833d950d6de3764f  entry ea5ef1053c0ad6ffb
+  Watchdog 164 killed at 07:07:54. recover #1 exit 0 "nothing to recover". Recorder 203 killed at 07:08:49.57 (49.6 s after a request).
+  Status: "PROBLEM: Recording is off since 07:08:49: ... Run: goalcup recover". It also printed an ab.chatgpt.com "not recorded ... goalcup
+  seal, then goalcup continue" line.
+  recover #2 exit 0: "Recording is on again for part 1 of your run with Codex, on the same port. It was off from 07:08:49 to 07:09:49
+  (1 min 0 s) ...". Harness pid 215 and port 34175 unchanged. Recorder 496 at boot 1, prev_boot watchdog_lost.
+  Record: one recorder_down gap, 07:08:18.61 to 07:09:49.69 (91.1 s; status off.ms 91080). It starts 31 s before the kill (F5).
+  Requests 13 -> 14 after the recover (at keep-going, 07:10:59). /quit was typed but not submitted, so SIGTERM came at 07:13:20 (F6).
+  Seal: harness_exit. Upload final sealed. 6 chunks, equals_local PASS.
+  check.py: C1-C5 PASS, C6 INCONCLUSIVE (end screen None, status 14). faults INCONCLUSIVE "harness lost its terminal": a false match, F2.
+(5) r5b-codex  kill watchdog + recorder together, then `goalcup seal --yes` on the dead entry (L2 at @0).
+    box pad-26ffc7  run rf0c65c4b175512e9  entry e29720833df3d531c
+  Watchdog 164 and recorder 203 killed at 07:02:10.91. Codex died with the terminal (harness alive: no).
+  status (exit 0): "PROBLEM: Recording is off since 07:02:10: goalcup is not running. To go on, run: goalcup continue rf0c65c4b175512e9"
+  seal --yes (07:02:14.9 -> 07:02:16.4): exit 0. Screen: "This part ended without goalcup (the computer stopped, or goalcup was
+  killed)." / "5 model requests written: api.openai.com 5." / "Recording was off 1 time, 4 s in total." / "Not recorded, passed through
+  unread: github.com (2 connections, 25 MB), raw.githubusercontent.com (1 connection, 9 kB)." / "Upload: 10 kB still waits ..." then
+  "Sending the rest of the record..." and "Upload: done. Every record file is kept on this computer (GOALCUP_KEEP_PARTS)."
+  Afterwards, status: "finished", "Off: 1 time, 4 s", "Problems: none".
+  Record: seal reason recovered, harness "unknown". One gap, recorder_down {cause abandoned}, 07:02:10.30 to 07:02:14.92 (close_dead_entry
+  path). upload.json state done, final sealed, 2 chunks. Server: equals_local PASS, counts_match PASS.
+  check.py: C1-C6 INCONCLUSIVE "harness did no work (commits 0, requests 5)", C3 PASS. faults None (an exec row, no fault judge).
+
+SUMMARY
+  - `goalcup recover` works on both harnesses when the harness keeps its terminal: exit 0 with the PRD-10 3.2 screen, the same port,
+    the same harness pid, one named recorder_down gap, new requests after the recover, seal harness_exit, upload sealed, C4 PASS.
+  - Rung 5 as written cannot reach that path on either TUI harness in this rig: killing the watchdog hangs up the harness (F1).
+  - `seal` on a dead entry (close_dead_entry) works: sealed `recovered`, abandoned gap named, end screen shown, upload done, C4 PASS.
+  - C4 server_equals_local is a real PASS on all 5 entries (local parts kept by L1).
+
+FAILURES AND OWNERS
+F1 OWNER PRD-12 rig (and its rung-5 design). scripts/pad/pad-run:343-346: tmux runs `bash launch.sh` as the pane command, and goalcup start
+   (the watchdog) is that shell's last command. kill -9 of the watchdog ends launch.sh, the pane's session leader exits, and the harness
+   (in the watchdog's process group, PRD-02 section 8 step 4) loses its terminal and exits within seconds. The recorder then seals
+   harness_exit, so both recover outcomes cannot be what PRD-12:357 expects. PRD-02 9.1 and PRD-12:1053 predict this. PRD-10 acceptance 11
+   says to rerun on a harness started without a TUI; the pad has none for Claude Code or Codex. With an interactive participant shell the
+   shell takes the foreground back (PRD-02 9.1), so the harness is lost there too. The r5t variant (L3) shows recover itself is sound.
+   Decision for the owner: accept L3 as the rung-5 setup ("terminal kept"), or add a non-TUI connector copy for P12.
+F2 OWNER PRD-12 check.py. scripts/pad/check.py:584 marks "harness lost its terminal" whenever any fault `said` contains "goalcup continue".
+   On r5t-codex the status line about unrecorded ab.chatgpt.com ("run goalcup seal, then goalcup continue") matched, so a clean recover row
+   became faults INCONCLUSIVE. Fix: match only the state line "To go on, run: goalcup continue" in the status fault, or the PROBLEM line.
+F3 OWNER PRD-12 check.py. scripts/pad/check.py:254: the "harness did no work" stop hides the recover judge's own "harness lost its
+   terminal" INCONCLUSIVE on (1) and (2). Rows (1), (2) and (5) all say "did no work" while the pane shows the harness dying with goalcup.
+F4 OWNER PRD-10, with PRD-12 check.py:471 following it. After `goalcup recover` no watchdog prints an end screen: when the harness exits,
+   the recorder alone seals and the participant sees nothing. C6 then has no end-screen count (INCONCLUSIVE on (3) and (4)). Point 6 asks
+   that the participant be told plainly. PRD-10 should say where a recovered part's counts are shown (goalcup status, or `seal`), and
+   check.py C6 should read that for recover rows.
+F5 OWNER PRD-10 (crates/goalcup/src/cli/recover.rs:68-72) against PRD-02 (pipeline/boot.rs:211-227 gap from the recovery scan). recover's
+   screen takes "off from" from status.json `off.since`/`updated` (07:08:49, "1 min 0 s"), but the record's gap starts at the last record
+   before the kill (07:08:18.61, 91.1 s), and status then shows 91 s. Nothing is lost (the gap is the larger one), but the two screens
+   disagree by 31 s on an idle harness. check.py's recover() does not test the gap start (CRASH_SLACK applies only to plain kills).
+F6 OWNER PRD-12 harness file. scripts/pad/harnesses/codex-cli.toml:13 exit_keys '/quit\r': in Codex 0.165 the \r sent in the same
+   send-keys does not submit, so "/quit" stays in the input and the rig falls back to SIGTERM after 30 s (r5t-codex). The seal was still
+   harness_exit.
+Carried, not new: fetch inside the rig needs DATABASE_URL or --index (scripts/pad/pad:606-630). The C4 report's cleanup point
+   (pad:677-689 removes the box and rec/) is worked around here by L1. The PRD-12 owner should take L1 or an equivalent upstream.
+
+FILES: runs/*.toml, logs/*.log (pad tables), pad-out/ (scrubbed copy-outs with local/ entries), dbfetch/{idxbox.sh,ids.txt,idx/},
+  fetched/<run>/<entry>/, jobs/c4job.sh + c4-out.tgz, c4out/runs/<run>/ (row.json, report.txt, verify/check-server.json,
+  gaps-*.jsonl, events-local.jsonl, usage/), logs/c4box.log, local-rung5.patch, build/, build.log.
