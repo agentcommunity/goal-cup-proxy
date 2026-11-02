@@ -102,25 +102,33 @@ def per_hour(v, h):
     return round(v / h, 1) if num(v) is not None and h else None
 
 
-def x4(gaps, meta, why, gap_limit_ms):
+def x4(gaps, meta, why, gap_limit_ms, faults=()):
     steps = [str(ln[0]) for ln in meta.get("steps") or [] if isinstance(ln, (list, tuple)) and ln]
     k = sum(1 for s in steps if s.startswith("kill-recorder@"))
     w = 1 if any(s.startswith("kill-watchdog-recover@") for s in steps) else 0
-    down = sorted((g for g in gaps if g.get("cause") == "recorder_down"), key=lambda g: str(g.get("start")))
-    if len(down) != k + w:
-        return "FAIL: %d recorder_down gaps for %d kills and %d recovers" % (len(down), k, w)
-    for g in down:
+    by = {c: sorted((g for g in gaps if g.get("cause") == c), key=lambda g: str(g.get("start"))) for c in ("killed", "watchdog_lost")}
+    if len(by["killed"]) != k or len(by["watchdog_lost"]) != w:
+        return "FAIL: %d killed and %d watchdog_lost gaps for %d kills and %d recovers" % (len(by["killed"]), len(by["watchdog_lost"]), k, w)
+    for g in by["killed"] + by["watchdog_lost"]:
         a, b = when(g.get("start")), when(g.get("end"))
         if a is None or b is None or a >= b:
-            return "FAIL: a recorder_down gap without start before end"
-    for g in down[:k]:
-        ms = num(g.get("ms"))
-        if ms is None or ms >= gap_limit_ms:
-            return "FAIL: a kill gap of %s ms, not under %d ms" % (ms, gap_limit_ms)
+            return "FAIL: a recorder gap without start before end"
+    # A kill gap starts at the dead boot's last LINK, so only its end is timed: from the nearest kill, under the limit.
+    # A quiet kill (no request in flight) is not timed.
+    kills = [(when(f.get("killed_at") or f.get("at")), f.get("quiet") is True) for f in faults
+             if f.get("kind") == "kill-recorder" and f.get("pid") is not None]
+    kills = [(t, q) for t, q in kills if t]
+    for g in by["killed"]:
+        b = when(g.get("end"))
+        near = min(kills, key=lambda kq: abs((b - kq[0]).total_seconds()), default=None)
+        if near and not near[1]:
+            late = (b - near[0]).total_seconds() * 1000
+            if not 0 <= late < gap_limit_ms:
+                return "FAIL: a kill gap ended %d ms after its kill, not under %d ms" % (late, gap_limit_ms)
     if any(g.get("cause") == "null_mode" for g in gaps):
         return "FAIL: a null_mode gap"
     for line in why:
-        if line.startswith("faults") and "not under 2 s" not in line and "(limit 2 s)" not in line:
+        if line.startswith("faults") and not any(t in line for t in ("not under 2 s", "(limit 2 s)", "quiet kill", "no work in flight")):
             return "FAIL: faults line not about the 2 s bound: " + line[:120]
     return "PASS"
 
@@ -156,7 +164,7 @@ def summary(run_dir, check_mod, min_subagents=15, gap_limit_ms=5000):
         "rss_peak_mb": facts.get("recorder_rss_peak_mb"), "wire_requests": facts.get("wire_requests"),
         "subagents": subs, "threads": facts.get("threads"), "max_parallel": par, "gaps": gaps, "x2": x2,
         "x3": "FAIL" if any(g["cause"] == "memory_guard" for g in gaps) else "PASS",
-        "x4": x4(got, meta, why, gap_limit_ms),
+        "x4": x4(got, meta, why, gap_limit_ms, read_lines(os.path.join(run_dir, "watch", "faults.jsonl"))),
     }
 
 
