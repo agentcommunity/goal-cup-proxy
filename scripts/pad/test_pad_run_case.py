@@ -127,6 +127,33 @@ class Recovery(unittest.TestCase):
         self.assertRegex(cm.exception.args[1], r"back in 0\.\d s")
 
 
+class EndScreen(unittest.TestCase):
+    def test_watchdog_row_reads_the_end_screen_from_goalcup_status(self):  # A2: nothing prints it into the pane once the watchdog is dead
+        r = bare()
+        r.s = {"minutes": 1}
+        r.project, r.env, r.run = "/nonexistent", {}, "/nonexistent"
+        r.sealed = lambda: True
+        r.dead = lambda: True
+        r.has = lambda *a: True
+        r.exit_harness = lambda: None
+        r.known = lambda: []
+        r.pane = lambda *a, **k: ""
+        r.left = lambda: 100
+        r.status = lambda: {}
+        r.harness_files = lambda: None
+        r.wipe_secrets = lambda **k: None
+        calls = []
+
+        def sh(cmd, **k):
+            calls.append(cmd)
+            return mock.Mock(stdout="217 requests to model hosts written: 3 gaps", returncode=0)
+        with mock.patch.object(padrun, "sh", sh), mock.patch.object(padrun, "tool", lambda n: n), \
+                mock.patch.object(padrun.pc, "load", lambda *a: []), mock.patch.object(padrun, "wait", lambda ok, l, e: ok()):
+            r.seal(None)
+        self.assertEqual(r.st["end_screen_requests"], 217)
+        self.assertIn(["goalcup", "status"], calls)
+
+
 class EarlyPane(unittest.TestCase):
     def test_pane_is_copied_before_recording_seen(self):
         d = tempfile.TemporaryDirectory()
