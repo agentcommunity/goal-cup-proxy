@@ -854,3 +854,127 @@ fn recover_reads_the_harness_values_from_its_own_environment() -> Res {
     assert!(process_env(u32::MAX).is_none());
     Ok(())
 }
+
+/// Four synthetic 64-character base64 lines and a short last one, as the body of a PEM private
+/// key (never a real key).
+fn pem_body(seed: u64) -> Vec<String> {
+    let mut rng = Rng(seed);
+    let mut lines: Vec<String> = (0..4)
+        .map(|_| [rng.chars(ALNUM, 31), "+/".into(), rng.chars(ALNUM, 31)].concat())
+        .collect();
+    lines.push([rng.chars(ALNUM, 6), "==".into()].concat());
+    lines
+}
+
+/// A quoted multi-line PEM private key in `.env.local`, under a name with no credential word:
+/// each usable body line is a workspace value (the short last line is not usable).
+#[test]
+fn a_multi_line_pem_key_in_a_key_file_gives_its_body_lines() -> Res {
+    let body = pem_body(0x9E41);
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join(".env.local"),
+        format!(
+            "SIGNING_PEM=\"-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\"\nOTHER=1\n",
+            body.join("\n")
+        ),
+    )?;
+    let values = launch_values(dir.path(), &BTreeMap::new());
+    assert_eq!(values.len(), 4);
+    assert!(values.iter().all(|v| v.source() == ValueSource::Workspace));
+    let m = Masker::new(&[], values)?;
+    assert_eq!(m.value_counts().workspace, 4);
+    for line in &body[..4] {
+        assert!(masks(&m, line));
+    }
+    Ok(())
+}
+
+/// The A3 case: a tool output that dropped the BEGIN line (a redacting `sed` of `.env.local`)
+/// holds only the body and the END line, JSON-escaped in a request body. Every body line is
+/// masked by exact value, whole and streamed.
+#[test]
+fn a_pem_body_without_its_begin_line_is_masked() -> Res {
+    let body = pem_body(0x9E42);
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join(".env.local"),
+        format!(
+            "export DEPLOY_PEM='-----BEGIN RSA PRIVATE KEY-----\n{}\n-----END RSA PRIVATE KEY-----'\n",
+            body.join("\n")
+        ),
+    )?;
+    let m = Masker::new(&[], launch_values(dir.path(), &BTreeMap::new()))?;
+    let printed = format!("{}\n-----END RSA PRIVATE KEY-----\"\n", body.join("\n"));
+    let input = format!(
+        "{{\"type\":\"tool_result\",\"content\":{}}}",
+        serde_json::to_string(&printed)?
+    )
+    .into_bytes();
+    let whole = m.mask_whole(&input);
+    let cuts: Vec<usize> = (1..input.len() / 5).map(|i| i * 5).collect();
+    assert_eq!(stream_in(&m, StreamKind::Native, &input, &cuts), whole);
+    assert_eq!(whole.bytes.len(), input.len());
+    for line in &body[..4] {
+        assert!(holds(&input, line));
+        assert!(!holds(&whole.bytes, line));
+    }
+    assert!(holds(&whole.bytes, "-----END RSA PRIVATE KEY-----"));
+    Ok(())
+}
+
+/// A PEM key written on one line with escaped `\n` breaks, as many tools write a service
+/// account key into `.env`, gives its body lines too.
+#[test]
+fn a_one_line_escaped_pem_key_gives_its_body_lines() -> Res {
+    let body = pem_body(0x9E43);
+    let dir = tempfile::tempdir()?;
+    std::fs::write(
+        dir.path().join(".env"),
+        format!(
+            "SA_PEM=\"-----BEGIN PRIVATE KEY-----\\n{}\\n-----END PRIVATE KEY-----\\n\"\n",
+            body.join("\\n")
+        ),
+    )?;
+    let m = Masker::new(&[], launch_values(dir.path(), &BTreeMap::new()))?;
+    assert_eq!(m.value_counts().workspace, 4);
+    for line in &body[..4] {
+        assert!(masks(&m, line));
+    }
+    Ok(())
+}
+
+/// PEM body lines rank last: under the guard of 32 they never push out a named value, even
+/// from `.env.local`, which is read first.
+#[test]
+fn pem_body_lines_rank_after_every_named_value() -> Res {
+    let mut rng = Rng(0x9E44);
+    let named: Vec<String> = (0..31).map(|_| rng.chars(ALNUM, 24)).collect();
+    let env_value = rng.chars(ALNUM, 28);
+    let body = pem_body(0x9E45);
+    let dir = tempfile::tempdir()?;
+    let text: String = named
+        .iter()
+        .enumerate()
+        .map(|(i, v)| format!("SERVICE_{i}_KEY={v}\n"))
+        .collect();
+    std::fs::write(dir.path().join(".env"), text)?;
+    std::fs::write(
+        dir.path().join(".env.local"),
+        format!(
+            "SIGNING_PEM=\"-----BEGIN EC PRIVATE KEY-----\n{}\n-----END EC PRIVATE KEY-----\"\n",
+            body.join("\n")
+        ),
+    )?;
+    let env = BTreeMap::from([("TOOL_TOKEN".to_string(), env_value.clone())]);
+    let values = launch_values(dir.path(), &env);
+    assert_eq!(values.len(), 33);
+    let kept: Vec<&String> = named.iter().chain(std::iter::once(&env_value)).collect();
+    for (value, want) in values[..32].iter().zip(&kept) {
+        let one = Masker::new(&[], vec![value.clone()])?;
+        assert!(masks(&one, want));
+    }
+    let last = Masker::new(&[], values[32..].to_vec())?.value_counts();
+    assert_eq!((last.workspace, last.env, last.skipped), (0, 0, 4));
+    Ok(())
+}
