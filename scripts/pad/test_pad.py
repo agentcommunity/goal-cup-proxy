@@ -157,6 +157,43 @@ class SealPaneFallback(unittest.TestCase):
             self.assertIsNone(pad.end_screen_from_panes(d))
 
 
+class ExecRetry(unittest.TestCase):
+    """A step's `sbx exec` that fails in transport with no PADSTEP line is called again; one that printed PADSTEP never is."""
+
+    def box(self, outs):
+        run = object.__new__(pad.Run)
+        run.s, run.name, run.meta, run.logged, run.n = {"where": "sandbox"}, "pad-x", {}, [], 0
+        run.tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, run.tmp, True)
+        run.log = run.logged.append
+
+        def sbx(verb, *args, limit=None, name=None, env=None):
+            out, err = outs[run.n]
+            run.n += 1
+            return subprocess.CompletedProcess([verb], 0, out, err)
+        run.sbx = sbx
+        with mock.patch.object(pad.time, "sleep") as sleep:
+            got = run.box("kill-recorder@30", 60)
+        return run, got, sleep
+
+    def test_fetch_failed_then_a_line_is_ok(self):
+        step = 'PADSTEP {"result": "ok", "saw": ""}\n'
+        run, got, sleep = self.box([("", "sbx exec: fetch failed"), (step, "")])
+        self.assertEqual(got[0], "ok")
+        self.assertEqual(run.n, 2)
+        self.assertTrue([ln for ln in run.logged if "retry" in ln])
+        sleep.assert_called_once_with(5)
+
+    def test_a_step_that_printed_a_line_is_not_run_again(self):
+        step = 'PADSTEP {"result": "ok", "saw": ""}\n'
+        run, got, _ = self.box([(step, "sbx exec: fetch failed")])
+        self.assertEqual((got[0], run.n), ("ok", 1))
+
+    def test_three_attempts_at_most(self):
+        run, got, _ = self.box([("", "fetch failed")] * 3)
+        self.assertEqual((got[0], run.n), ("error", 3))
+
+
 class Walk(unittest.TestCase):
     """A sentinel key in the environment: no argument the pad builds, and no file it writes, holds it."""
 
