@@ -6,8 +6,8 @@ use serde_json::Value;
 /// A native session format this build reads: Codex `sessions:**/rollout-*.jsonl`, Claude Code
 /// `transcripts:**/*.jsonl`, the `meta:**/*.meta.json` snapshots, and Hermes's `state:state.db*`
 /// database copies (snapshot streams), Gemini CLI's `chats:**/*.jsonl` session files (calls,
-/// threads and parent links), and Hermes's delegation files: `task-<n>.log` plain-text logs (read by path only,
-/// never parsed) and the `manifest.json` snapshots (delegation id and task indexes).
+/// threads and parent links), and Hermes's delegation files: `task-<n>.log` plain-text logs (read
+/// by path only, never parsed) and the `manifest.json` snapshots (delegation id and task indexes).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Reader {
     CodexRollout,
