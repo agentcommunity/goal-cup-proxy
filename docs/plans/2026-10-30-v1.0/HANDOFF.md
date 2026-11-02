@@ -100,7 +100,7 @@ running `install.sh` again after any install that rewrites the module.
 
 Not done at all yet: any real-key run, any staging deploy, phases 2 to 6, the cut.
 
-## Branches (02 Nov 15:47Z, integration at 69ba9a37)
+## Branches (02 Nov 20:57Z, integration at 9084be50)
 
 | Branch | Commits not yet on integration | Last merge into integration |
 |---|---:|---|
