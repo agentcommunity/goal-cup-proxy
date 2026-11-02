@@ -33,8 +33,10 @@
 //! Sources (section 9, owner answer of 2026-11-01 to question 3, sources 1 to 3): the project's
 //! `GH_TOKEN` (1), the credential-named variables of the harness environment goalcup builds
 //! (2) and the other credential-named values of the project's key files (3).
-//! Sources 2 and 3 pass the one name gate ([`gated`]). A harness key-file value (source 4) is
-//! not built: it is left out and counted in `skipped`. The readers order, dedupe and cut the
+//! Sources 2 and 3 pass the one name gate ([`gated`]). The body lines of a PEM private key held
+//! as a key-file value are workspace values without the gate, ranked after every named value
+//! ([`pem_body_values`]). A harness key-file value (source 4) is not built: it is left out and
+//! counted in `skipped`. The readers order, dedupe and cut the
 //! values before the first control line ([`finish`]). This header is the one place that counts
 //! the forms and states the reader order; `mod.rs` and PRD-05 link here.
 
@@ -564,10 +566,18 @@ fn env_values(env: &BTreeMap<String, String>) -> Vec<SecretValue> {
 
 /// Every exact value of a launch, through [`finish`]: the project's `GH_TOKEN` value (source 1),
 /// every other credential-named value of its key files (source 3), all `workspace`, then the
-/// credential-named variables of `env` (source 2). Pass an empty `env` for the key files alone.
+/// credential-named variables of `env` (source 2), then the PEM private key body lines of the
+/// key files ([`pem_body_values`]), last so they never push out a named value at the cut. Pass
+/// an empty `env` for the key files alone.
 pub fn launch_values(project: &Path, env: &BTreeMap<String, String>) -> Vec<SecretValue> {
-    let (token, others) = key_file_values(project);
-    finish(token.into_iter().chain(others).chain(env_values(env)))
+    let (token, others, pem) = key_file_values(project);
+    finish(
+        token
+            .into_iter()
+            .chain(others)
+            .chain(env_values(env))
+            .chain(pem),
+    )
 }
 
 /// The environment the running process `pid` was started with, the values that are valid text,
@@ -592,8 +602,8 @@ pub fn process_env(pid: u32) -> Option<BTreeMap<String, String>> {
 }
 
 /// What a reader sends on the first control line. The order is `GH_TOKEN`, the other key-file
-/// values, then the environment values, so the values the participant keeps in `.env` win the
-/// cut on a busy shell. A value whose bytes equal an earlier one is dropped uncounted (a value in
+/// values, then the environment values, then the PEM body lines, so the values the participant
+/// keeps in `.env` win the cut on a busy shell. A value whose bytes equal an earlier one is dropped uncounted (a value in
 /// both the environment and `.env` counts once, as `workspace`), the first [`MAX_VALUES`]
 /// distinct values are kept, and when any were left out one count-only entry
 /// ([`SecretValue::left_out`]) carries their number into `skipped`. So the line holds at most 33
@@ -627,10 +637,10 @@ fn finish(values: impl IntoIterator<Item = SecretValue>) -> Vec<SecretValue> {
 /// file whose name and value pass [`gated`] gives one more value, an older `GH_TOKEN` included.
 /// A file is read whole, at any size, and as lossy UTF-8 without a leading BOM: a byte that is
 /// not UTF-8 costs only its own line (U+FFFD is not usable), never the file. Nothing is ever
-/// printed.
-fn key_file_values(project: &Path) -> (Option<SecretValue>, Vec<SecretValue>) {
+/// printed. The third list is every file's PEM body lines ([`pem_body_values`]).
+fn key_file_values(project: &Path) -> (Option<SecretValue>, Vec<SecretValue>, Vec<SecretValue>) {
     let Ok(entries) = std::fs::read_dir(project) else {
-        return (None, Vec::new());
+        return (None, Vec::new(), Vec::new());
     };
     let mut names: Vec<String> = entries
         .filter_map(Result::ok)
@@ -647,12 +657,17 @@ fn key_file_values(project: &Path) -> (Option<SecretValue>, Vec<SecretValue>) {
         .filter_map(|name| std::fs::read(project.join(name)).ok())
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
         .collect();
+    let texts: Vec<&str> = texts
+        .iter()
+        .map(|text| text.strip_prefix('\u{feff}').unwrap_or(text))
+        .collect();
     let files: Vec<Vec<(&str, &str)>> = texts
         .iter()
-        .map(|text| {
-            let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-            text.lines().filter_map(pair_in).collect()
-        })
+        .map(|text| text.lines().filter_map(pair_in).collect())
+        .collect();
+    let pem = texts
+        .iter()
+        .flat_map(|text| pem_body_values(text))
         .collect();
     let token = files
         .iter()
@@ -670,7 +685,68 @@ fn key_file_values(project: &Path) -> (Option<SecretValue>, Vec<SecretValue>) {
         .filter(|(name, value)| gated(name, value))
         .map(|(_, value)| SecretValue::new(ValueSource::Workspace, value.as_bytes().to_vec()))
         .collect();
-    (token, others)
+    (token, others, pem)
+}
+
+/// The body lines of every PEM private key a key file holds as a dotenv value (PRD-05 section
+/// 9): a value that opens, after `NAME=` and an optional quote, with a `-----BEGIN ...PRIVATE
+/// KEY-----` line, then its lines up to the `-----END` line or the closing quote, or, written on
+/// one line, its pieces between escaped `\n` breaks. Each usable ([`is_usable`]) piece of base64
+/// characters is one workspace value. No name gate: a PEM private key is a credential by its
+/// content. So a tool output that drops the BEGIN line still has its body masked by exact value.
+fn pem_body_values(text: &str) -> Vec<SecretValue> {
+    let mut out = Vec::new();
+    let mut lines = text.lines();
+    while let Some(line) = lines.next() {
+        let Some((_, value)) = pair_in(line) else {
+            continue;
+        };
+        let Some(rest) = pem_begin(value.trim_start_matches(['"', '\''])) else {
+            continue;
+        };
+        let mut push = |piece: &str| -> bool {
+            let piece = piece.trim();
+            let (piece, closed) = match piece.strip_suffix(['"', '\'']) {
+                Some(inner) => (inner, true),
+                None => (piece, false),
+            };
+            if piece.starts_with("-----END") {
+                return true;
+            }
+            let base64 = |b: u8| b.is_ascii_alphanumeric() || matches!(b, b'+' | b'/' | b'=');
+            if is_usable(piece.as_bytes()) && piece.bytes().all(base64) {
+                out.push(SecretValue::new(
+                    ValueSource::Workspace,
+                    piece.as_bytes().to_vec(),
+                ));
+            }
+            closed
+        };
+        if !rest.trim().is_empty() {
+            for piece in rest.split("\\n") {
+                if push(piece) {
+                    break;
+                }
+            }
+            continue;
+        }
+        for body in lines.by_ref() {
+            if push(body) {
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// What follows a `-----BEGIN <LABEL>-----` line opening `value`, when the label is capital
+/// letters and spaces ending in `PRIVATE KEY`.
+fn pem_begin(value: &str) -> Option<&str> {
+    let rest = value.strip_prefix("-----BEGIN ")?;
+    let (label, after) = rest.split_once("-----")?;
+    let label_ok = label.ends_with("PRIVATE KEY")
+        && label.bytes().all(|b| b.is_ascii_uppercase() || b == b' ');
+    label_ok.then_some(after)
 }
 
 /// Whether `name` is one of the participant's key files: `.env`, or `.env.` and anything.
