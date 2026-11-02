@@ -20,6 +20,9 @@ model_host = "api.deepseek.com"
 # OpenClaw redacts some of its own tool output (masked_key 212 times on row pad-1f8274), but no per-kind evidence exists, so
 # no redacts_kinds is claimed: C3 stays INCONCLUSIVE on kinds the model did not print, rather than passing on an inference.
 exit_keys = '/exit\r'
+# Pass 3 showed "[paste #1 3805 chars]" still in the input box at minute 4: the long paste collapsed and the Enter after it did not send.
+# docs.openclaw.ai/web/tui (read 2 Nov 2026): "Enter: send message"; the page says nothing of collapsed pastes, so the pad sends Enter again after a pause.
+resubmit_delay = 3
 keep_going = true
 # No daemon: PRD-11 names none for OpenClaw. Its subagents need a Gateway that 1.0 does not start (PRD-11 ledger OW-10).
 

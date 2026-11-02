@@ -303,7 +303,8 @@ def judge(r):
         stale(r)  # whatever else happened, as C3
     pin = r.meta.get("model_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
     tunnels = (r.hosts("s6_tunnel_hosts") or {}).get(pin, 0)  # section 2: a dodger's calls ride `pinned` tunnels
-    tool_turn = bool(r.native or dig(r.usage, "s7_native"))  # the harness's own stream shows a tool call
+    subagent = any(dig(t, "t_parent") for t in dig(r.usage, "s7_threads") or [] if isinstance(t, dict))  # a linked subagent is a tool use seen on the wire (S1: a harness with no native reader)
+    tool_turn = bool(r.native or dig(r.usage, "s7_native") or subagent)  # the harness's own stream, or a linked subagent, shows a tool call
     work = (seen or tunnels or tool_turn) and ((r.meta.get("commits_since_start") or 0) >= 1 or ((seen or 0) >= WORK_REQUESTS and tool_turn))  # W2: a young Paynest row commits nothing yet; chat or a retry loop is not work
     idle = "the harness did no work (commits since start %s, model requests %s, tool turn %s; work is a commit, or %d model requests with a tool-using turn)" % (r.meta.get("commits_since_start"), seen, "seen" if tool_turn else "none", WORK_REQUESTS)
     stop = cause(r) or (None if work else ("the harness lost its terminal; " if lost_terminal(r) else "") + idle)
