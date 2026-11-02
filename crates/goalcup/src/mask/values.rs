@@ -965,7 +965,10 @@ mod tests {
         }
         let rate = view.len() as f64 / 1e6 / best.as_secs_f64();
         println!("find_all_alone_holds_its_measured_floor: {rate:.1} MB/s");
-        assert!(rate > 10.0, "find_all below the 10 MB/s floor (measured 20.6 MB/s)");
+        assert!(
+            rate > 10.0,
+            "find_all below the 10 MB/s floor (measured 20.6 MB/s)"
+        );
     }
 
     /// From every start of `text`, a [`LiteralWalk`] and the per-form [`Progress`] set (the
