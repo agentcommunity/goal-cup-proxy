@@ -681,7 +681,9 @@ class Run:
             quiet = not (last and time.time() - last.timestamp() <= 10)
         else:
             base = self.work() or 0
-            quiet = not wait(lambda: (self.work() or 0) > base, 60, 0.5)  # quiet if no work within 60 s
+            # quiet if no work within 5 min: the watch types keep going after the row's idle minutes, so an idle harness
+            # is usually busy again inside this window and the kill lands with work in flight
+            quiet = not wait(lambda: (self.work() or 0) > base, 300, 0.5)
         pid, since = self.kill_rec(m, quiet)
         if not pid:
             raise Step("FAIL", "no live goalcup recorder pid in status.json")
@@ -702,7 +704,7 @@ class Run:
             raise Step("FAIL", "did not stand back up: missing " + ", ".join(missing()))
         back = time.time() - k["at"]  # taken now, before any wait for work
         # then new work: a harness may sit idle, which says nothing about the recorder (never a FAIL)
-        wait(lambda: (self.work() or 0) > (k["requests"] or 0), max(0, min(30 if k.get("quiet") else 120, self.left())), 2)
+        wait(lambda: (self.work() or 0) > (k["requests"] or 0), max(0, min(240 if k.get("quiet") else 120, self.left())), 2)
         st = self.status()
         n = self.work(st) or 0
         if n <= (k["requests"] or 0):
