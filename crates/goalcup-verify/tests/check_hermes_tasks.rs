@@ -140,7 +140,10 @@ fn task_logs_with_no_calls_and_no_wire_call_are_not_readable() {
     e.count();
     let d = mutate(&e.seal(), None, |r| edit_event(r, "start", 0, hermes));
     let t = call_table(&d);
-    assert!(t.threads.iter().any(|x| x.id == task_ids(2)[1]), "task threads");
+    assert!(
+        t.threads.iter().any(|x| x.id == task_ids(2)[1]),
+        "task threads"
+    );
     assert_eq!(t.not_on_wire.len(), 1);
     assert_eq!(t.reason, Some(Reason::NoNative));
     assert_eq!(judge(&t, &[]).1.harness_log, "none");
