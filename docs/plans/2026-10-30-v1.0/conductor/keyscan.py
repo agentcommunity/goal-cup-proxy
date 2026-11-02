@@ -3,10 +3,12 @@
 Usage: python3 keyscan.py [--scrub] PATH...
 
 A hit is any run of 12 or more characters of a secret value found in a file.
+The one exception is the DATABASE_URL host name: it is matched whole only, since
+a long public host name shares 12-character pieces with ordinary text.
 Every regular file outside .git/ is scanned, dotfiles and .py files included.
 Names and counts are printed, never a value. Python 3.9 compatible.
 
-Exit codes: 0 clean, 1 hits, 2 usage, 3 no secret values in the environment
+Exit codes: 0 clean, 1 hits, 2 usage or a PATH that does not exist, 3 no secret values in the environment
 (nothing was proven).
 """
 import os
@@ -25,28 +27,29 @@ REDACTED = "[KEY-FRAGMENT-REDACTED]"
 
 
 def _pieces(name, value):
+    """List of (piece, whole). A whole piece is matched only as a complete string."""
     if name != "DATABASE_URL":
-        return [value]
+        return [(value, False)]
     try:
         u = urlsplit(value)
-        out = [u.password or "", u.hostname or ""]
+        out = [(u.password or "", False), (u.hostname or "", True)]
     except ValueError:
-        out = [value]
-    return out + [unquote(p) for p in out]
+        out = [(value, False)]
+    return out + [(unquote(p), w) for p, w in out]
 
 
 def values(env):
-    """List of (name, value) with at least N characters; DATABASE_URL gives password and host."""
+    """List of (name, value, whole) with at least N characters; DATABASE_URL gives password and host (host is whole)."""
     out = []
     for name in NAMES:
         v = env.get(name, "")
         if not v:
             continue
         seen = set()
-        for p in _pieces(name, v):
+        for p, whole in _pieces(name, v):
             if len(p) >= N and p not in seen:
                 seen.add(p)
-                out.append((name, p))
+                out.append((name, p, whole))
     return out
 
 
@@ -72,8 +75,12 @@ def scan(paths, vals):
     hits = []
     for f in _files(paths):
         t = _read(f)
-        for name, v in vals:
-            if any(v[i:i + N] in t for i in range(len(v) - N + 1)):
+        for name, v, whole in vals:
+            if whole:
+                found = v in t
+            else:
+                found = any(v[i:i + N] in t for i in range(len(v) - N + 1))
+            if found:
                 hits.append((name, f))
     return hits
 
@@ -86,7 +93,12 @@ def scrub(paths, vals):
         t = _read(f)
         orig = t
         hits = 0
-        for _name, k in vals:
+        for _name, k, whole in vals:
+            if whole:
+                if k in t:
+                    hits += t.count(k)
+                    t = t.replace(k, REDACTED)
+                continue
             grams = {k[i:i + N] for i in range(len(k) - N + 1)}
             i = 0
             while i <= len(t) - N:
@@ -116,6 +128,11 @@ def main(argv):
     if not args or any(a.startswith("--") for a in args):
         print("usage: keyscan.py [--scrub] PATH...", file=sys.stderr)
         return 2
+    missing = [a for a in args if not os.path.exists(a)]
+    if missing:
+        for a in missing:
+            print("keyscan: no such path: %s" % a, file=sys.stderr)
+        return 2
     vals = values(os.environ)
     if not vals:
         print("keyscan: no secret values in env; nothing proven")
@@ -126,7 +143,7 @@ def main(argv):
     hits = scan(args, vals)
     for name, f in hits:
         print("HIT %s %s" % (name, f))
-    have = {n for n, _ in vals}
+    have = {n for n, _, _ in vals}
     unset = [n for n in NAMES if n not in have]
     print("keyscan: %d hit(s), %d keys checked, unset: %s"
           % (len(hits), len(have), ", ".join(unset) if unset else "none"))

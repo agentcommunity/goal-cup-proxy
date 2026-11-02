@@ -41,13 +41,15 @@ else
   echo "patch skipped: no node_modules"
 fi
 
-# env.sh holds the given paths and session only, never a secret value.
+# env.sh holds the given paths and session as defaults only, never a secret value.
+# A value the caller already exported wins, so a later session is never stamped
+# with this install's session URL.
 {
-  [ -n "$repo" ] && printf 'export GC_REPO=%q\n' "$repo"
-  [ -n "$night" ] && printf 'export GC_NIGHT=%q\n' "$night"
-  [ -n "$wt" ] && printf 'export GC_WT=%q\n' "$wt"
-  [ -n "$session" ] && printf 'export GC_SESSION=%q\n' "$session"
-  [ -n "$coauthor" ] && printf 'export GC_COAUTHOR=%q\n' "$coauthor"
+  [ -n "$repo" ] && printf '[ -n "${GC_REPO:-}" ] || export GC_REPO=%q\n' "$repo"
+  [ -n "$night" ] && printf '[ -n "${GC_NIGHT:-}" ] || export GC_NIGHT=%q\n' "$night"
+  [ -n "$wt" ] && printf '[ -n "${GC_WT:-}" ] || export GC_WT=%q\n' "$wt"
+  [ -n "$session" ] && printf '[ -n "${GC_SESSION:-}" ] || export GC_SESSION=%q\n' "$session"
+  [ -n "$coauthor" ] && printf '[ -n "${GC_COAUTHOR:-}" ] || export GC_COAUTHOR=%q\n' "$coauthor"
   true
 } > "$dest/env.sh"
 chmod 0644 "$dest/env.sh"
@@ -58,11 +60,11 @@ if [ -n "$night" ]; then
   : >> "$night/integration.lock"
   for f in "$SRC"/ledger/*.log; do
     [ -f "$f" ] || continue
-    for g in "$f" "$f.scribed"; do
-      [ -f "$g" ] || continue
-      b=$(basename "$g")
-      if [ -e "$night/lanes/$b" ]; then echo "kept existing $b"; else cp "$g" "$night/lanes/$b"; fi
-    done
+    # Decide per pair: a kept local log keeps its own counter, so its .scribed is never restored.
+    b=$(basename "$f")
+    if [ -e "$night/lanes/$b" ]; then echo "kept existing $b"; continue; fi
+    cp "$f" "$night/lanes/$b"
+    [ -f "$f.scribed" ] && cp "$f.scribed" "$night/lanes/$b.scribed"
   done
 fi
 

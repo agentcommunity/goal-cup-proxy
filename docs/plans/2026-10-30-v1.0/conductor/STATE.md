@@ -8,7 +8,7 @@ Written by the conductor session `https://claude.ai/code/session_01V2hUmHs6BvBcJ
 
 `v1.0/integration` is at `45b47073`: the conductor handover merge (tools, ledger, reports and the four finishing plans), gate fast PASS in 435 s at 01:04Z. Under it is `04044320`, the masking package (exact-value masking sources 1 to 3, `launch_values` at start, continue and recover, 30 s first-boot ready wait, new pad C3 rules, gateway rates), merged 22:27Z on 1 November. Build B0 of `04044320` finished at 01:00Z: `goalcup`, `goalcup-verify` and `commit` are in `$GC_NIGHT/builds/04044320/` on the old machine. That folder is not committed; rebuild if a new container needs it.
 
-The handover branch `v1.0/conductor-handover` is still being finished (tasks 9 and 10: these docs, then the slice box, the keyscan of the tree and the first handoff). Its first version is already on integration, so a new session installs from integration and takes the later commits through the one train.
+The handover branch `v1.0/conductor-handover` is still being finished (tasks 9 and 10: these docs, then the slice box, the keyscan of the tree and the first handoff). Its first version is already on integration, so until the one train merges the later commits, a new session installs from a worktree at `origin/v1.0/conductor-handover` (integration still has the old layout); after the train merges it installs from integration.
 
 ## Merged since 31 October
 

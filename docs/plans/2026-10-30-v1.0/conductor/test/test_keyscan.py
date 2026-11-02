@@ -56,6 +56,18 @@ class KeyscanTest(unittest.TestCase):
         w(d, "leak.txt", "pw0123456789abc")
         self.assertEqual(cli([d], {"DATABASE_URL": u}).returncode, 1)
 
+    def test_host_matched_whole_only(self):
+        d = self.d
+        u = "postgresql://reader:pw0123456789abc@db.long-project-name.example.internal:5432/x"
+        w(d, "doc.md", "see example.internal docs and ect-name.example.internal")
+        self.assertEqual(cli([d], {"DATABASE_URL": u}).returncode, 0)
+        w(d, "leak.txt", "host db.long-project-name.example.internal here")
+        self.assertEqual(cli([d], {"DATABASE_URL": u}).returncode, 1)
+
+    def test_missing_path_exit_2(self):
+        r = cli([os.path.join(self.d, "nope")], {"CLAUDE_API_KEY": K})
+        self.assertEqual(r.returncode, 2)
+
     def test_scrub_then_clean(self):
         d = self.d
         w(d, "log.txt", "a " + K + " b")

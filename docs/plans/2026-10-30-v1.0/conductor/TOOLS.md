@@ -1,6 +1,6 @@
 # Conductor tools
 
-All of this folder lives outside the product code. The files at the top of it are the one set of tools; there is no second copy. Every shell tool finds its paths through `lib.sh` and takes the commit trailer from `GC_SESSION`. `install.sh` (added later in this handover) copies the folder to a working location and replaces the manual steps below.
+All of this folder lives outside the product code. The files at the top of it are the one set of tools; there is no second copy. Every shell tool finds its paths through `lib.sh` and takes the commit trailer from `GC_SESSION`. `install.sh` copies the folder to a working location and does the install steps below.
 
 ## Layout of this folder
 
@@ -27,35 +27,34 @@ No tool carries a literal machine path or session URL. `lib.sh` sets `GC_TOOLS` 
 
 | File | Purpose |
 |---|---|
-| `box.mjs` | Vercel Sandbox driver. `run --repo DIR --ref REF --script FILE [--minutes N] [--out BOXPATH:LOCALPATH]` bundles a committed ref, clones it in a fresh box, runs the script as the non-root user, copies files back, stops the box. Also `snapshot-build`, `list`, `stop-all`. Needs the three Vercel variables. |
-| `build-snapshot.id` | Id of the build snapshot (Rust, nextest, zstd, Node 22, Python 3.9). It may have expired; rebuild with `node box.mjs snapshot-build`. |
+| `box.mjs` | Vercel Sandbox driver. `run --repo DIR --ref REF --script FILE [--snapshot ID] [--minutes N] [--vcpus N] [--out BOXPATH:LOCALPATH]` bundles a committed ref, clones it in a fresh box, runs the script as the non-root user, copies files back, stops the box. `--vcpus` defaults to 8. Also `snapshot-build`, `list`, `snaps` (snapshots, marks `[build]` and `[pad]`) and `spend --since ISO [--model-usd N] [--ledger]` (box minutes and vCPU minutes). Needs the three Vercel variables. |
+| `spend.mjs` | Pure helpers for `box.mjs spend` (minute sums and the ledger line). |
+| `install.sh` | `install.sh --dest DIR [--repo DIR] [--night DIR] [--wt DIR] [--session URL] [--coauthor TEXT] [--lane-dir DIR] [--skip-npm]`. Copies the tools (not `test/`, `ledger/`, `reports/`), runs `npm ci`, applies the sandbox proxy patch, writes `env.sh` (defaults only; a value the caller exported wins) and, with `--night`, restores the committed ledger without replacing a local log or its `.scribed` counter. Exit 5 when the installed SDK does not match the patch. |
+| `patch-sandbox.sh` | The sandbox proxy fix: rewrites the `undici` import in the SDK so it obeys `HTTPS_PROXY`. Idempotent; exit 5 on an unknown layout. |
+| `build-snapshot.id` | Id of the build snapshot (Rust, nextest, zstd, Node 22, Python 3.9). `box.mjs run` reads it from the tools folder; without it a box has no Rust and every build fails with exit 127. It may have expired; rebuild with `node box.mjs snapshot-build`. |
 | `merge.sh` | Merges one `v1.0/*` branch into `v1.0/integration` under one lock: scratch worktree, optional Cargo.lock refresh in a box, `gate fast` in a box, push only on PASS. Exit 0 merged, 1 gate FAIL, 3 conflict, 4 push refused. Logs to `integrator.log`. |
 | `mergeq.sh` | Reads queue requests and runs `merge.sh` detached (see protocol below). |
 | `mq-driver.sh` | Runs `mergeq.sh` back to back for N hours. The conductor starts it in the background (the "queue tick"). |
 | `scribe.sh` | Appends new lane-log lines to `NIGHT-LOG.md` on integration (docs-only commit and push). Run at every wake-up and before any handoff. |
-| `handoff.sh` | Regenerates `HANDOFF.md` and copies tool files into `conductor/` on integration. It copies only the tool files listed in the script today; a later task grows the copy list and adds the ledger and reports behind `keyscan.py`. |
-| `handoff-head.md` | Fixed top half of `HANDOFF.md`. It does not yet describe the proxy patch; add it. |
+| `handoff.sh` | Regenerates `HANDOFF.md` and copies the tool files, ledger, reports and `dbfetch/` into `conductor/` on integration. It runs `keyscan.py` first and refuses to push on a hit. Run `scribe.sh` before it. |
+| `handoff-head.md` | Fixed top half of `HANDOFF.md`. Its "Sandbox proxy patch" section describes the proxy fix. |
 | `gc-lane.js` | The lane workflow script (plan a slice, build in worktrees, review, fix, merge request, replan). Started with the Workflow tool. |
-| `padbox.sh`, `padrun.sh` | Drivers for one pad row: `padbox.sh` runs the pad inside a box; `padrun.sh` runs the pad's conductor half (`where = "sandbox"`). Paths inside point at old worktrees and output folders (see the table above); edit them per run. |
-| `dbfetch-idx.sh`, `dbfetch-install.sh` | Run inside the short-lived index box: install `psql`, write a 0600 service file from `~/.dburl`, run the read-only index query per run id, delete the credentials, tar the result. |
-| `keyscan.py` | Prints files holding any 12-character piece of a secret env value. Names and counts only. Run over the tree before every commit of conductor state. |
-| `scrub.py`, `scrub2.py` | Replace such fragments in saved copy-outs. Run on anything copied out of a box. `scrub2.py` checks ten key names (adds the DeepSeek, Gemini and GitHub tokens); prefer it. `keyscan.py` checks only nine names and skips `.py` files, so run both after a scrub. |
-| `rowinfo.py` | `python3 rowinfo.py <run folder>`: prints one row's checks, reasons, facts, status, verifier non-pass checks and upload state. Names and numbers only. The mini-wave plan reads every row with it. |
-| `summ.py` | `python3 summ.py <run folder>...`: shorter summary of pad-out run folders (result, checks, status, verify files). Names and numbers only. |
-| `patched-base-client.js`, `proxy-preload.cjs` | The sandbox proxy fix (below). |
+| `padbox.sh`, `padrun.sh` | Drivers for one pad row. `GC_PAD_WT=<worktree holding scripts/pad> padrun.sh SETTINGS OUTDIR` runs the pad's conductor half (`where = "sandbox"`). `GC_PAD_WT=... GC_BUILD=<dir with goalcup and goalcup-verify> padbox.sh SETTINGS KEYNAME ENVVAR OUTDIR` runs a pad inside a box; the key goes in only through `put-env`, never on a command line. |
+| `dbfetch/run.sh` | `GC_PAD_WT=... dbfetch/run.sh IDS_FILE OUTDIR`: the short-lived index box. Installs `psql` (`install.sh`), runs the read-only index query per run id (`idx.sh`), deletes the credentials, keyscans the result and removes the box. |
+| `keyscan.py` | `python3 keyscan.py [--scrub] PATH...`: finds files holding any 12-character piece of the value of one of 14 secret names (the DATABASE_URL host name is matched whole only). Scans every regular file outside `.git`, dotfiles and `.py` included. `--scrub` replaces the pieces. Exit 0 clean, 1 hits, 2 usage or a PATH that does not exist, 3 no secret values in the environment (nothing proven). Names and counts only. Run it over the tree before every commit of conductor state, and on anything copied out of a box. |
+| `rowinfo.py` | `python3 rowinfo.py <run folder>`: prints one row's checks, reasons, facts, status, verifier non-pass checks and upload state. Names and numbers only. |
+| `proxy-preload.cjs` | Node preload that sets `undici.Agent = undici.EnvHttpProxyAgent`, for pad scripts. |
 | `package.json`, `package-lock.json` | Pins `@vercel/sandbox`. |
-
-`snaps.mjs` (lists snapshots and running boxes) was on the old machine; it is folded into `box.mjs snaps` in a later task. Use `box.mjs list`, or recreate it from the SDK's list calls.
 
 Helpers the plans create themselves (not on the old machine in finished form): `jobs/build.sh`, `jobs/trie-box.sh`, `mini/row.sh`, `mini/wave.sh`, `mini/padtest.sh`. The plans give their contents.
 
 ## Install in a fresh container
 
-`install.sh` (added later in this handover) does these steps. Until then, by hand:
+`install.sh` does steps 2 to 4 (and `env.sh` for step 6). By hand:
 
 1. Pick a tools folder, a state folder and a worktree folder; export `GC_NIGHT` and `GC_WT` if they differ from the defaults, and create `$GC_NIGHT/{mrq/done,lanes,gate-logs,builds}`. Check the prerequisites in SECRETS.md first.
-2. Copy this folder to the tools folder and run `npm install` there.
-3. Replace `node_modules/@vercel/sandbox/dist/api-client/base-client.js` with the patched copy: it imports `EnvHttpProxyAgent as Agent` from undici instead of `Agent`, so the SDK obeys `HTTPS_PROXY`. Without it every sandbox call fails behind the proxy. Redo this after any `npm install` that rewrites the module.
+2. Copy this folder to the tools folder and run `npm ci` there.
+3. Run `patch-sandbox.sh node_modules`: it makes the SDK import `EnvHttpProxyAgent as Agent` from undici, so it obeys `HTTPS_PROXY`. Without it every sandbox call fails behind the proxy. Redo this after any install that rewrites the module.
 4. For pad scripts that use `scripts/pad/sbx.mjs` (CommonJS build), set `PAD_NODE_MODULES` to the tools folder's `node_modules` and `NODE_OPTIONS="--use-openssl-ca --no-warnings --require <tools>/proxy-preload.cjs"`. The preload sets `undici.Agent = undici.EnvHttpProxyAgent`.
 5. Set the environment variables in SECRETS.md. Check with `node box.mjs list`.
 6. Export `GC_REPO` and `GC_SESSION`.
