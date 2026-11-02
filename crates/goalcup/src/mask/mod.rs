@@ -27,6 +27,11 @@ use std::sync::Arc;
 
 pub use values::{launch_values, process_env};
 
+/// How many of `values` the masker would leave out (the start event's `skipped`).
+pub fn skipped_values(values: &[SecretValue]) -> u32 {
+    values::RunSecrets::new(values).1.skipped
+}
+
 /// The name of the rule that stars bytes the masker could not decide.
 pub const FAIL_CLOSED: &str = stream::FAIL_CLOSED_KIND;
 
