@@ -253,6 +253,22 @@ class AttemptBegin(unittest.TestCase):
         self.assertIn("attempt already began", out)
         self.assertEqual(json.loads(out[len("PADSTEP "):])["result"], "error")
 
+    def test_a_child_of_the_step_does_not_inherit_the_attempt_id(self):
+        # The paste step starts the watch as `pad-run <run> watch`: with the id inherited, the watch saw the step's own
+        # .begin, took itself for a resend and exited at once (no status samples, no keep going).
+        d = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, d, True)
+        seen = []
+
+        def run(*a):
+            seen.append(os.environ.get("PAD_ATTEMPT"))
+            raise RuntimeError("stop")
+        with mock.patch.dict(os.environ, {"PAD_ATTEMPT": "0123456789ac"}), mock.patch.object(padrun, "Run", side_effect=run), \
+                contextlib.redirect_stdout(io.StringIO()):
+            padrun.main(["pad-run", d, "look"])
+        self.assertEqual(seen, [None])
+        self.assertTrue(os.path.exists(os.path.join(d, "attempts", "0123456789ac.begin")))
+
 
 class Walk(unittest.TestCase):
     """A sentinel key in the environment: no argument the pad builds, and no file it writes, holds it."""

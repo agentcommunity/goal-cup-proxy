@@ -1198,6 +1198,7 @@ def main(argv):
     kind, arg, m = got
     os.umask(0o077)
     attempt = re.fullmatch(r"[0-9a-f]{12}", os.environ.get("PAD_ATTEMPT", "")) and os.environ["PAD_ATTEMPT"]  # pad asks after a lost response
+    os.environ.pop("PAD_ATTEMPT", None)  # this step's only: the watch it starts is not a resend of it
     mark = attempt and os.path.join(argv[1], "attempts", attempt)
     if mark and os.path.isdir(argv[1]):
         os.makedirs(os.path.dirname(mark), exist_ok=True)
