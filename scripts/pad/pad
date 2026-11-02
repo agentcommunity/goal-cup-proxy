@@ -52,7 +52,6 @@ OVERRIDES = ("cap_usd", "box_extra_minutes", "box_vcpus")  # a row may replace t
 FAULTS, SPAN = pc.FAULTS, pc.SPAN  # section 3.1: kind to the minutes it lasts by default; the kinds that take +<minutes>
 # pad-run's box steps: the faults of section 3.1, the watcher steps, and the mode's own
 BOX_STEPS = {"pre", "start", "wait-calls", "look", "seal", "wait-upload", "wait-recovery", "keep-going", "exec"} | set(FAULTS)
-READ_ONLY = {"look", "wait-calls", "wait-recovery", "wait-upload", "spend", "verify"}  # safe to run twice; a kill, seal or paste never is
 PRICED = tuple(k for k in pc.S7_TOKENS if k != "reasoning")  # PRD-09 section 4; output holds reasoning, never added again
 LEDGER = threading.Lock()  # spend lines: runs and the spend check write in parallel
 NAME = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -689,16 +688,21 @@ class Run:
         entry and run ids it names go into meta."""
         if argv is None and self.s["where"] == "sandbox":
             fd, script = tempfile.mkstemp(suffix=".sh", dir=self.tmp)  # its own file: the spend check runs beside a step
+            # A transport error with no PADSTEP line: the response may be lost after the step ran, and a kill, seal or paste
+            # must never be sent twice. So ask the box whether this attempt (its PAD_ATTEMPT id) began; send it again only if not.
+            aid = secrets.token_hex(6)
             with os.fdopen(fd, "w") as f:
-                f.write("exec python3.11 ~/pad/pad-run ~/run %s\n" % step)
-            # A transport error with no PADSTEP line is retried for read-only steps only: the response may be lost after
-            # the step ran, and a kill, recover or paste must never be sent twice. A step that printed a line is never rerun.
-            again = step.split()[0].split("@")[0] in READ_ONLY
+                f.write("PAD_ATTEMPT=%s exec python3.11 ~/pad/pad-run ~/run %s\n" % (aid, step))
             for attempt in range(3):
                 r = self.sbx("exec", self.name, "--script", script, limit=limit)
-                if ("%s " % tag) in (r.stdout or "") or not TRANSPORT.search((r.stdout or "") + (r.stderr or "")) or attempt == 2 or not again:
+                out = (r.stdout or "") + (r.stderr or "")
+                if ("%s " % tag) in (r.stdout or "") or not TRANSPORT.search(out) or attempt == 2:
                     break
-                self.log("sbx exec %s retry %d: transport error, no %s line" % (self.name, attempt + 1, tag))
+                lost = self.attempt_state(aid)
+                if lost is not None:
+                    r = subprocess.CompletedProcess(r.args, 0, lost, "")
+                    break
+                self.log("sbx exec %s retry %d: transport error, the box never began %s" % (self.name, attempt + 1, step))
                 time.sleep(EXEC_RETRY_WAIT)
         else:
             r = call(argv or [sys.executable, os.path.join(HERE, "pad-run"), self.box_dir] + step.split(), timeout=limit,
@@ -707,6 +711,22 @@ class Run:
         d = json.loads(got[-1]) if got else {"result": "error", "saw": said("%s: no %s line" % (step, tag), r)}
         self.meta.update({k: d[k] for k in ("entry", "run", "new_entry") if d.get(k)})
         return d.get("result", "error"), d.get("saw", ""), d
+
+    def attempt_state(self, aid):
+        """After a lost `sbx exec` response: what the box says of attempt `aid` -> the step's own PADSTEP line when it ended,
+        None when the box never began it (safe to send again), else a PADSTEP error line (began, no result read: never again)."""
+        fd, script = tempfile.mkstemp(suffix=".sh", dir=self.tmp)
+        with os.fdopen(fd, "w") as f:
+            f.write('f=~/run/attempts/%s; if [ -f $f.json ]; then echo "PADSTEP $(cat $f.json)"; elif [ -f $f.begin ]; then echo PADBEGUN; '
+                    'else echo PADNONE; fi\n' % aid)
+        for _ in range(8):
+            r = self.sbx("exec", self.name, "--script", script, limit=60)
+            if "PADNONE" in (r.stdout or ""):
+                return None
+            if "PADSTEP " in (r.stdout or ""):
+                return r.stdout
+            time.sleep(EXEC_RETRY_WAIT)  # began and still running, or the box could not be asked
+        return "PADSTEP " + json.dumps({"result": "error", "saw": "sbx exec response lost; the step began and no result could be read"})
 
     def step_box(self, step, limit):
         if self.no_build:

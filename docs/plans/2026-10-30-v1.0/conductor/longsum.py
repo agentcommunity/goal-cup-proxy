@@ -129,13 +129,10 @@ def x4(gaps, meta, why, gap_limit_ms, faults=()):
         return "FAIL: a null_mode gap"
     inconclusive = None
     for line in why:
-        if line.startswith("faults INCONCLUSIVE") and "recovery not observed" in line:  # even on a quiet kill
+        if line.startswith("faults INCONCLUSIVE"):  # any wording: the A2 and A5 line was "recovery not observed: wait-recovery INCONCLUSIVE, ok"
             inconclusive = inconclusive or "INCONCLUSIVE: " + line[:120]
             continue
         if line.startswith("faults") and not any(t in line for t in ("not under 2 s", "(limit 2 s)", "quiet kill", "no work in flight")):
-            if line.startswith("faults INCONCLUSIVE"):
-                inconclusive = inconclusive or "INCONCLUSIVE: " + line[:120]
-                continue
             return "FAIL: faults line not about the 2 s bound: " + line[:120]
     return inconclusive or "PASS"
 
