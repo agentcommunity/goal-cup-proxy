@@ -43,8 +43,9 @@ All times UTC, 2 November. Eight trains merged into `v1.0/integration`, each wit
 | 06:15 | exec retry | `aa36af92` | a lost sandbox reply is read back, never a second kill |
 | 07:47 | subagent links | `284c2610` | readers for many harnesses, history matches renamed tool calls |
 | 08:53 | wave fixes | `fabd82ec` | fetch retries on 429, work rule, Gemini CLI approvals |
+| later | stall fixes | `7fdaf9a3` | wire subagent links count as a tool turn, Crush init answer, OpenClaw second Enter, Gemini write approval |
 
-Gates: 11 gate runs, 8 passed. The three failures were slips caught by the gate (rustfmt, a rule check that found a harness name in CLI code, clippy). Each was fixed and rerun. A passing gate takes about 7 to 8 minutes. The test count went from 685 (train 5) to 707 (train 8).
+Gates: 11 gate runs up to `fabd82ec`, 8 passed; the stall-fix train then passed too. The three failures were slips caught by the gate (rustfmt, a rule check that found a harness name in CLI code, clippy). Each was fixed and rerun. A passing gate takes about 7 to 8 minutes. The test count went from 685 (train 5) to 707 (train 8).
 
 Builds: six release builds (B0 `04044320`, H2 `13ce0d62`, `f7048ed8`, H4 `ad32a2a4`, H5 `a437988d`, H6 `284c2610`), each shared by all rows on it.
 
@@ -61,15 +62,16 @@ Waves, with the pad's own cost estimate in USD (it errs high):
 | Paynest subagent wave 1 | H5 | 13 | 1.46 | all "did no work" |
 | Paynest wave 2 | H6 | 13 | about 9.9 | 8 rows with data, 5 interrupted |
 | Paynest wave 3 | H6 | 10 | 9.85 | 4 PASS (Kilo, Qwen, Goose, Kimi Code) |
+| Paynest wave 4 | H6 binaries | 4 | 2.22 | 2 PASS (OpenCode 19 of 19 linked, Crush 4 of 4 linked), Gemini CLI and OpenClaw INC |
 
 Model spend over the night: about 49 USD by the pad's estimate. Row boxes: about 80 boxes and about 1,600 box minutes (my sum of the spend files and the B0 ledger figure). Build and gate boxes, from the conductor's two spend lines: 10 boxes, 21.4 box minutes, 119.7 vCPU minutes (02:56 to 04:05) and 5 boxes, 16.7 box minutes, 122.1 vCPU minutes (04:49 to 05:56). The earlier Vercel infrastructure spend you named at 23:12Z on 1 November was about 100 USD.
 
-Your calls overnight: 02:00 the key answer (W1), 06:20 the direction to focus on recording and subagents, 07:20 DeepSeek out of credit and topped up, 08:31 top up about 20 USD with a stop at 18 USD.
+Your calls today: 02:00 the key answer (W1: rotate Gemini and DeepSeek later, clean the server at the end), split echo recorded for later, 06:20 focus on recording and subagents over masking, DeepSeek topped up, budget about 20 USD for subagent reruns. The gateway key was still at its 10 USD limit at the last row.
 
 ## State of the code
 
-- Integration head is `fabd82ec`. The fast gate was green on it.
-- The stall-fix branch (`v1.0/prd-12-stall-fixes`, for the Crush, Gemini CLI and OpenClaw stalls) exists on origin and is not merged.
+- Integration head is `7fdaf9a3`. Gate fast PASS on both late trains (707 Rust, 30 script, 168 pad tests on the last). `crates/` is unchanged since H6, so the H6 binaries stand.
+- The code is ready for the freeze on the guarded tree. Release rows on a frozen head are still owed.
 - Not frozen. Guarded code changed in H4, H5 and H6, so every release row has to be redone on the frozen head.
 - Production Worker untouched. The staging Worker holds the test rows.
 - Only `f7048ed8` has a written pad trust read. The later builds have selftest files that ran all controls.
@@ -79,7 +81,7 @@ Your calls overnight: 02:00 the key answer (W1), 06:20 the direction to focus on
 - Claude Code: all six checks pass on direct, gateway and dodger on H5, with 5 subagents per row.
 - Codex: all six pass on all three cases on `f7048ed8`. On H5 the gateway row passes. Direct and dodger did no work because the OpenAI key is out of credit.
 - The recorder survives a kill. Two recorder kills and one watchdog kill with `goalcup recover` ran in all six one-hour runs. The harness ran to its own end every time. Recorder gaps were 0.4 to 1.0 s, with one quiet kill of 14.4 s.
-- Subagent links: 28 of 28 (OpenCode 2), 20 of 20 (Kimi Code), 18 of 18 (Kilo), 14 of 14 (OpenCode), 12 of 12 (Hermes and Qwen), 10 of 10 (Goose). Codex started 10 to 11 and Claude Code 13.
+- Subagent links on a PASS row: OpenCode 2 28 of 28, Kimi Code 20 of 20, Kilo 18 of 18, OpenCode 19 of 19, Qwen 12 of 12, Goose 10 of 10, Crush 4 of 4. Hermes 12 of 12 by task logs (C3 INCONCLUSIVE only). Codex 10 of 10 linked (H5 wave). Claude Code 13 spawned (the gateway budget stopped the re-read) and linked on the H5 core rows. Not linked: Copilot (no reader, deferred). Cline, Amp, Factory: no rows.
 - No secret in any kept record outside the stated losses. Keyscan of all pad output: 0 hits.
 - No loss under load: no memory-guard gap in any one-hour run. Recorder memory peaked under 180 MB.
 - Server copy equals local on every row that was fetched.
@@ -89,7 +91,7 @@ Your calls overnight: 02:00 the key answer (W1), 06:20 the direction to focus on
 - Hermes: no PASS row. C3 stays INCONCLUSIVE (ask 4). Its gateway C1 failure was a verifier defect, fixed and shown by replay only.
 - Any one-hour run as a PASS. X2 (15 subagents, 10 at once) was not reached. Best at once: 6 for Claude Code, 5 for Codex. Hermes cannot show concurrency from task logs.
 - Kill-gap bound under load: PASS once in three runs.
-- Gemini CLI, Crush, Copilot (subagents), OpenClaw, Cline, Amp, Factory: not verified.
+- Not verified: Gemini CLI (stalls on a build-file approval screen the settings do not skip), OpenClaw (no tool use in the 15-minute row), Copilot (subagents), Cline, Amp, Factory.
 - macOS, the newcomer docs run and the clean-up check: no result yet.
 - A known value split across stream events can still be stored raw.
 
@@ -101,6 +103,7 @@ Your calls overnight: 02:00 the key answer (W1), 06:20 the direction to focus on
 - The gateway key budget (10 USD) was exceeded twice. You raised it at 08:31, but the 10:07 ledger line still shows the key over 10 USD, and the Claude Code and Codex gateway rows did not run in wave 3.
 - Staging storage returned HTTP 429 to the pad's fetch in wave 2. The retry merged and held.
 - The wave 2 stop did not act in time. The 8 USD rule was passed (about 9.9 USD).
+- Queue lesson: the merge-queue driver stops at its hour limit. A liveness check using `pgrep -f` on its own name matched itself and hid that it had stopped, which cost about an hour on train 10. Check the driver by its pid.
 
 ## Your steps
 

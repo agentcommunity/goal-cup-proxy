@@ -2,7 +2,7 @@
 
 Written 2 November 2026, about 10:10 UTC, by the reports lane for the conductor. Numbers come from row files, `longsum` output and the ledger only. The conductor adds the last rows and finalises.
 
-Integration head when written: `fabd82ec`. Builds that rows ran on:
+Integration head when updated: `7fdaf9a3`. The last two trains (fetch retry and work rule `fabd82ec`; wire links count as a tool turn, Crush init answer, OpenClaw second Enter, Gemini write approval `7fdaf9a3`) passed gate fast. `crates/` is unchanged since H6, so H6 binaries stand. Builds that rows ran on:
 
 | Build | Commit | What it carried |
 |---|---|---|
@@ -24,16 +24,16 @@ C1 no missed call, C2 every subagent, C3 no secret, C4 server copy whole, C5 usa
 | Claude Code | yes | verified, with a note | All six checks pass on direct, gateway and dodger on H5. The one-hour kill and recover run is INCONCLUSIVE, not PASS (section 4). |
 | Codex | yes | verified, with a note | All six pass on direct, gateway and dodger on f7048ed8. On H5 only the gateway row ran with work; direct and dodger did no work because the OpenAI key was out of credit. |
 | Hermes | yes | not verified yet | C1, C2, C4, C5 and C6 pass, but C3 is INCONCLUSIVE on every Hermes row on current code. The model never touched three secret kinds, and Hermes redacts two kinds itself before the wire. A PASS row does not exist yet. |
-| OpenCode | no | verified with a note | Subagents 14 of 14 linked on the wire. The pad row is INCONCLUSIVE because its work rule saw no tool turn without a reader. |
+| OpenCode | no | verified | Paynest pass 4: PASS C1 to C6, 19 subagents, 19 linked on the wire. Pass 3 was INCONCLUSIVE on the work rule, since fixed. |
 | OpenCode 2 | no | verified | Paynest row PASS C1 to C6, 28 subagents, 28 linked. |
 | Kilo | no | verified | Paynest row PASS C1 to C6, 18 of 18 linked. |
 | Qwen Code | no | verified | Paynest row PASS C1 to C6, 12 of 12 linked, local log read. |
 | Goose | no | verified | Paynest row PASS C1 to C6, 10 of 10 linked. |
 | Kimi Code | no | verified | Paynest row PASS C1 to C6, 20 of 20 linked, local log read. |
-| Gemini CLI | no | not verified | Last two Paynest rows stalled on a write confirmation. No row with subagent work. |
-| Crush | no | not verified | Stalled on the init question. No work done. |
+| Gemini CLI | no | not verified: approval screen | Pass 4 stalled on a "Build File Modification, Apply this change?" screen the settings do not skip. 3 requests, no subagents. |
+| Crush | no | verified | Paynest pass 4: PASS C1 to C6, 4 subagents, 4 linked. The init answer worked. |
 | GitHub Copilot CLI | no | not verified for subagents | 450 requests recorded, no child thread, no reader. Recording works; subagent links do not exist. |
-| OpenClaw | no | not verified | Prompt pasted but not submitted in the last row; earlier rows hit the `source_changed` gaps. |
+| OpenClaw | no | not verified: no tool use | Pass 4 submitted the prompt, 61 requests of reasoning, no tool call or subagent in 15 minutes. Earlier rows hit `source_changed` gaps. |
 | Cline CLI | no | not verified | No row in the sources read. The ledger says it ships not verified (no subagent link). |
 | Amp, Factory Droid | no | not verified | No key this cycle (owner decision T2). Built from docs. |
 
@@ -91,7 +91,7 @@ C2 on Hermes carries the plain note: subagents are shown by their task logs, not
 | Point | Evidence | Status |
 |---|---|---|
 | 1. Record every model call | C1 PASS on Claude Code (6 of 6 rows), Codex (4 of 4 rows that did work) and Hermes (4 of 6 rows; the two C1 results that failed were verifier defects, now fixed). Wire requests per 20-minute row: 102 to 375. The history check found no missed call on any row that did work. | Proven on three blockers, with the Hermes C1 fix proven only by replay |
-| 2. Record every subagent | Core rows: 5 or 6 subagents per row on all three blockers. Paynest waves: Codex 10 and 11, Claude Code 13 (native files), Qwen 12 and 15, Kimi Code 20, Kilo 18, OpenCode 14, OpenCode 2 28, Goose 10, Hermes 12. Linked to the parent: 28 of 28, 20 of 20, 18 of 18, 14 of 14, 12 of 12 (twice), 10 of 10. No child thread shown: Copilot, Gemini CLI, Crush, OpenClaw. One-hour runs: 6 to 15 subagents (section 4). | Proven for 9 harnesses. Not proven for 4. The owner target of 20 subagents or 10 at once in one hour is not reached in any one-hour run. |
+| 2. Record every subagent | Core rows: 5 or 6 subagents per row on all three blockers. Paynest waves: Codex 10 and 11, Claude Code 13 (native files), Qwen 12 and 15, Kimi Code 20, Kilo 18, OpenCode 14, OpenCode 2 28, Goose 10, Hermes 12. Linked to the parent: 28 of 28, 20 of 20, 18 of 18, 14 of 14, 12 of 12 (twice), 10 of 10. No child thread shown: Copilot, Gemini CLI, Crush, OpenClaw. One-hour runs: 6 to 15 subagents (section 4). | Proven for 10 harnesses (OpenCode 19 of 19 and Crush 4 of 4 added in pass 4). Not proven for Copilot, Gemini CLI, OpenClaw. The owner target of 20 subagents or 10 at once in one hour is not reached in any one-hour run. |
 | 3. Never block or slow the harness | One-hour runs killed the recorder twice and the watchdog once. On H4 the recorder gaps were 0.4 to 1.0 s, except one quiet kill of 14.4 s on Claude Code. The harness kept running to its own end in all six runs (seal reason: harness exit). `goalcup recover` worked in all three second-pass runs (ledger 05:57Z). The 2 s Codex bound and the 5 s load bound are not both measured: second-pass X4 is PASS on Hermes and INCONCLUSIVE on Claude Code and Codex. | Recovery shown. The kill-gap bound is shown on one run of three. |
 | 4. Never record secrets | C3 PASS or stated-loss PASS on every row that exercised it except two FAILs, both fixed (headerless PEM body lines, section 5). Keyscan of every pad-out tree and every ledger-named folder: 0 hits. The W1 event is listed in section 5. | Proven with stated losses. Not proven for a value split across streamed reply events. |
 | 5. Upload everything | C4 PASS (server copy equals local) on every core row that did work and every one-hour run. Upload state `sealed` in all. One-hour compressed size per hour: 2.3 to 2.9 MB (Claude Code), 6.1 to 6.5 MB (Codex), 10.8 to 18.6 MB (Hermes). Staging R2 returned HTTP 429 to the pad's fetch on 6 of 8 Paynest rows in pass 2; the fetch retry merged in `fabd82ec` and held on all 10 rows of pass 3. That was the pad's read, not the upload. | Proven on staging. Production not touched. |
@@ -165,6 +165,7 @@ Prompt: a payments platform, many subagents. Gateway key budget stopped Claude C
 | 1 | H5 | 13 | All INCONCLUSIVE ("did no work"). Codex gateway 10 subagents, Claude Code 1. DeepSeek rows stalled on credit. |
 | 2 | H6 | 13 | OpenCode 2 PASS (28 of 28 linked). Hermes 12 of 12. Qwen 15, Claude Code 13, Codex 11 sessions. 5 rows interrupted. |
 | 3 | H6 | 10 of 11 | Kilo, Qwen, Goose, Kimi Code PASS C1 to C6. OpenCode 14 of 14 linked, row INC. Copilot, OpenClaw, Crush, Gemini CLI stalled or showed no child. |
+| 4 | H6 binaries, pad `7fdaf9a3` | 4 | OpenCode PASS (19 of 19), Crush PASS (4 of 4). Gemini CLI and OpenClaw INC (2.22 USD est, keyscan 0). |
 
 ## 8. What is not proven
 
@@ -174,7 +175,7 @@ Prompt: a payments platform, many subagents. Gateway key budget stopped Claude C
 - Kill-gap bound under load (5 s): PASS once (A3 pass 2). A2 pass 2 had one quiet 14.4 s kill gap.
 - Only f7048ed8 has a written trust read. H4, H5 and H6 have selftest files with all controls run, but no separate trust note.
 - A value split across streamed reply events can still be recorded raw (stated loss).
-- Gemini CLI, Crush, Copilot (subagents), OpenClaw, Cline, Amp and Factory: not verified.
+- Gemini CLI, Copilot (subagents), OpenClaw, Cline, Amp and Factory: not verified.
 - macOS: not run. Linux only.
 - Production Worker: not touched. All rows are staging.
 - The newcomer docs run and the clean-up check (N9) have no result in the sources read.
