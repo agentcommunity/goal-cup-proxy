@@ -341,10 +341,6 @@ pub fn not_masked(skipped: usize) -> Option<String> {
     }
 }
 
-/// The verifier's text for subagents shown by their task logs (`goalcup-verify`, `legs.rs`).
-pub const HERMES_SUBAGENTS: &str =
-    "Subagents are shown by their task logs, not tied to individual calls.";
-
 pub const READY: &str = "Ready.
   Practice (10 minutes, no GitHub):
     d=$(mktemp -d) && cd \"$d\" && goalcup start --practice
@@ -1345,13 +1341,5 @@ mod tests {
         let t = masking(None);
         assert!(t.contains("values of known keys"));
         assert!(t.contains("held in memory only"));
-    }
-
-    #[test]
-    fn hermes_line_matches_the_verifier() {
-        assert_eq!(
-            HERMES_SUBAGENTS,
-            "Subagents are shown by their task logs, not tied to individual calls."
-        );
     }
 }

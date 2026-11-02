@@ -36,6 +36,9 @@ pub struct Connector {
     pub native: Vec<NativeRow>,
     pub mask: Vec<MaskRule>,
     pub first_screen: Option<String>,
+    /// One plain line the end screen shows for this harness, for example how its subagents are
+    /// shown.
+    pub end_note: Option<String>,
     pub no_prompts: Vec<SettingRow>,
     pub update_off: Vec<SettingRow>,
     pub skills_dir: Option<String>,

@@ -46,3 +46,12 @@ fn hermes_rows_take_no_state_database() {
         "{names:?}"
     );
 }
+
+#[test]
+fn hermes_end_note_matches_the_verifier_text() {
+    let c = connector::load("hermes-cli", None).unwrap();
+    assert_eq!(
+        c.end_note.as_deref(),
+        Some("Subagents are shown by their task logs, not tied to individual calls.")
+    );
+}

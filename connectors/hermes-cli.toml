@@ -3,6 +3,7 @@
 # No state.db row: its search index can hold text out of context (facts sheet, section 4).
 id = "hermes-cli"
 name = "Hermes"
+end_note = "Subagents are shown by their task logs, not tied to individual calls."
 program = "hermes"
 args = ["chat"]
 resume = ["--continue"]
