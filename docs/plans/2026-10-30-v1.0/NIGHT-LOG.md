@@ -4234,3 +4234,10 @@ Tools: node 22, python3.11, git, gh, flock, tar present. Conductor tools install
 13:22Z | integrator | run | train 11 merged 9a96b84e (gate PASS). A2 pass 4 started: Claude Code direct, Paynest, H6 binaries, pad with watch restored. Evidence only.
 14:25Z | integrator | result | A2 pass 4 (run r0f037b39c4e6efc7 entry ec07bfa0b7a302bf6, fixed pad): X2 PASS 15 subagents 11 at once, C1 to C6 PASS, 4.97 USD, gaps 176 ms / 47331 ms quiet kill / watchdog_lost 116180 ms, faults INC on the quiet minute-30 kill only, keyscan 0. Evidence only.
 14:25Z | integrator | result | A2 pass 4 (run r0f037b39c4e6efc7 entry ec07bfa0b7a302bf6, fixed pad): X2 PASS 15 subagents 11 at once, C1 to C6 PASS, 4.97 USD, gaps 176 ms / 47331 ms quiet kill / watchdog_lost 116180 ms, faults INC on the quiet minute-30 kill only, keyscan 0. Evidence only.
+14:34Z | integrator merger v1.0/pad-kill-busy | gate | gate fast: PASS in 432s on merge f2f58c8a (log /root/gc-night/gate-logs/v1.0_pad-kill-busy-1426.log)
+14:34Z | integrator merger v1.0/pad-kill-busy | merge | v1.0/pad-kill-busy into v1.0/integration as f2f58c8a: pad: kill the recorder with work in flight, and give a quiet kill time to see work
+14:43Z | integrator merger v1.0/pad-kill-limits | gate | gate fast: PASS in 422s on merge 592d87d3 (log /root/gc-night/gate-logs/v1.0_pad-kill-limits-1435.log)
+14:43Z | integrator merger v1.0/pad-kill-limits | merge | v1.0/pad-kill-limits into v1.0/integration as 592d87d3: pad: step limits for the kill wait and the quiet recovery
+14:43Z | integrator | run | trains 12 (f2f58c8a) and 13 (592d87d3) merged, gate PASS: kill waits for work, limits cover it. A2 pass 5 started on H6 binaries.
+15:47Z | integrator | W-CASE key | A2 pass 5 void: Claude key credit balance too low from the first request (71 refused requests recorded, kills recovered 1488 ms / 459 ms, recover ok). Owner top-up needed before a rerun.
+15:47Z | integrator | W-CASE key | A2 pass 5 void: Claude key credit balance too low from the first request (71 refused requests recorded, kills recovered 1488 ms / 459 ms, recover ok). Owner top-up needed before a rerun.
