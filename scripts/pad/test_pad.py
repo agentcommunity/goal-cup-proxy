@@ -1043,15 +1043,14 @@ class MiniFixRound(unittest.TestCase):
         self.assertEqual(other["checks"]["C2"], "FAIL")
         self.assertEqual(other["checks"]["C5"], "FAIL")
 
-    def test_pad_copies_the_task_log_flag_and_openclaw_names_its_redaction(self):  # T4, T1
+    def test_pad_copies_the_task_log_flag_and_openclaw_claims_no_redaction(self):  # T4, T1
         import tomllib
         here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "harnesses")
         with open(os.path.join(here, "hermes-cli.toml"), "rb") as f:
             self.assertIs(tomllib.load(f).get("subagents_by_task_log"), True)
         with open(os.path.join(here, "openclaw-cli.toml"), "rb") as f:
             oc = tomllib.load(f)
-        self.assertIs(oc.get("redacts_tool_output"), True)
-        self.assertTrue(oc.get("redacts_kinds"))
+        self.assertFalse(oc.get("redacts_kinds"))  # no kind passes C3 on an inference
 
     def test_setup_script_never_prints_the_environment(self):  # T7
         here = os.path.dirname(os.path.abspath(__file__))
