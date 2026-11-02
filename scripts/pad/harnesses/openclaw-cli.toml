@@ -17,8 +17,12 @@ key_route = "login"
 login = "bash -lc 'openclaw plugins install @openclaw/deepseek-provider && umask 077 && mkdir -p \"$OPENCLAW_HOME/.openclaw\" && { printf DEEPSEEK_API_KEY=; cat; } > \"$OPENCLAW_HOME/.openclaw/.env\"'"
 # Pad data for the dodger copy only (section 2): provider deepseek calls https://api.deepseek.com.
 model_host = "api.deepseek.com"
-# OpenClaw redacts its own tool output (prefix/suffix, [REDACTED], ***). Evidence, 2 Nov 2026 row pad-1f8274 (counts and rule
-# names only): masked_key MASK 212 times, and no raw hit of the openai, github or google shape outside the reworded remote password.
+# OpenClaw redacts its own tool output (prefix/suffix, [REDACTED], ***). Evidence, 2 Nov 2026 row pad-1f8274 (rule names and counts
+# only): masked_key 212 times. masked_key is the masker's rule for a provider key that arrives already masked (prefix/suffix form),
+# so it shows OpenClaw redacts key-shaped values, but not per kind: no per-kind redaction count exists. redacts_kinds names the
+# three key shapes (openai, github, google) because masked_key is not tied to one shape and no raw hit of any of them reached the
+# record outside the reworded remote password. That is an inference from masked_key plus an absence of hits, not a showing for each
+# kind. jwt and private_key are left out on purpose: no evidence covers them, so openclaw C3 stays INCONCLUSIVE on those two.
 redacts_tool_output = true
 redacts_kinds = ["openai_key", "github_token", "google_key"]
 exit_keys = '/exit\r'
