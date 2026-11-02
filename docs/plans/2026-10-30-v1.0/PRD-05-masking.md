@@ -505,7 +505,9 @@ rules that is 20 shared literals (21 with the owner's yes to question 3), up to 
 2. **Exact-value regexes only after a hit.** The exact-value forms run their regex only on a hold in
    which a `Literal` candidate completed. Their recognizer is exact, so this changes no result. Built
    with the exact values (second slice, only with the owner's yes to question 3), since 480 forms on
-   every byte is the one cost known to be large.
+   every byte is the one cost known to be large. (Superseded by the amendment of 2026-11-01,
+   single-pass exact-value matcher: the forms have no regex now. One trie over every form of every
+   value finds them all in one pass of the release scan, and the hold walks the same trie.)
 3. **First-byte dispatch, only if A5 is short.** `Policy` builds a 256-entry table from each rule's
    spawn set (its first byte, folded for the `(?i)` rules, plus `ſ` and the Kelvin sign for those), and
    `step_unit` offers a unit only to the rules in its entry. Built only when A5 measures the copied
@@ -532,7 +534,32 @@ steps stay those above (exact-value regexes only after a hit, then the dispatch 
 pool). A second box (release build, branch head b43e7154) measured `Masker::new` at 2.0 s with 32
 values of 256 bytes, so the 6.4 s above is the slower of two measures.
 
-**Memory of the compiled forms (measured, same release box).** The masker's peak resident memory was
+**Measured again (2026-11-01, single-pass matcher, release box, branch head daa9f82c).** These
+numbers supersede the two paragraphs around this one, which stay as history. With 32 values of 256
+bytes, `Masker::new` takes 42.6 to 64.5 ms over two boxes (target under 1 s), and one stream
+masks run-1-like input at 6.0 to 6.2 MB/s (generated Codex request 6.1, transcript 7.5, the 4.5 MB
+floor-test input 6.2), against 2.3 to 3.3 before. The masker's peak resident memory in that test is
+about 38 MB, and the by-hand bench's peak is 62 MB (238 MB before). The target of 50 MB/s is still
+not met, and the exact values are no longer what stops it: one stream of the shared rules alone, with
+no participant value, measures 14.6 MB/s on the same box. The rest of the exact values' cost is the
+hold (a `Literal` candidate starts on nearly every letter or digit, since 32 values give forms that
+start on almost every one), not the scan. The next steps stay items 3 and 4.
+
+**The matcher alone, and the stream's share (2026-11-02, release box, branch head 1c190400).** The
+trie's `find_all`, run alone over 4 MB of generated text with 32 values of 256 bytes, measures
+20.6 MB/s, so it is not above 50 MB/s as the plan hoped. One stream of a generated Codex request
+masks at 14.4 MB/s with no participant value and 6.1 MB/s with 32 values, so the values keep 0.42
+of the no-value rate. `Masker::new` took 91 ms and the peak resident memory was 38 MB on this box.
+Both are inside their targets. The 50 MB/s stream target is held back by the shared rules (14.6
+MB/s alone), by the hold, and by the matcher itself. The release-only test
+`find_all_alone_holds_its_measured_floor` asserts a 10 MB/s floor (the matcher alone measured
+20.6 MB/s), so it passes in a release build and still catches a collapse. It skips itself in the
+debug builds of the gate. Whether to speed the matcher up toward 50 MB/s is an owner choice. The change to the hold, one literal
+tracker per stream, is deferred to after 1.0; it runs only if the one-hour runs show the recorder
+falling behind (the masking backlog grows through the hour, or a hold or candidate bound trips
+`fail_closed`) and the ratio above is below 0.8. It is 0.42 today.
+
+**Memory of the old per-form matcher (history; superseded by the 2026-11-01 and 2026-11-02 paragraphs above, where the trie peaks at about 38 MB with 32 values of 256 bytes).** The old masker's peak resident memory was
 about 39 MB with 8 values of 100 bytes, 104 MB with 32 of 100 and 238 MB with 32 of 256. That memory
 is the compiled exact-value forms; it stays resident in the recorder for the whole run, and PRD-02's
 memory guard does not count it (the guard counts held bytes). It is a stated cost, not a cap: the
@@ -541,8 +568,8 @@ literals alone.
 
 Seam note for PRD-14: its by-hand load notes should carry these numbers beside A5's, name the
 start-up time with 32 long values as the one cost the participant sees (a slower `start`), and name
-the resident memory of the compiled forms (up to about 240 MB with 32 long values) beside the
-recorder's own figure.
+the resident memory of the compiled forms (about 38 MB with 32 long values in the trie; the 240 MB
+figure was the removed per-form regexes) beside the recorder's own figure.
 
 ### 12. Participant text (for PRD-10 and PRD-15)
 
@@ -1188,4 +1215,54 @@ A1 reports it as a stated loss instead of failing on it.
   recovered recorder builds again, about 2 s each with 32 long values) is left for the next slice of
   PRD-10's `recover`. The second 32-value guard in `RunSecrets::new` stays as the bound for callers
   that pass values to `Masker::new` directly.
+- No locked ledger item is touched.
+
+### 2026-11-01, single-pass exact-value matcher (owner decision)
+
+- **What changed.** The exact-value forms (up to 480, 32 values times 15) had one regular expression
+  each, run by the whole-record matcher and the stream's release scan, and the stream's hold
+  stepped one recognizer per form from every start. Now `values.rs` builds one trie over every form
+  of every value (one node per distinct form prefix, children contiguous, the root a 256-entry
+  table, nodes numbered breadth first) and runs it as a set simulation in one left-to-right pass
+  (`RunSecrets::find_all`). `rules::exact_candidates` turns its matches into the same claims
+  `Pattern::exact` made (priority after the connector rules plus the form's index, a block, no
+  group, no guard, end on a character boundary), and `Policy::claims` joins them to the regex
+  rules' claims at both call sites. The hold's `Walk::Literals` walks the same trie
+  (`LiteralWalk`), and the scan of every form's first byte on every unit is gone. `Pattern::exact`,
+  the per-form regexes, `Progress` (now only a test oracle) and the skip of a form that does not
+  compile are gone: a form cannot fail to compile any more, so section 9's "a value that fails to
+  compile" and the "compile limit" example under **Errors** no longer happen.
+- **Why no crate.** A form matches with at most one line break in any gap (LF or CR LF, raw, or one
+  or two backslashes before each of `r` and `n`, an escaped break never right before a backslash of
+  the form, no break before the first character). A literal multi-pattern matcher such as
+  aho-corasick cannot take that, and the crate manifest is PRD-02's. The trie steps the break
+  grammar itself; no dependency is added.
+- **What is masked is unchanged.** Same values, same forms (`encoded_forms`), same break grammar,
+  same block claims, priorities and rule names, same streaming boundary handling. A seeded property
+  test in `values.rs` (80 random sets of 1 to 8 values, some with `"`, `\`, `<`, `&`, and texts
+  that plant whole and cut forms with every break spelling, two breaks in one gap, a break before
+  the first byte and an escaped break before a form backslash) checks that `find_all` equals each
+  form's old regex exactly, and that the hold's walk agrees with the old per-form recognizers on
+  live, complete and dead at every byte from every start. Every earlier masking test passes
+  unchanged (one in-file test reads the connector pattern through an `Option` now).
+- **Measured** (release boxes, two runs). `Masker::new` with 32 values of 256 bytes: 42.6 to 64.5 ms
+  (was 2.0 to 6.4 s). One stream with those values: 6.0 to 6.2 MB/s on run-1-like input (was 2.3 to
+  3.3), against 14.6 MB/s for the shared rules alone. Peak resident memory: about 38 MB in the floor
+  test and 62 MB in the by-hand bench (was 238 MB). Section 11 carries these numbers.
+- **The floor test.** `mask_bench.rs` `exact_values_mask_above_a_floor` runs in every tier and
+  skips itself in a debug build (it says so). In a release build it checks, with 32 generated values
+  of 256 bytes, that `Masker::new` takes under 1 s, that no planted value (raw, percent, `\u`,
+  base64, wrapped) leaves raw over about 4.5 MB of run-1-like input fed in 16 KiB pieces, that the
+  stream equals `mask_whole`, and that one stream stays above 5 MB/s (best of 3). The planned floor
+  of 20 MB/s is not reachable in this slice, since the shared rules alone measure 14.6 MB/s; 5 MB/s
+  is above the old code's best (3.3).
+- **Measured again, matcher alone.** `find_all` alone: 20.6 MB/s. Stream, no values 14.4 MB/s, with
+  32 values 6.1 MB/s (ratio 0.42). `Masker::new` 91 ms, peak 38 MB. The release-only test
+  `find_all_alone_holds_its_measured_floor` now asserts a 10 MB/s floor and passes; whether to speed
+  the matcher up toward 50 MB/s is the owner's choice.
+  The per-stream literal tracker (one `LiteralTrack` per scanner) is deferred to after 1.0, with the
+  trigger in section 11.
+- **Left open.** The 50 MB/s target (section 11 items 3 and 4, and the hold's per-unit cost of a
+  `Literal` candidate on nearly every letter or digit). The open nits of the earlier amendments and
+  the size budget overrun are unchanged.
 - No locked ledger item is touched.
