@@ -150,6 +150,7 @@ class CrushInitQuestion(unittest.TestCase):
     def test_crush_answers_the_initialize_question_before_the_prompt(self):  # S2: 0.99.0 stopped at "Would you like to initialize this project?"
         h = pad.read_toml(os.path.join(HERE, "harnesses", "crush-cli.toml"))
         self.assertEqual(h.get("pre_keys"), "n")
+        self.assertIn("initialize this project", h.get("ready_text", ""))  # the key is sent only when the dialog is on screen
 
 
 class SealPaneFallback(unittest.TestCase):

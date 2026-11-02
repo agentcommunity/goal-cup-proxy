@@ -8,7 +8,9 @@
 # below, in both cases.
 # Init screen "Would you like to initialize this project? Yep! / Nope": the README (main, read 2 Nov 2026) names no option that skips
 # it (crushrc options: initialize-as only sets the file name), so a participant running unattended answers Nope with the key n,
-# sent as a pre key before the prompt. The key itself is not in the docs; it is read from the dialog's labels and unverified.
+# sent as a pre key before the prompt, and only once ready_text (the dialog's question) is on screen: if the dialog is absent the
+# pad sends no key, so no stray n lands in the chat input. UNPROVEN until a live Crush row: the key n and the ready_text are read
+# from the dialog's labels, not from the docs, and Nope may need arrow keys and Enter instead.
 # Read from docs only, not run against a live harness: every key below, the "models" selection block, the model ids and
 # the quit key (Ctrl-C twice is a guess).
 version = "0.99.0"
@@ -20,6 +22,7 @@ key_env = "DEEPSEEK_API_KEY"
 # Pad data for the dodger copy only (section 2): the custom provider calls https://api.deepseek.com.
 model_host = "api.deepseek.com"
 exit_keys = '\003\003'
+ready_text = "initialize this project"
 pre_keys = 'n'
 keep_going = true
 

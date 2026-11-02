@@ -62,6 +62,14 @@ class PreKeys(unittest.TestCase):
     def test_top_level_when_section_has_none(self):
         self.assertEqual(self.sent({"pre_keys": "\\r"}, {}), ["\r"])
 
+    def test_no_pre_keys_when_ready_text_never_shows(self):
+        with mock.patch.object(padrun, "wait", lambda *a, **k: False):
+            self.assertEqual(self.sent({"pre_keys": "n", "ready_text": "dialog"}, {}), [])
+
+    def test_pre_keys_after_ready_text_shows(self):
+        with mock.patch.object(padrun, "wait", lambda *a, **k: True):
+            self.assertEqual(self.sent({"pre_keys": "n", "ready_text": "dialog"}, {}), ["n"])
+
     def enters(self, name):
         d = tempfile.TemporaryDirectory()
         self.addCleanup(d.cleanup)

@@ -431,11 +431,12 @@ class Run:
         h, t = self.h, self.tmux
         self.pane()  # once, after the approval (or none) and before the ready wait: the launch block and the version line
         ready = h.get("ready_text")
-        if not (ready and wait(lambda: ready in self.pane(False), float(h.get("ready_wait", 30)), 2)):
+        seen = bool(ready and wait(lambda: ready in self.pane(False), float(h.get("ready_wait", 30)), 2))
+        if not seen:
             time.sleep(0 if ready else 30)
         self.seed()  # after the harness's ready text: the harness reads git state while it starts
         keys = self.sec.get("pre_keys") or h.get("pre_keys")  # the case section first, then the harness top level
-        if keys:
+        if keys and (seen or not ready):  # a ready text that never showed means the screen the keys answer is absent: send nothing
             for k in ([keys] if isinstance(keys, str) else keys):  # one screen per item
                 sh(["tmux", "send-keys", "-t", t, "-l", k.encode().decode("unicode_escape")])
                 time.sleep(3)
