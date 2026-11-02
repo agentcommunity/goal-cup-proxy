@@ -45,6 +45,11 @@ def forms(v):
     return {f for f in out if len(f) >= 8}
 
 
+def fill(text, home, project):
+    """A provider snippet with {home} and {workspace} filled; ${VAR} and {env:VAR} are not placeholders and stay."""
+    return text.replace("{home}", home).replace("{workspace}", project)
+
+
 def merge_config(name, old, new):
     """The provider file's rows beside the ones goalcup setup wrote: both kept, the pad's value wins a same key.
     JSON merges by key; TOML keeps the top-level rows of both (before any table), then the tables of both.
@@ -64,6 +69,11 @@ def merge_config(name, old, new):
     key = lambda ln: ln.partition("=")[0].strip() if "=" in ln else None  # noqa: E731
     mine = {key(ln) for ln in new_top} - {None}
     return "\n".join([ln for ln in old_top if key(ln) not in mine] + new_top + old_tab + new_tab) + "\n"
+
+
+def key_text(path, old, line):
+    """The key file's text: the pad's key line beside any rows goalcup setup wrote there (the pad's value wins a same key)."""
+    return merge_config(os.path.basename(path), old, line)
 
 
 def replace_known(text, values):
@@ -272,7 +282,7 @@ class Run:
         home = self.st["home"] = homes[-1]
         for name, src in sec.get("files", {}).items():  # provider config, as a participant writes it
             old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""  # keep goalcup setup's no_prompts rows
-            write(os.path.join(home, name), merge_config(name, old, open(os.path.join(PAD, "harnesses", src)).read()), 0o644)
+            write(os.path.join(home, name), merge_config(name, old, fill(open(os.path.join(PAD, "harnesses", src)).read(), home, self.project)), 0o644)
         get = lambda k: sec.get(k, h.get(k))  # noqa: E731
         key, route = (os.path.join(self.keys, s["route_key"]), get("key_route")) if s["route_key"] else (None, None)  # section 6
         self.st.update(key_route=route, key_env=get("key_env"), key_path=key)
@@ -283,7 +293,10 @@ class Run:
                 raise Step("FAIL", "harness login exit %d" % r.returncode)
         elif route == "file":
             with open(key) as f:
-                write(get("key_file").replace("{home}", home), get("key_line").replace("{key}", f.read().strip()) + "\n")
+                line = get("key_line").replace("{key}", f.read().strip())
+            path = get("key_file").replace("{home}", home)
+            old = open(path).read() if os.path.isfile(path) else ""  # keep the rows goalcup setup wrote (Kimi approvals)
+            write(path, key_text(path, old, line))
         for name in s["key_files"]:  # the run's own copies; env: the launch shell reads the file, then removes it
             if not (route == "env" and name == s["route_key"]):
                 os.remove(os.path.join(self.keys, name))
@@ -563,9 +576,22 @@ class Run:
         return ("ok", "sealed %s, %s model requests written" % (why, pc.dig(self.status(), "s4_requests"))
                 ) if ok else ("timeout", "%s, not sealed within the step's limit after goalcup seal" % why)
 
-    def exit_harness(self):  # the harness file's exit_keys (printf format); after 30 s SIGTERM to harness.pid if it lives
+    def exit_harness(self):  # the harness file's exit_keys: a printf string, or a list sent one item at a time; after 30 s SIGTERM to harness.pid if it lives
         if not self.dead():
-            keys = str(self.h.get("exit_keys", "")).encode().decode("unicode_escape")
+            keys = self.h.get("exit_keys", "")
+            if isinstance(keys, list):  # one send-keys per item, exit_pause seconds apart; an item "\r" is the Enter key; a gone harness gets no more keys
+                for i, item in enumerate(keys):
+                    if i:
+                        time.sleep(float(self.h.get("exit_pause", 1)))
+                        if self.dead():
+                            break
+                    item = str(item).encode().decode("unicode_escape")
+                    if item == "\r":
+                        sh(["tmux", "send-keys", "-t", self.tmux, "Enter"])
+                    elif item:
+                        sh(["tmux", "send-keys", "-t", self.tmux, "-l", item])
+                keys = ""
+            keys = str(keys).encode().decode("unicode_escape")
             if keys.endswith("\r"):  # a fast burst then Enter is a newline in some TUIs (paste burst): send Enter apart, as keep_going does
                 if keys[:-1]:
                     sh(["tmux", "send-keys", "-t", self.tmux, "-l", keys[:-1]])

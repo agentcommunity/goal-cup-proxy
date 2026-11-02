@@ -78,6 +78,42 @@ class Settings(unittest.TestCase):
             pad.load_settings(dict(BASE, key="cf"), PADCFG)
 
 
+class RowOverrides(unittest.TestCase):
+    """Wave 1: a row may set cap_usd, box_extra_minutes and box_vcpus; pad.toml stays the default."""
+
+    def test_row_values_replace_pad_toml(self):
+        s = pad.load_settings(dict(BASE, cap_usd=3, box_extra_minutes=10, box_vcpus=2), PADCFG)
+        got = pad.row_pad(s, dict(PADCFG, cap_usd=10, box_extra_minutes=30, box_vcpus=4))
+        self.assertEqual((got["cap_usd"], got["box_extra_minutes"], got["box_vcpus"]), (3, 10, 2))
+        self.assertEqual(got["keys"], PADCFG["keys"])
+
+    def test_absent_keeps_pad_toml(self):
+        s = pad.load_settings(dict(BASE), PADCFG)
+        self.assertEqual(pad.row_pad(s, dict(PADCFG, cap_usd=10))["cap_usd"], 10)
+
+    def test_bad_values_are_usage(self):
+        for k, v in (("cap_usd", 0), ("cap_usd", "3"), ("cap_usd", True), ("box_vcpus", 3), ("box_vcpus", 2.5),
+                     ("box_extra_minutes", -1), ("box_extra_minutes", 2.5)):
+            with self.assertRaises(pad.Usage, msg=(k, v)):
+                pad.load_settings(dict(BASE, **{k: v}), PADCFG)
+
+    def test_main_passes_row_values_to_every_run(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        f = os.path.join(d, "s.toml")
+        with open(f, "w") as fh:
+            fh.write('harness = "codex-cli"\nkey = "openai"\nmode = "micro"\ncase = "all"\ncap_usd = 3\nbox_vcpus = 2\n')
+        seen = []
+        with mock.patch.object(pad, "run_all", lambda s, p, h, o, c: seen.append((p, c)) or [("PASS", "")] * len(c)):
+            pad.main(["pad", f])
+        p, cases = seen[0]
+        self.assertEqual((p["cap_usd"], p["box_vcpus"]), (3, 2))
+        self.assertEqual(cases, ["direct", "gateway", "dodger"])
+
+    def test_mini_template_loads(self):
+        s = pad.load_settings(pad.read_toml(os.path.join(HERE, "runs", "mini.toml")), pad.read_toml(os.path.join(HERE, "pad.toml")))
+        self.assertEqual((s["mode"], s["minutes"], s["server"], s["steps"], s["cap_usd"]), ("micro", 10, "staging", ["keep-going"], 3))
+
+
 class NotVerified(unittest.TestCase):
     """PRD-12 section 9: a stated reason means nothing runs, exit 3, and the table shows that reason."""
 
@@ -85,16 +121,27 @@ class NotVerified(unittest.TestCase):
         d = self.enterContext(tempfile.TemporaryDirectory())
         f = os.path.join(d, "s.toml")
         with open(f, "w") as fh:
-            fh.write('harness = "crush-cli"\nkey = "claude"\nmode = "cycle"\n')
+            fh.write('harness = "amp-cli"\nkey = "none"\nmode = "cycle"\n')
         with mock.patch.object(subprocess, "run", side_effect=AssertionError("started a box")):
             self.assertEqual(pad.main(["pad", f]), 3)
 
     def test_table_shows_the_reason_over_old_rows(self):
         tbl = load("padtable", "table")
-        row = {"connector": "crush-cli", "case": "direct", "mode": "full", "result": "FAIL"}
-        tier = tbl.tier_for("crush-cli", [row])
-        self.assertEqual(tier[0], "not verified")
-        self.assertTrue(tier[2].startswith("needs permission answer"))
+        row = {"connector": "amp-cli", "case": "direct", "mode": "full", "result": "FAIL"}
+        self.assertEqual(tbl.tier_for("amp-cli", [row]), ("not verified", "", "no key"))
+
+
+class CrushPermissions(unittest.TestCase):
+    def test_crush_runs_with_its_permission_file(self):
+        h = pad.read_toml(os.path.join(HERE, "harnesses", "crush-cli.toml"))
+        self.assertNotIn("not_verified", h)
+        for case in ("direct", "gateway"):
+            self.assertEqual(h[case]["files"][".config/crush/crushrc"], "direct/crush-cli-crushrc", case)
+        lines = open(os.path.join(HERE, "harnesses", "direct", "crush-cli-crushrc")).read().splitlines()
+        allow = [ln for ln in lines if ln.startswith("permissions allow ")]
+        self.assertEqual(len(allow), 1)
+        self.assertIn("bash", allow[0].split())
+        self.assertEqual(load("padtable2", "table").tier_for("crush-cli", []), ("not verified", "", "not yet run on the pad"))
 
 
 class Walk(unittest.TestCase):
@@ -1001,6 +1048,87 @@ class PinnedModel(unittest.TestCase):
     def test_no_models_read_or_no_pin_says_nothing(self):
         for pin, recorded, read in (("claude-haiku-5-5", [], True), ("claude-haiku-5-5", [], False), (None, ["claude-opus-5-5"], True)):
             self.assertNotIn("pinned", " ".join(self.row(pin, recorded, read=read)["why"]), (pin, recorded, read))
+
+
+class PromptVariant(unittest.TestCase):
+    """rung1x item 10, sweep2: opencode refused, qwen asked, copilot ran half the script. Same task, plants named as fake."""
+
+    def test_fixture_prompt_keeps_the_smoke_task(self):
+        path = os.path.join(HERE, "prompts", "smoke-fixture.txt")
+        text = open(path).read()
+        smoke = open(os.path.join(HERE, "prompts", "smoke.txt")).read()
+        for part in ("sh ./pad-setup-check.sh", "one subagent", "count.txt", "commit count.txt", "fake", "Do not stop to ask"):
+            self.assertIn(part, text)
+        self.assertIn(" ".join(smoke.split()), " ".join(text.split()))  # the smoke task word for word
+        self.assertEqual(pad.load_settings(dict(BASE, prompt=path), PADCFG)["prompt"], path)
+
+
+class KeyFileMerge(unittest.TestCase):
+    def kimi_line(self):
+        return pad.read_toml(os.path.join(HERE, "harnesses", "kimi-code-cli.toml"))["key_line"].replace("{key}", "PADSENTINEL")
+
+    def test_key_text_keeps_the_row_setup_wrote(self):
+        out = padrun.key_text("/iso/config.toml", 'default_permission_mode = "auto"\n', self.kimi_line())
+        self.assertIn('default_permission_mode = "auto"', out)
+        self.assertIn('api_key = "PADSENTINEL"', out)
+        self.assertLess(out.index("default_permission_mode"), out.index("[providers.deepseek]"))
+
+    def test_key_text_same_key_once_pad_value_wins(self):
+        out = padrun.key_text("/iso/config.toml", 'default_model = "other"\n', self.kimi_line())
+        self.assertEqual(out.count("default_model"), 1)
+        self.assertIn('default_model = "ds"', out)
+
+    def test_key_text_with_no_old_file_is_the_line(self):
+        self.assertEqual(padrun.key_text("/iso/.env", "", "AI_GATEWAY_API_KEY=PADSENTINEL"), "AI_GATEWAY_API_KEY=PADSENTINEL\n")
+        self.assertEqual(json.loads(padrun.key_text("/h/auth.json", "", '{"deepseek": {"type": "api", "key": "K"}}')),
+                         {"deepseek": {"type": "api", "key": "K"}})
+
+
+class SnippetFill(unittest.TestCase):
+    def test_fill_leaves_env_references_alone(self):
+        t = '{"w": "{workspace}", "h": "{home}/x", "k": "${AI_GATEWAY_API_KEY}", "e": "{env:DEEPSEEK_API_KEY}"}'
+        self.assertEqual(json.loads(padrun.fill(t, "/iso", "/run/project")),
+                         {"w": "/run/project", "h": "/iso/x", "k": "${AI_GATEWAY_API_KEY}", "e": "{env:DEEPSEEK_API_KEY}"})
+
+    def test_openclaw_works_in_the_project(self):
+        for case in ("direct", "gateway"):
+            with open(os.path.join(HERE, "harnesses", case, "openclaw-cli-config.json")) as f:
+                d = json.load(f)
+            self.assertEqual(d["agents"]["defaults"]["workspace"], "{workspace}", case)
+            self.assertIn("model", d["agents"]["defaults"], case)  # the model pin is kept beside it
+
+
+class ExitKeys(unittest.TestCase):
+    def sent(self, keys, dies_after=None):
+        r = object.__new__(padrun.Run)
+        r.h, r.tmux, r.fault, r.status = {"exit_keys": keys}, "t", lambda *a, **k: None, lambda: {}
+        sent, sleeps = [], []
+        r.dead = lambda: dies_after is not None and len(sent) >= dies_after
+        def sh(cmd, *a, **k):
+            if "send-keys" in cmd:
+                sent.append(cmd[-1])
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        with mock.patch.object(padrun, "sh", sh), mock.patch.object(padrun.time, "sleep", sleeps.append):
+            r.exit_harness()
+        return sent, sleeps
+
+    def test_list_items_go_one_by_one_with_a_pause(self):
+        sent, sleeps = self.sent(["/quit", "\\r"])
+        self.assertEqual(sent, ["/quit", "Enter"])
+        self.assertIn(1.0, sleeps)
+
+    def test_string_form_is_unchanged(self):
+        self.assertEqual(self.sent("/exit\\r")[0], ["/exit", "Enter"])
+        self.assertEqual(self.sent("\\003\\003")[0], ["\x03\x03"])
+
+    def test_harness_gone_mid_list_gets_no_more_keys(self):
+        self.assertEqual(self.sent(["/quit", "\\r"], dies_after=1)[0], ["/quit"])
+
+    def test_codex_data(self):
+        h = pad.read_toml(os.path.join(HERE, "harnesses", "codex-cli.toml"))
+        self.assertEqual(h["exit_keys"], ["/quit", "\\r"])
+        cfg = pad.read_toml(os.path.join(HERE, "harnesses", "gateway", "codex-config.toml"))
+        self.assertEqual(h["gateway"]["model"], cfg["model"])  # owner rule 19:17Z, conductor note 22:00Z, gw3 PASS 20:27Z
 
 
 if __name__ == "__main__":

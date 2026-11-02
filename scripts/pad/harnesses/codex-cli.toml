@@ -10,9 +10,9 @@ key_route = "login"
 login = "codex login --with-api-key"
 # Pad data for the dodger copy only (section 2): an API-key login calls https://api.openai.com/v1.
 model_host = "api.openai.com"
-# Exit: /quit is documented (codex-rs/tui/src/slash_command.rs at rust-v0.165.0). An Enter right after a fast burst is
-# a newline (paste_burst.rs), so pad-run sends the final \r as its own key.
-exit_keys = '/quit\r'
+# Exit: /quit is documented (codex-rs/tui/src/slash_command.rs at rust-v0.165.0).
+# One item per key: Codex 0.165 leaves `/quit\r` unsubmitted (rung 5 F6).
+exit_keys = ['/quit', '\r']
 subagent_word = "sub-agent"
 keep_going = true
 # Codex finishes the payments prompt in about 7 minutes (first full rows, 1 Nov 2026), so a kill pair at 8 and 10 meets no stream.
@@ -23,7 +23,7 @@ model = "gpt-6.1-sol"
 files = { "config.toml" = "direct/codex-config.toml" }
 
 [gateway]
-model = "openai/gpt-6.1-sol"
+model = "anthropic/claude-haiku-5.5"
 files = { "config.toml" = "gateway/codex-config.toml" }
 # Only this line in {home}/.env: Codex's .env overwrites HTTPS_PROXY, NO_PROXY and SSL_CERT_FILE.
 key_route = "file"

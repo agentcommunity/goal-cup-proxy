@@ -1,0 +1,14 @@
+# Wave 1 mini-test: 10 minutes of the smoke prompt (one subagent), staging, one row per harness. Copy it, set harness,
+# key, case and prompt, add build = "<folder with goalcup and goalcup-verify>", and run scripts/pad/pad <copy> from the repo root.
+harness = "codex-cli"
+key = "openai"
+case = "gateway"
+mode = "micro"
+prompt = "smoke"
+minutes = 10
+server = "staging"
+where = "sandbox"
+steps = ["keep-going"]
+cap_usd = 3
+box_extra_minutes = 10
+box_vcpus = 4
