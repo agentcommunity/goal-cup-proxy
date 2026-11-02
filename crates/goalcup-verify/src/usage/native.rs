@@ -356,7 +356,7 @@ impl Native {
         let all = own.map(|r| (r, None)).chain(claude);
         let rows = all.map(|(r, rid)| {
             let (thread, parent) = r.path.as_ref().and_then(|p| owner.get(p)).cloned().unzip();
-            let (parent, wall_end) = (parent.flatten(), r.wall_start);
+            let (parent, wall_end) = (parent.flatten(), r.wall_end.or(r.wall_start));
             let r = CallRow {
                 thread,
                 parent,
@@ -517,8 +517,9 @@ fn claude(
 }
 
 /// One Kimi Code wire line (flat: `type`, `agentId`, `time` in epoch ms) of the agent file at
-/// `path`. An `llm.request` keeps its time for the `usage.record` after it, which is one call; a
-/// line another agent's id names is not this file's. A `subagent.spawned` gives the child's
+/// `path`. An `llm.request` keeps its time for the `usage.record` after it, which is one call
+/// that starts at the request and ends at the record (the wire join pairs by the end); a line
+/// another agent's id names is not this file's. A `subagent.spawned` gives the child's
 /// parent agent (`parentAgentId`, else this file's agent). Ids, model, times and numbers only.
 fn kimi(
     asked: &mut Option<u64>,
@@ -545,6 +546,7 @@ fn kimi(
                 model: model_name(v.get("model")),
                 tokens,
                 wall_start: asked.take().or(time),
+                wall_end: time,
                 ..row()
             });
         }
