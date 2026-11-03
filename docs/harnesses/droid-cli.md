@@ -34,7 +34,7 @@ Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configur
 
 - JSONL, one file per session, beside a `<uuid>.settings.json` that is rewritten as the session changes (binary). The connector copies the settings file as a `snapshot` and the transcript as `sessions`. Side chats sit under `sessions/<slug>/btw/` (binary).
 - The session id is the file name. Where it first appears on screen: unknown.
-- Subagent file layout: unknown. Subagents run through the `Task` tool as built-in droids (`worker`, `explorer`) or custom ones in `.factory/droids/` ([docs](https://docs.factory.com/harness/subagents)); whether each writes its own file is not read.
+- Subagent file layout: unknown. Subagents run through the `Task` tool as built-in droids (`worker`, `explorer`) or custom ones in `.factory/droids/` ([docs](https://docs.factory.com/harness/subagents)); whether each writes its own file is not read. `goalcup-verify` has no Droid reader, so subagents are not linked.
 
 ## 5. Auth
 

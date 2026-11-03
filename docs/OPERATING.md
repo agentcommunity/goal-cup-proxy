@@ -107,7 +107,8 @@ replaced, is left out of public numbers, and its emails go to the operator marke
 
 The pad answers whether a connector, on this build, against staging, records and uploads a copy the
 server holds whole. `python3.11 scripts/pad/pad scripts/pad/runs/<mode>.toml` runs it in a build sandbox
-and prints one table; the modes are `micro`, `cycle` and `full`. Exit 0 means every row passed, 1 a
+and prints one table; the ladder is `micro`, `cycle` and `full`, and the other files in
+`scripts/pad/runs/` are acceptance (`a1` to `a5`), release-check (`core-*`), a template (`mini`) and a fallback (`kill-codex`) rows. Exit 0 means every row passed, 1 a
 failure, 3 inconclusive, 2 a usage error. Model keys are named in `scripts/pad/pad.toml` and read by name
 from the conductor's environment; they and the staging approval and database credentials never enter the
 sandbox. `scripts/pad/table` writes the rows and `PAD-RESULTS.md`, and
@@ -233,7 +234,7 @@ or the client's own count to the deadline. Fix the server and the runs catch up.
 | A participant cannot approve a run | The website needs the current terms accepted (`403` or a message on the approval page). A start outside the window is `403` too, and so is a client older than `MIN_COMPETITION_VERSION` (the answer carries an install line). |
 | A participant's run shows `incomplete` | Its last piece did not arrive within 24 hours of the end. It is judged on what arrived. Nothing to repair. |
 | A participant lost their machine mid-run | `goalcup continue` works only on the machine that started the run (it needs that run's saved approval). On another machine nothing continues; the run ends at its deadline with what was uploaded. |
-| A participant's recording is off but their agent still runs | `goalcup recover` on the same machine restarts the recorder in place on the same port, never touches the agent, and the time between is a gap. It refuses if the agent has exited (then `goalcup continue`) or the part is sealed. No server action; the `silence` email (no heartbeat for 20 minutes) already told them. |
+| A participant's recording is off but their agent still runs | `goalcup recover` on the same machine restarts the recorder in place on the same port, never touches the agent, and the time between is a gap. It refuses if the agent has exited (then `goalcup continue`) or the part is sealed. After it, `goalcup seal` and the deadline seal the part but leave the agent running. No server action; the `silence` email (no heartbeat for 20 minutes) already told them. |
 | Wrong run is the main run | An account has one main run; a later competition start replaced it. `GET /v1/runs/{id}` on the first shows `ends_at` = the second's start. This is by design. |
 | Emails are late | At most 20 go out per 5-minute tick. The queue drains by itself; raise `NOTICES_PER_TICK` in `mail.ts` to speed it. Check `RESEND_API_KEY` and `NOTICE_FROM` are set. |
 | A secret leaked (Supabase, Resend, GitHub, Cloudflare) | Revoke it at its provider, create a new one, `npx wrangler secret put` it, deploy. Treat the old value as public. |

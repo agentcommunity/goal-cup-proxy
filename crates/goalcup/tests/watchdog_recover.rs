@@ -304,3 +304,30 @@ fn watchdog_recover_keeps_a_late_boot() {
     let sealed = until("the seal", || status().filter(|s| !s["seal"].is_null()));
     assert_eq!(sealed["seal"]["reason"], "harness_exit", "{sealed}");
 }
+
+/// Owner's Mac one-hour run (MAC-LEARNINGS 7g): `goalcup seal` on a recovered watchdog seals with
+/// the harness still running, and says so instead of "goalcup seal stopped".
+#[test]
+fn watchdog_recover_seal_says_the_harness_was_left() {
+    let mut d = setup(false);
+    let got = watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
+    assert!(got.is_ok(), "{got:?}");
+    let out = Command::new(common::bin())
+        .args(["seal", "--yes"])
+        .env("GOALCUP_HOME", d.tmp.path().join("g"))
+        .env_remove(cli::time_left::FILE_ENV)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{said}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(said.contains("is still running"), "{said}");
+    assert!(!said.contains("goalcup seal stopped"), "{said}");
+    assert!(d.harness.try_wait().unwrap().is_none(), "the harness ended");
+    assert!(!d.tmp.path().join("signalled").exists(), "signalled");
+    d.harness.kill().unwrap();
+    d.harness.wait().unwrap();
+}

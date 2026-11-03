@@ -168,6 +168,7 @@ pub const NOTES: &[&str] = &[
     "snapshot_unstable",
     "final_snapshot_live",
     "local_model",
+    "version_note",
     "mask_values",
 ];
 

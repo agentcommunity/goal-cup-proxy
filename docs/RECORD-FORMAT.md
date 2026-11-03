@@ -347,7 +347,8 @@ was recorded. `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run 
 outdir, or one part file. `--live` reads an entry still recording up to its last index line;
 `--server` marks a server copy (a fetched `rec.gcr.zst` is one anyway); `--live` wins over both.
 `--local ENTRY_DIR` is the local entry a server copy is compared with. `--known FILE` adds the
-`secrets` check (below). `--harness-files` is accepted and ignored.
+`secrets` check (below). `--harness-files MANIFEST` (the pad's list of the harness's files on disk,
+`[{"path": "<source>:<path>", "size": n}]`) adds a file part to `subagents_present`, below.
 
 Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
 the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant, a silent loss,
@@ -369,11 +370,12 @@ the exit alone. For a run folder, the worst entry decides. Readers ignore keys t
 | `bytes` | `raw` (decompressed), `compressed` (bytes of the files read) and `framing` (raw minus DATA payload) |
 | `links` | LINK records read |
 | `checks` | Per check: `id`; `inv` (the invariant number, or null); `result` (`pass`, `skip`, `warn`, `named` or `fail`); `why` (one plain line, empty on a pass); `first` (`o`, `sid` and `wall` of the first finding at the worst level reached, or null; for the legs checks `o` and `sid` are null, `wall` may be, and `first` adds `thread`); `facts` (an object) |
-| `counts` | Recounted from the records: `model_requests` (model requests written, `http_post` plus `ws_up_msgs`), `req_whole`, `req_holes`, `gaps` (a count per reason name seen), `lost_bytes`, `lost_unknown`, `after_stop_bytes`, `mask_failclosed_bytes`, `off_ms`, `tunnels`, `native_files`, and `threads` (the length of the `threads` list) |
+| `counts` | Recounted from the records: `model_requests` (model requests written, `http_post` plus `ws_up_msgs`), `req_whole`, `req_holes`, `gaps` (a count per reason name seen), `lost_bytes`, `lost_unknown`, `after_stop_bytes`, `mask_failclosed_bytes`, `off_ms`, `tunnels`, `native_files`, `hosts` and `tunnel_hosts` (maps), and `threads` (the length of the `threads` list) |
 | `harness_log` | What the harness's own log gave: `none` (not read, or nothing found), `totals` (a total per session) or `per_call` (one record per call) |
 | `provider_errors` | `{wire, native}`: for each leg, a count per error code the provider gave (else `http_<status>`, else `error`), one per failed call |
 | `threads` | One item per thread the legs checks compared, else an empty list: `thread` (null for the whole entry), `parent`, `harness` and `wire_ok` (calls), `wire_err`, `result`, and `history`, that thread's verdict from `history_complete` (`pass`, `warn`, `named`, `fail` or `skip`; null when the check named no such thread) |
 | `history` | The facts object of `history_complete`, below (null when the check is not in the list) |
+| `timeline` | Rows for each 10-minute bucket from the entry's first PART that holds anything: `bucket`, `start`, `harness_calls`, `wire_calls`, `wire_errors`, `native_bytes`, `gaps`, `off_ms` |
 
 **Check ids.** `inv1` to `inv9` and `inv14` check the invariant of that number; `streams_closed`,
 `seen_matches_written`, `gap_has_end` and `recorder_alive` check invariants 10 to 13. With `inv`
@@ -417,7 +419,10 @@ its meta):
   calls above the harness count are no finding; a log that gives only a total per session is
   compared by that total).
 - `subagents_present`: a subagent the harness's parentage names that has no wire calls and no
-  native stream.
+  native stream. With `--harness-files`, every listed file must also have a `snapshot` stream or a
+  `native` stream whose last END `seen` equals its size; a file with neither is `named` by a GAP on
+  its stream or a recorder-down GAP, else `fail` (facts `files`, `files_without_stream`,
+  `files_named_by_recorder_down`). This part never lowers the check's result.
 
 A comparison allows the larger of 3 calls and 2% before it counts, with the wire given 2 minutes
 to catch up. A thread or entry with harness calls and no wire call, or a harness that kept calling
@@ -489,7 +494,8 @@ lists the model requests of an entry, with the model, thread and tokens of each.
 entry, a run folder or one part file. It reads the record (the wire: requests, replies, `usage`) and
 the harness's own session files, kept in it as `native` and `snapshot` streams and read by the
 `start` event's `connector` id (below). A connector with no session reader gives wire calls only:
-`readable` is false and `reason` is `no_reader`.
+`readable` is false and `reason` is `no_reader`. Native readers exist for `codex-cli`,
+`claude-code-cli`, `hermes-cli`, `gemini-cli`, `qwen-cli` and `kimi-code-cli`.
 
 The summary is one JSON line on standard output (with `--json`, or without `--out`). `--out <dir>`
 creates the folder and writes `<name>.json`, the same summary, and `<name>.calls.jsonl`, one line
@@ -502,13 +508,15 @@ true and a line on standard error; a torn tail is no error.
 | Summary key | Holds |
 |---|---|
 | `v`, `reader`, `run`, `entry`, `connector`, `harness_version`, `sealed` | The summary version (1); the verifier's version; from the `start` event (`harness_version` is the first line of `<harness> --version`, or null); the last PART's entry id; whether a `seal` event was read |
-| `readable`, `reason` | True when the native leg was read; else `reason` is `no_reader` or `no_native` (no native call found while the wire had one), else null |
-| `read_error`, `native_until`, `db_set` | True when decoding stopped early; the other two are null |
+| `readable`, `reason` | True when the native leg was read; else `reason` is `no_reader`, `snapshot_unreadable` (no database copy opened, even after the WAL repair) or `no_native` (no native call found while the wire had calls, or native streams were read, or a model host was tunnelled), else null |
+| `read_error` | True when decoding stopped early |
+| `native_until`, `db_set`, `harness_exited` | For a database copy the native leg was read from (Hermes), else null: the copy's time (native calls after it are not known), its set as `<boot>.<n>`, and whether the harness had exited |
+| `not_on_wire` | Listed hosts the harness reached through a tunnel, so their calls are not on the wire: items `{host, reason, conns}` |
 | `coverage` | `wire_calls`, `native_calls`, then the calls counted once each by join: `matched` (a wire and a native record of the same call), `native_only` (no `ok` wire copy), `wire_only` (no harness entry), `unattributed` (an `ok` wire call of a harness whose wire requests name a thread, with none named); and `joined_by_time`, `repeats_skipped`, `copied_skipped` (native lines skipped as repeats or as a child file's copied parent records) |
 | `status` | Wire calls by `ok`, `rate_limited`, `error`, `cancelled`, `unknown` (all five always present), and `not_whole` (a request, reply or message that was cut or has a GAP) |
 | `models` | One item per model name (null when none was said): `model`, `requested` (names asked for, sorted), `calls`, `threads` (a count), `tokens` |
-| `threads` | One item per thread: `id`, `parent`, `depth`, `label`, `wire_calls`, `native_calls`, `native_only`, `native_total`, `matched`, `status` (as above), `tokens`, `models` (name to calls), `effort` (sorted), `first`, `last`, `readable`, `reason` |
-| `tokens` | `merged`, `native` and `wire` (each the five token keys), `calls_without_usage` and `calls_without_usage_by_status` |
+| `threads` | One item per thread: `id`, `parent`, `depth`, `label`, `wire_calls`, `native_calls`, `native_only`, `native_total` (the harness's own call total, where it keeps one), `native_until`, `native_tokens` (its own per-session token totals, Hermes), `resumed` (the session began before this entry), `matched`, `status` (as above), `tokens`, `models` (name to calls), `effort` (sorted), `first`, `last`, `readable`, `reason` |
+| `tokens` | `merged`, `native` and `wire` (each the five token keys), `native_partial` (a thread is `resumed`, so its `native_tokens` are left out of `native`), `calls_without_usage` and `calls_without_usage_by_status` |
 
 A call counts once: a native record with a wire twin is not counted again, and `usage_from` (`wire`
 or `native`) says which leg gave its numbers. Each `calls.jsonl` line has the keys `k` (`call`,
@@ -539,12 +547,26 @@ give `token_count` events (Responses names, `cached_input_tokens`, `reasoning_ou
 repeat with no larger running total is skipped), Claude Code sessions the Anthropic names (largest
 per member over the lines of one `message.id`).
 
-**Thread hints**, by `connector` id. Any other connector gives wire calls only (`wire_only`).
+**Thread hints**, by `connector` id (`crates/goalcup-verify/src/usage/hints.rs` is the one file that names connectors). The two fullest cases:
 
 | Connector id | Native files read (by `meta.path` `<row>:<file>`) | Thread on the wire | Thread, parent and label in the files | Join |
 |---|---|---|---|---|
 | `codex-cli` | row `sessions`, `rollout-*.jsonl` | Request header `thread-id`, else `client_metadata.thread_id` of a WebSocket `response.create` | `session_meta`: `id`, and for a child `source.subagent.thread_spawn` `parent_thread_id`, `depth`, `agent_path` (the label); `spawn_agent` items name children | Same thread, then the first unmatched `ok` wire call ending 120 s before to 5 s after the native record |
 | `claude-code-cli` | row `transcripts`, `*.jsonl`; row `meta`, `*.meta.json` snapshots | None | A file `<session>/subagents/agent-<id>*.jsonl` is subagent `<id>`, child of `<session>`; any other transcript is a thread named by its file stem; the label is `agentType` in the meta snapshot | The reply's `request-id` header equals the transcript's `requestId`, else by time (the same window, any thread; `joined_by_time` counts only these) |
+
+The other connectors:
+
+- `hermes-cli`: native `state:state.db*` database copies, `delegation` `task-*.log` files (read by
+  path only) and `delegation-manifest` `manifest.json` snapshots.
+- `gemini-cli` and `qwen-cli`: native `chats:**/*.jsonl`. `kimi-code-cli`: native
+  `wire:**/agents/<name>/wire.jsonl`, one file per agent.
+  These four join native calls to wire calls by time, a wire call with equal usage first.
+- `amp-cli`: threads from its thread socket (JSON-RPC frames on the WebSocket); no native leg.
+- `opencode-cli`, `opencode2-cli`, `kilo-cli`: thread and parent from request headers; no native
+  reader. `goose-cli`, `crush-cli`: thread from a request header, parent links (ids only) from
+  their session database copies, `sessions.db*` and `crush.db*`; no other native reader.
+
+Any other connector gives wire calls only (`wire_only`).
 
 Neither file holds body text or a session file path: only model names, thread ids and agent labels
 (printable ASCII, at most 128 bytes, never all `*`), host names, the run, entry and connector ids,

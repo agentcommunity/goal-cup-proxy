@@ -251,7 +251,7 @@ disclosure and no-side-channel rules.
   harness in chat mode in that folder. It makes no commit or push there; it only reads git, to seal.
 - **GitHub calls.** `goalcup setup` makes none. `goalcup start` makes a few public, unauthenticated
   calls to `api.github.com` for the repository check (public, and no commits). If GitHub cannot
-  be asked, it says so and goes on, and the server checks when it opens the run. The Worker calls
+  be asked, it goes on, and the server checks when it opens the run. The Worker calls
   GitHub when it opens the run, and again at judging to read the last push. Nothing of your git
   login is passed to the agent: not your SSH agent, your `gh` configuration or your credential
   helper. Your agent runs as you, so it can still read what any program of yours can read (next
@@ -267,14 +267,13 @@ disclosure and no-side-channel rules.
 - Each harness writes its sessions into Goal Cup Proxy's own home for that harness, never into your own
   store. Goal Cup Proxy records every session file new or written there since the run started.
 - **No connector in this build changes app-wide configuration.** Goal Cup Proxy reads nothing from and
-  writes nothing to your `~/.claude`, `~/.codex` or `~/.hermes`, and goalcup refuses a config home
-  inside any of them. A future connector that must change one would say so in its connector, and your
+  writes nothing to your `~/.claude`, `~/.codex` or `~/.hermes`. A future connector that must change one would say so in its connector, and your
   run would disclose it.
 - **Your agent is not limited the same way.** It runs with full access as your user, so it can read
   and write anything you can, those folders and your Keychain included. Goal Cup Proxy never copies
   your own settings into its harness homes: `goalcup setup` opens the harness there so you sign in
-  and add the settings, MCP servers and skills you want. Claude Code's run `HOME` on macOS holds a
-  link to your `~/Library/Keychains`, for your subscription login. Each harness keeps its own login
+  and add the settings, MCP servers and skills you want. Claude Code's macOS login is a
+  Keychain item named for its Goal Cup config folder, not your own. Each harness keeps its own login
   in its home, and its access token is forwarded unread and never written.
 - **Your agent can read your logins.** The harness must read and
   refresh its own login all run, and its tools run as your user. So Goal Cup Proxy cannot stop your
@@ -317,8 +316,8 @@ disclosure and no-side-channel rules.
 - The record uploads to the server during the run: a round every 5 minutes, or at once when 16 MiB
   of compressed record waits. When the server cannot be reached, the record waits on your disk and
   the upload retries; the run goes on. After the seal, goalcup keeps sending for up to 60 minutes.
-  The server takes uploads until 24 hours after the run ends. What is still unsent goes up by itself
-  the next time you run any `goalcup` command, and `goalcup upload` sends it by hand.
+  The server takes uploads until 24 hours after the run ends. `goalcup upload` sends what is
+  still unsent.
 - **What a trace holds.** Everything your agent sent to the model service and everything it saw back:
   the prompts and replies, the tool calls and their results, and the request and response headers of
   each exchange. Credentials are masked

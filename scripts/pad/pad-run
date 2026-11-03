@@ -127,7 +127,53 @@ def loads(text=None, path=None):
     return got if isinstance(got, dict) else {}
 
 
+LINUX = sys.platform.startswith("linux")  # else (macOS) ps and lsof stand in for /proc; Linux keeps its /proc reads
+
+
+def ps_rows():
+    """{pid: (ppid, state, rss_kb, cpu_seconds, comm)} of every process, from ps (not Linux)."""
+    out = {}
+    for ln in sh(["ps", "-A", "-o", "pid=,ppid=,stat=,rss=,time=,comm="]).stdout.splitlines():
+        try:
+            pid, ppid, state, rss, cpu, comm = ln.split(None, 5)
+            secs = sum(float(x) * m for x, m in zip(reversed(cpu.replace("-", ":").split(":")), (1, 60, 3600, 86400)))
+            out[int(pid)] = (int(ppid), state, int(rss), secs, comm)
+        except ValueError:
+            pass
+    return out
+
+
+def ps_command(pid, env=False):  # `ps -o command=` of one pid (-E adds its environment); OSError when it is gone
+    got = sh(["ps", "-ww"] + ["-E"] * env + ["-o", "command=", "-p", str(pid)]).stdout.strip()
+    if not got:
+        raise OSError("no process %d" % pid)
+    return got
+
+
+def cmdline(pid):  # bytes, the arguments of a pid; OSError when it is gone
+    return open("/proc/%d/cmdline" % pid, "rb").read() if LINUX else ps_command(pid).encode()
+
+
+def environ(pid):
+    """The NAME=value bytes (\0 apart) of a pid's environment. macOS: `ps -E` prints them after the command line, so a value
+    ends where the next NAME= starts; exec_env keeps only its fixed names. A value holding ` word=` is dropped: it may have
+    swallowed the next variable, whose name this cannot tell. OSError when it is gone or not readable."""
+    if LINUX:
+        return open("/proc/%d/environ" % pid, "rb").read()
+    text = ps_command(pid, env=True)
+    at = list(re.finditer(r"(?:^|\s)([A-Za-z_]\w*)=", text))
+    if not at:  # ps shows no environment of a process it may not read: unknown, never an empty one
+        raise OSError("no environment of %d" % pid)
+    parts = (text[m.start(1):(at[i + 1].start() if i + 1 < len(at) else len(text))] for i, m in enumerate(at))
+    return b"\0".join(p.encode() for p in parts if not re.search(r"\s\S+=", p))
+
+
 def alive(pid):  # a live, not zombie, process
+    if not LINUX:
+        try:
+            return isinstance(pid, int) and ps_rows().get(pid, ("", "Z"))[1][:1] != "Z"
+        except (OSError, subprocess.SubprocessError):  # ps missing or slow: unknown
+            return None
     try:
         return isinstance(pid, int) and open("/proc/%d/stat" % pid).read().rsplit(")", 1)[1].split()[0] != "Z"
     except (OSError, IndexError):
@@ -136,7 +182,7 @@ def alive(pid):  # a live, not zombie, process
 
 def kill9(pid):  # SIGKILL, only of a live process whose command line names goalcup: never another process
     try:
-        ok = type(pid) is int and pid > 1 and b"goalcup" in open("/proc/%d/cmdline" % pid, "rb").read()
+        ok = type(pid) is int and pid > 1 and b"goalcup" in cmdline(pid)
     except OSError:
         return False
     return ok and os.kill(pid, signal.SIGKILL) is None
@@ -154,8 +200,12 @@ def proc(role, pid):
     def get(f):
         try:
             return f()
-        except (OSError, LookupError, ValueError):
+        except (OSError, LookupError, ValueError, subprocess.SubprocessError):
             return None
+    if not LINUX:  # no thread count; ticks are 1/100 s as on Linux; fds are lsof's f lines (cwd and txt too)
+        row, out = get(lambda: ps_rows()[pid]), get(lambda: sh(["lsof", "-b", "-w", "-p", str(pid), "-Ff"]).stdout)
+        return {"role": role, "pid": pid, "rss_kb": row and row[2], "threads": None, "cpu_ticks": row and int(row[3] * 100),
+                "fds": len(re.findall(r"^f", out, re.M)) if out else None}
     st = get(lambda: dict(ln.split(":", 1) for ln in open("/proc/%d/status" % pid))) or {}
     stat = get(lambda: open("/proc/%d/stat" % pid).read().rsplit(")", 1)[1].split()) or []
     return {"role": role, "pid": pid, "rss_kb": get(lambda: int(st["VmRSS"].split()[0])), "threads": get(lambda: int(st["Threads"])),
@@ -628,8 +678,7 @@ class Run:
         self.at(self.m)
         if not alive(pid := pc.dig(self.status(), "s4_harness_pid")):
             raise Step("skip", "no harness process")
-        with open("/proc/%d/environ" % pid, "rb") as f:  # filtered by name before anything holds it
-            env = exec_env(f.read(), list(self.s.get("ca_env") or ()) + list(self.s.get("home_vars") or {}))
+        env = exec_env(environ(pid), list(self.s.get("ca_env") or ()) + list(self.s.get("home_vars") or {}))  # filtered by name
         return self.script("exec", script, env, minute=self.m, began=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()))
 
     def script(self, kind, name, env, **kw):
@@ -751,11 +800,12 @@ class Run:
         return "ok", "goalcup %s in pad:cont%s" % (cmd, "" if new else ", no new entry in 90 s")
 
     def tree(self, roots):
-        """The pids of `roots` and every descendant, from /proc; never this process or its parents, tmux or pad-run."""
+        """The pids of `roots` and every descendant, from /proc (ps off Linux); never this process or its parents, tmux or pad-run."""
         kids, parent, up = {}, {}, set()
-        for d in (int(x) for x in os.listdir("/proc") if x.isdigit()):
+        rows = {} if LINUX else ps_rows()
+        for d in (int(x) for x in os.listdir("/proc") if x.isdigit()) if LINUX else rows:
             try:
-                parent[d] = int(open("/proc/%d/stat" % d).read().rsplit(")", 1)[1].split()[1])
+                parent[d] = int(open("/proc/%d/stat" % d).read().rsplit(")", 1)[1].split()[1]) if LINUX else rows[d][0]
                 kids.setdefault(parent[d], []).append(d)
             except (OSError, IndexError, ValueError):
                 pass
@@ -771,8 +821,9 @@ class Run:
 
         def mine(p):  # tmux, pad-run, or the shell running this step
             try:
-                return p in up or b"pad-run" in open("/proc/%d/cmdline" % p, "rb").read() or open("/proc/%d/comm" % p).read().startswith("tmux")
-            except OSError:
+                comm = open("/proc/%d/comm" % p).read() if LINUX else os.path.basename(rows[p][4])
+                return p in up or b"pad-run" in cmdline(p) or comm.startswith("tmux")
+            except (OSError, KeyError):
                 return True  # gone
         return sorted(p for p in got if not mine(p))
 

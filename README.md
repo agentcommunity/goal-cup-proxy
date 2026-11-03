@@ -25,8 +25,8 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
    goalcup --version
    ```
 
-   It checks the download against the release's `SHA256SUMS` and installs into `~/.local/bin`
-   and `~/.local/share/goalcup`, with no sudo. Run it again to upgrade, only with no run open.
+   It checks the download against the release's `SHA256SUMS` and installs
+   `goalcup` and `goalcup-verify` into `~/.local/bin`, with no sudo. Run it again to upgrade, only with no run open.
    For one particular release, add `-s -- --version <x.y.z>` after `sh`.
 2. **Set up**: `goalcup setup`. It asks which harness you use, opens it once in its own isolated
    home so you can sign in and set it never to stop for approval, and checks this machine. Run it
@@ -139,7 +139,7 @@ flow are [ARCHITECTURE](docs/ARCHITECTURE.md).
 
 | Platform | Status |
 |---|---|
-| macOS | The owner's Mac run is pending. Until it passes, macOS is not confirmed. |
+| macOS arm64 | Tested on the owner's Mac (macOS 26.6). |
 | Linux x86_64 | Tested in sandboxes. |
 | Linux arm64 | Built, not yet tested. |
 | Windows | Use WSL2 (below). |
@@ -173,7 +173,7 @@ export PATH="$PWD/target/release:$PATH"
 ### The gate
 
 One script, two tiers. Its last line is `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`. CI runs
-`sh scripts/gate.sh fast` on every pull request and every push to `main` and `v1.0/integration`.
+`sh scripts/gate.sh fast` on every pull request to `main` and every push to `main` and `v1.0/integration`.
 
 ```sh
 cargo install cargo-nextest --locked   # once per machine
@@ -183,7 +183,7 @@ sh scripts/gate.sh full                # phase exits, before a release
 ```
 
 - **fast:** `cargo fmt --check`, `cargo clippy -D warnings`, every Rust test under cargo-nextest, the
-  doctests, the Worker tests and the script tests.
+  doctests, the Worker tests, the script tests and the pad tests.
 - **full:** fast, plus every ignored test (the end-to-end run), the release build, and a check that
   no test hook text is in the shipped `goalcup`.
 - **Run it as a normal user, not root.** Some permission tests always fail as root, so the gate

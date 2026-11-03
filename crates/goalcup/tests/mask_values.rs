@@ -10,7 +10,7 @@ mod common;
 use base64::Engine;
 use base64::engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD};
 use common::{ALNUM, HEX, Rng, starred, stream_in};
-use goalcup::mask::{Masker, SecretValue, ValueSource, launch_values, process_env};
+use goalcup::mask::{Masker, SecretValue, ValueSource, launch_values};
 use goalcup_format::StreamKind;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -843,7 +843,7 @@ fn recover_reads_the_harness_values_from_its_own_environment() -> Res {
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("SERVICE_TOKEN", &v)
         .spawn()?;
-    let env = process_env(child.id());
+    let env = goalcup::mask::process_env(child.id());
     child.kill()?;
     child.wait()?;
     let env = env.ok_or("no environment")?;
@@ -851,7 +851,7 @@ fn recover_reads_the_harness_values_from_its_own_environment() -> Res {
     let m = Masker::new(&[], launch_values(dir.path(), &env))?;
     assert_eq!(m.value_counts().env, 1);
     assert!(masks(&m, &v));
-    assert!(process_env(u32::MAX).is_none());
+    assert!(goalcup::mask::process_env(u32::MAX).is_none());
     Ok(())
 }
 

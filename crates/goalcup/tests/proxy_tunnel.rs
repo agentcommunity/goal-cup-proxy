@@ -767,7 +767,16 @@ impl Parser for Copies {
         if let Some(peers) = self.1.get() {
             let mut b = vec![0; bytes.len()];
             let peer = &peers[usize::from(dir == Dir::Up)];
-            if peer.peek(&mut b).is_ok_and(|n| b[..n] == *bytes) {
+            // macOS loopback delivers a beat after `write` returns: give it up to 100 ms.
+            let mut arrived = false;
+            for _ in 0..100 {
+                arrived = peer.peek(&mut b).is_ok_and(|n| b[..n] == *bytes);
+                if arrived {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            if arrived {
                 self.2.fetch_add(1, Ordering::SeqCst);
             }
         }

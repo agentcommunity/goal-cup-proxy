@@ -81,6 +81,7 @@ const WIRE_IDS: &[(&str, &[&str], &[&str])] = &[
 
 /// For a connector this build reads threads for: (its wire requests carry their thread, as
 /// [`WIRE_IDS`] says; native calls join the wire by the reply's request id, as Claude Code's do).
+/// Amp's threads come from its thread socket ([`thread_rpc`]), with no native leg to join.
 /// Hermes, Gemini, Qwen Code and Kimi Code have neither: their calls join the entry's wire calls
 /// by time, a wire call whose usage equals the native call's first (Gemini's chat `tokens` equal
 /// the reply's `usageMetadata`, and Qwen's chat counts equal the wire's). Kimi's
@@ -89,9 +90,17 @@ const WIRE_IDS: &[(&str, &[&str], &[&str])] = &[
 pub(super) fn join_of(connector: Option<&str>) -> Option<(bool, bool)> {
     match connector? {
         "claude-code-cli" => Some((false, true)),
-        "hermes-cli" | "gemini-cli" | "qwen-cli" | "kimi-code-cli" => Some((false, false)),
+        "hermes-cli" | "gemini-cli" | "qwen-cli" | "kimi-code-cli" | "amp-cli" => {
+            Some((false, false))
+        }
         c => WIRE_IDS.iter().any(|w| w.0 == c).then_some((true, false)),
     }
+}
+
+/// True when the connector's WebSocket is a thread socket of JSON-RPC frames whose server
+/// messages report each model turn ([`super::rpc`]): Amp's `/actors/gateway/threadActor/`.
+pub(super) fn thread_rpc(connector: Option<&str>) -> bool {
+    connector == Some("amp-cli")
 }
 
 /// True when this build has a native reader for the connector (an arm in [`reader`]); a

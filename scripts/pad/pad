@@ -814,13 +814,16 @@ class Run:
             self.log("fetch-run " + entry)
             got = os.path.join(self.dir, "fetched", entry)
             index = os.path.join(self.dir, "fetched-index", entry + ".json")
-            why = self.fetch_index(entry, index, files, limit)
+            # Here (the owner's machine) fetch-run.sh runs its read-only query itself; no index box.
+            here = self.s["where"] == "here"
+            why = None if here else self.fetch_index(entry, index, files, limit)
             if why:
                 return "FAIL", why
+            keep = {"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"} | ({"DATABASE_URL"} if here else set())
             try:
-                r = call(["sh", fr, "--bucket", STAGING_BUCKET, "--index", index,
+                r = call(["sh", fr, "--bucket", STAGING_BUCKET, *([] if here else ["--index", index]),
                           entry, os.path.dirname(got)], timeout=limit,
-                         env=env_without(set(NEVER_IN_BOX) - {"CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"}))
+                         env=env_without(set(NEVER_IN_BOX) - keep))
             finally:  # a timeout kills sh before its EXIT trap: its work folder goes here
                 for left in glob.glob(os.path.join(os.path.dirname(got), ".fetch-run.*")):
                     shutil.rmtree(left, ignore_errors=True)

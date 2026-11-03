@@ -27,7 +27,7 @@ Source words: "docs" is [learn.chatgpt.com/docs/config-file/config-advanced](htt
 | Session store | `sessions/YYYY/MM/DD/rollout-<local time>-<thread id>.jsonl`, one per thread, child threads too (source; measured) | same | unknown |
 | State database | `$CODEX_HOME/state_*.sqlite` and other SQLite files for logs, goals and thread edges (measured) | same | unknown |
 | Logs / cache | inside `$CODEX_HOME`: `cache/`, `plugins/cache/`, `shell_snapshots/`, `thread-writer-locks/`, `tmp/arg0/`, `version.json` while the update check is on (measured) | same; the first start shallow-clones a plugin marketplace into `.tmp/plugins` with `git` (measured, no login) | unknown |
-| Env vars that move these | `CODEX_HOME` and `CODEX_SQLITE_HOME`; `HOME` moves user skills (`~/.agents/skills`) and the login shell's startup files (measured) | same | unknown |
+| Env vars that move these | `CODEX_HOME` and `CODEX_SQLITE_HOME`; `HOME` moves user skills (`~/.agents/skills`) and the login shell's startup files (measured). The connector leaves `HOME` alone, so Codex in its private home still reads the participant's `~/.agents/skills` (measured 3 Nov 2026) | same | unknown |
 
 The connector sets `CODEX_HOME` and `CODEX_SQLITE_HOME` to the isolated home. Rollouts older than 7 days are compressed to `.jsonl.zst` in the background (docs; not observed).
 
@@ -67,6 +67,7 @@ The connector sets `CODEX_HOME` and `CODEX_SQLITE_HOME` to the isolated home. Ro
 - A shared `CODEX_HOME` across runs carries older runs' sessions and the state databases, which the end-of-run copy takes whole.
 - Machine-wide managed configuration: path unknown. The connector seeds no `requirements.toml`.
 - A second Codex: another `CODEX_HOME`, an older Homebrew copy, or the Codex desktop app, which shares `CODEX_HOME` (docs).
+- The participant's `~/.agents/skills`: read by Codex in its private home, since the connector leaves `HOME` alone.
 - No sandbox comes from goalcup: Codex runs with its own defaults and the participant's settings.
 
 ## 9. Quirks and open questions

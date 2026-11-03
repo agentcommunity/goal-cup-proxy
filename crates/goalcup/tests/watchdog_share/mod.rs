@@ -228,6 +228,7 @@ pub fn plan(d: &Path) -> LaunchPlan {
         mask_rules: Vec::new(),
         secret_values: Vec::new(),
         notes: Vec::new(),
+        version_notes: Vec::new(),
         unread: Vec::new(),
         log: Vec::new(),
         refusal: None,

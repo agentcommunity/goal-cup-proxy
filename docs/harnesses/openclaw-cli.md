@@ -54,6 +54,7 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 
 ## 8. Things Goal Cup cannot isolate
 
+- A value the model restates can stay unmasked (stated loss for 1.0): OpenClaw's model restated a git-remote password in its own reasoning content and then resent that in every later request; the masker's `url_password` shape only matches inside `user:pw@`, and the bare copy is not an exact-value source, so it is not caught (`docs/plans/2026-10-30-v1.0/MAC-LEARNINGS.md` row 7a).
 - Subagents not recorded on the wire when they run in a Gateway started outside goalcup: that daemon keeps its own environment, so its model calls skip the run's proxy. In `chat` a spawn likely fails or reaches such a Gateway (source, unverified by run).
 - Logs under `/tmp/openclaw`, shared by every home.
 - The managed browser and raw sockets (section 6).

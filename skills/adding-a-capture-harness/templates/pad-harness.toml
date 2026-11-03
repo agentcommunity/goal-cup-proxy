@@ -15,8 +15,11 @@ login = ""                    # "login": a command that reads the key on stdin, 
 key_file = ""                 # "file": a path in the isolated home, e.g. "{home}/.env"; written 0600
 key_line = ""                 # "file": the line written there, e.g. "DEEPSEEK_API_KEY={key}"
 key_env = ""                  # "env": the variable the launch shell exports from the key file, e.g. "DEEPSEEK_API_KEY"
-model_host = ""               # host of the harness's model calls; only the dodger case uses it
+not_verified = ""             # a stated reason: the pad runs nothing for this harness; leave out otherwise (key_kind = "none" also runs nothing)
+tier_note = ""                # one plain line shown with the harness's row in the table; leave out if none
+model_host = ""               # host of the harness's model calls; required for the dodger case, used only there
 ready_text = ""               # text on screen when the harness takes input; empty: wait 30 s
+ready_wait = 30               # seconds to wait for ready_text
 pre_keys = ""                 # printf format typed once before the prompt, for a first-run dialog, e.g. '\r'; a list types one item per first-run screen, 3 s apart
 exit_keys = '/exit\r'         # printf format that ends the harness
 daemon = ""                   # command stale-gateway.sh starts as a left-over background service, e.g. "hermes gateway run"; omit if none
@@ -25,10 +28,12 @@ subagent_word = "subagent"    # the prompt's word for a subagent, as this harnes
 keep_going = true             # cycle mode types "keep going" for this harness
 
 [direct]                      # the case a participant runs: the vendor's own host
+model = ""                    # the main model the config pins, for the spend check; leave out if the harness picks its own
 files = { }                   # provider and model config copied into the isolated home: { "<path in home>" = "direct/<id>-config.<ext>" }
 env = { }                     # non-secret values exported in the launch shell, as a participant does
 
 [gateway]                     # leave this table out when the vendor documents no AI Gateway route: the case is then n/a
+model = ""                    # as in [direct]
 files = { }                   # same, from gateway/<id>-config.<ext>
 env = { }                     # non-secret values only
 key_route = "file"            # the same three routes for the gateway key (key name: gateway)

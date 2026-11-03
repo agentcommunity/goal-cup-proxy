@@ -775,7 +775,7 @@ fn file_uuid(path: &str) -> Option<String> {
 }
 
 /// An RFC 3339 UTC time (`Z`, optional fraction) as ns since the Unix epoch.
-fn ts(s: &str) -> Option<u64> {
+pub(super) fn ts(s: &str) -> Option<u64> {
     let num = |x: &str| {
         x.parse::<i64>()
             .ok()

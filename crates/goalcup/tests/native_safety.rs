@@ -13,7 +13,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use goalcup::connector::builtin::CONNECTORS;
-use goalcup::native::fsx::{Dir, Kind, file_stat};
+use goalcup::native::fsx::{Dir, Kind};
 use goalcup::native::pattern::{parse, path_id};
 use goalcup::native::walk::{Row, Walker};
 use goalcup::pipeline::Recorder;
@@ -123,7 +123,7 @@ fn no_descriptor_is_kept() {
         for name in d.names().unwrap() {
             let st = d.stat_at(&name).unwrap();
             let f = d.open_file(&name, st.fid()).unwrap();
-            file_stat(&f).unwrap();
+            goalcup::native::fsx::file_stat(&f).unwrap();
         }
         let _ = d.open_file(n("f.jsonl"), root.stat_at(n(".")).unwrap().fid());
         let _ = root.open_child(n("missing"));

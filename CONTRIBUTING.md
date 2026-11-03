@@ -49,12 +49,12 @@ the PR. CI runs the fast tier with no secret. If you cannot run the gate, say so
 
 - A change reaches `main` only through a pull request. No force pushes, no branch deletion.
 - One required status check: `check`, the `ci` workflow's one job, which runs the fast gate on every
-  pull request, docs-only ones too. On a first-time fork PR it may show pending until a maintainer
+  pull request to `main`, docs-only ones too. On a first-time fork PR it may show pending until a maintainer
   approves the workflow run (GitHub's default).
 - Checks are strict: update your branch by merging upstream `main` into it, and push.
 - One approving review. Paths in [`.github/CODEOWNERS`](.github/CODEOWNERS) (connectors, masking,
   the record format, the pad and its skill, packaging, the server, `.github/`, `SECURITY.md`,
-  `docs/DECISIONS.md`) need a code owner's approval. A new push dismisses earlier approvals. All
+  `docs/CONNECTOR-SCHEMA.md`, `docs/DECISIONS.md`) need a code owner's approval. A new push dismisses earlier approvals. All
   review conversations are resolved before merging.
 - While `@nembal` is the only maintainer, the repository admin role may merge its own PR without a
   second approval (a ruleset bypass), by policy only with `check` passing. That is not independent

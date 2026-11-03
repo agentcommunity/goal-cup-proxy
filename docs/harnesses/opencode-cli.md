@@ -32,7 +32,7 @@ Both connectors set the four XDG folders under the isolated home and read `openc
 ## 4. Session format and identity
 
 - One SQLite database for every session (tables `session`, `message`, `part`, `event`, `credential` and more). No JSON session files (measured, 1.x). Session ids look like `ses_<26 chars>`.
-- Subagents are child sessions in the same database with a parent id (1.x source, `task.ts`). They run in the same process, so they inherit the proxy and CA ([docs](https://opencode.ai/docs/agents/): General and Explore, through the Task tool or an `@` mention). Subagents through goalcup: unmeasured.
+- Subagents are child sessions in the same database with a parent id (1.x source, `task.ts`). They run in the same process, so they inherit the proxy and CA ([docs](https://opencode.ai/docs/agents/): General and Explore, through the Task tool or an `@` mention). `goalcup-verify` does not read the database copy; both connectors' requests carry `x-opencode-session-id`/`x-session-id` and `x-opencode-parent-session-id`/`x-parent-session-id` headers (`WIRE_IDS` in `usage/hints.rs`), so threads and subagent links come from the wire alone. Unmeasured on a real run.
 
 ## 5. Auth
 

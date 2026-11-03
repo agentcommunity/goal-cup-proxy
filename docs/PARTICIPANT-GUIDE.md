@@ -40,9 +40,9 @@ the installer refuses while a run is recording.
 If a firewall such as Little Snitch asks about `goalcup`, allow it. It asks once for each program,
 and again after each update.
 
-`goalcup` keeps its files in `~/Library/Application Support/goalcup` on a Mac, `~/.config/goalcup`
+`goalcup` keeps its files in `~/Library/Application Support/goalcup` on a Mac, `$XDG_CONFIG_HOME/goalcup` or `~/.config/goalcup`
 on Linux and WSL2, or the folder `GOALCUP_HOME` names: runs in `runs/`, each harness's home in
-`homes/`. Every path it prints is in quotes, because a Mac path holds a space.
+`homes/<id>`. Every path it prints is in quotes, because a Mac path holds a space.
 
 ## 3. Set up
 
@@ -132,9 +132,9 @@ different one ([RULES](RULES.md#one-prompt-then-only-keep-going)). A subagent ca
 than the main agent, and your account pays for both. Try them in a practice run, then read your
 provider's usage page.
 
-**Tools on PATH.** The harness gets the `PATH` of the terminal you run `goalcup start` in, and its
-own `HOME`, so your `~/.zshrc` and `~/.profile` are not read. Install what the agent needs (for
-example `rg`) first. In a practice run, ask the agent to run `goalcup time-left` to see it works.
+**Tools on PATH.** The harness gets the environment of the terminal you run `goalcup start` in,
+`PATH` included, minus proxy and certificate variables, plus the variables that move its own config
+and data into its Goal Cup home. Install what the agent needs (for example `rg`) first. In a practice run, ask the agent to run `goalcup time-left` to see it works.
 
 **First-run screens.** Before your prompt a harness may show its own screens (a sign-in, a
 trust-this-folder question, a wizard). Answering them is allowed; it is not a message to the agent.
@@ -243,8 +243,8 @@ says your first message must start with it. The block looks like this; yours dif
   Push to https://github.com/<user>/<name>
   The token is GH_TOKEN in .env.local in this folder. Never print it, and never write it into a file, a git setting or a remote address.
   After git init, run:
-    git config user.name "<user>"
-    git config user.email "<id>+<user>@users.noreply.github.com"
+    git config user.name "Goal Cup"
+    git config user.email "goalcup@agentcommunity.org"
     git config credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$(sed -n s/^GH_TOKEN=//p "/full/path/to/my-cup-run/.env.local")"; }; f'
     git remote add origin https://github.com/<user>/<name>.git
 ```
@@ -396,7 +396,7 @@ your computer cannot be sent; the run is judged on what arrived. In the first ho
 `goalcup` keeps sending by itself.
 
 Record files the server already holds are removed from your computer, so the folder is small. Set
-`GOALCUP_KEEP_PARTS` to keep them. `goalcup.log` stays; it is not part of the record and is never
+`GOALCUP_KEEP_PARTS=1` to keep them. `goalcup.log` stays; it is not part of the record and is never
 uploaded.
 
 Then:
@@ -456,7 +456,7 @@ Every folder problem is listed in one refusal, then "Nothing was created." Fix e
 | `".env.local" needs exactly one plain GH_TOKEN=<your token> line (no quotes, no export, no spaces, no Windows CRLF line ending).` | Fix the line. A real run needs it; a practice run needs no token. |
 | `It is inside the Git work tree "<path>". Start in a folder outside any Git repository.` | Use another folder. |
 | `It and goalcup's folder "<path>" hold each other or sit side by side.` | Use a folder elsewhere, or set `GOALCUP_HOME` to a folder away from it. |
-| `The prompt file "<path>" is inside the project folder. Move it out of the folder.` | Move the file out. |
+| `The prompt file "<path>" is inside the project folder. Move it out.` | Move the file out. |
 | `This is WSL1, which cannot run goalcup.` or `... is on a Windows drive (...)` | Convert to WSL2 (`wsl --set-version <distro> 2`), and use a folder in the Linux home. |
 | `--connector and --hosts are for practice and test runs. A competition run uses the connectors built into goalcup.` | Remove the flags. |
 | `goalcup cannot tell where to keep your runs: HOME is not set to a full path.` | Set `HOME`, or `GOALCUP_HOME`, to a full path outside your project. |
@@ -482,7 +482,8 @@ Every loss in the record is one gap with a reason. The screens use these words.
 | `recorder_down` | recording was off |
 | `unsupported_encoding`, `decode_failed` | a reply in a form goalcup cannot read |
 | `source_changed` | a session file was replaced or cut short |
-| `tls_refused`, `pinned` | the program refused the recorder |
+| `tls_refused` | the program refused the recorder |
+| `pinned` | the host list pins it |
 | `cut_at_seal` | still arriving when the part ended |
 | `h2_unsupported` | a connection goalcup could not follow |
 | `mask_failed` | goalcup could not check it for secrets, so it dropped it |

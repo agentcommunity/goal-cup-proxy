@@ -37,6 +37,7 @@ The connector sets `CLINE_DIR` to the isolated home and `CLINE_DATA_DIR` to `dat
 ## 5. Auth
 
 - Provider keys through `cline auth`, interactively or with `-p <provider> -k <key> -m <model>`; they are stored in `data/settings/providers.json` (docs; package). The connector lists that file as a secret file. A Cline account sign-in is also possible and uses `api.workos.com` and `app.cline.bot`.
+- Needs an interactive sign-in: the pad cannot preset a provider (no config file or env route; a hand-written `providers.json` was ignored and Enter picks "Sign in with Cline"), so the pad skips this row (`scripts/pad/harnesses/cline-cli.toml` `not_verified`). The participant signs in inside Cline once, in `goalcup setup`.
 - DeepSeek is a native provider id `deepseek` (package).
 - A variable that moves config and login together: yes, `CLINE_DIR` with `CLINE_DATA_DIR`.
 

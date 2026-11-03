@@ -34,8 +34,9 @@ The build uses each default below until the owner answers.
 
 ## Known issues
 
-- Only Linux x86_64 is built and tested in this build. macOS (arm64 and x86_64) and Linux arm64 are
+- Linux x86_64 and macOS arm64 (owner's Mac, 3 Nov) are tested. macOS x86_64 and Linux arm64 are
   first built and tested by the release workflow at the owner's release (PRD-14 G5, after the merge).
+  Windows (WSL2) is untested.
 - Unmasked memory (held bytes, the run CA key) can still reach disk through swap on Linux
   ([PRD-00](docs/plans/2026-10-30-v1.0/PRD-00-index.md#architecture)).
 - The `zstd` command line tool may stop short on a live entry; read one with `goalcup-verify dump`
@@ -51,6 +52,30 @@ The build uses each default below until the owner answers.
   [HARNESS-SETUP](docs/HARNESS-SETUP.md) to the [participant's guide](docs/PARTICIPANT-GUIDE.md#3-set-up),
   then move HARNESS-SETUP to `docs/archive/`. Until then it is a temporary duplicate and still
   describes the removed MCP command (D84).
+
+## Release 1.0 (from the Mac test, 3 Nov)
+
+Coverage: [TEST-COVERAGE](docs/plans/2026-10-30-v1.0/TEST-COVERAGE.md). Findings:
+[MAC-LEARNINGS](docs/plans/2026-10-30-v1.0/MAC-LEARNINGS.md).
+
+Before release:
+- 🔴 Freeze; release rows on the frozen head (Claude Code, Codex, Hermes at least).
+- 🔴 Release path end to end: GitHub release, `install.sh` from it, production Worker smoke run.
+- 🟡 A one-hour PASS. Best so far INC on both systems; misses were harness subagent counts, not loss.
+  Option: set the subagent target to what harnesses really start (about 10).
+- 🟡 Amp pin: bump when Amp's server refuses it.
+
+After 1.0:
+- Watchdog-only kill: nothing warns that the recorder has no restarter (MAC-LEARNINGS 7h).
+- Restated passwords stay raw (OpenClaw, stated loss): server-side scrub, or `.git/config` remote
+  passwords as exact values at launch (MAC-LEARNINGS 7a).
+- Copilot and Droid subagent readers.
+- Hermes 0.22.6 (hermes-agent#148241): drop the version note once a fixed Hermes ships.
+- `hermes gateway stop` helper times out on every run (MAC-LEARNINGS 3).
+- Codex in its private home reads `~/.agents/skills` (MAC-LEARNINGS 7d).
+- Cline and Factory Droid rows; gateway and dodger cases on macOS; Windows (WSL2).
+- A competition run from scratch with a public repo; a newcomer reads the docs.
+- RULES lists banned Cursor flags; there is no Cursor connector.
 
 ## After the merge to main
 

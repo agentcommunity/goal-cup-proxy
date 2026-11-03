@@ -7,7 +7,7 @@ Status: <shipped connector | core ready, connector pending | facts only>
 <!-- Delete this comment when you fill the sheet. Worked example: docs/harnesses/codex-cli.md.
 Status, pick one:
 - shipped connector: connectors/<id>.toml is on main, or is added by the same PR as this sheet.
-- core ready, connector pending: no row of the core-change table in docs/HARNESS-ONBOARDING.md needs a core change, but no connector yet.
+- core ready, connector pending: no closed rule of docs/CONNECTOR-SCHEMA.md#load-checks needs a core change, but no connector yet.
 - facts only: a core change is needed first, or a key fact is unknown; the sheet is the whole
   contribution for now.
 Section 8 lives only in this sheet: the PR description links the sheet, it does not repeat it.
@@ -44,18 +44,17 @@ moves its config and login (like `CODEX_HOME`)? Yes: the connector shares that c
 the connector's `home` map points `HOME` into the isolated home so the sign-in lasts.
 
 ## 6. Network
-First, the CA variable the harness honours (the connector's `ca_env`), with its source or measurement, and
-whether it adds to the harness's roots (`NODE_EXTRA_CA_CERTS`) or replaces them (a harness's own `*_CA_BUNDLE`).
-Only if it has no variable of its own: `SSL_CERT_FILE` or `REQUESTS_CA_BUNDLE`, and a direct connection then goes
-unrecorded. Then where
+First, the CA variable the harness honours, with its source or measurement, and whether it adds to the
+harness's roots or replaces them. goalcup always sets `NODE_EXTRA_CA_CERTS` (the run CA alone) and
+`SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` (OS roots plus the run CA); a harness's own variable goes in the
+connector's `ca_env` (pointed at the run CA alone). Then where
 the harness saves the model service the participant picks: the config file (relative to its
 config home) and the key that holds the service's URL, with a source or a measurement, and
 whether a switch inside a session (a `/model` command) rewrites it. That is
 the connector's `host_hints` row, and no provider list is needed. Only for a harness that can
-reach one fixed service: its host, and whether `connectors/model-hosts.toml` lists it. Say yes or no: is the harness Node (npm package,
-`node` script or Node/Bun binary)? Say yes or no: does it honour `HTTPS_PROXY` on its own, and if
-not, which variable turns that on (Node: `NODE_USE_ENV_PROXY=1`)? Without it the run records no
-model traffic. Telemetry and update hosts; SSE / WebSocket? Any base-URL override variables (Goal
+reach one fixed service: its host, and whether `connectors/model-hosts.toml` lists it. Say yes or no: does it honour `HTTPS_PROXY` on its own? goalcup always sets
+`NODE_USE_ENV_PROXY=1` for Node; any other switch a harness needs goes in the connector's `env`. Without a
+working proxy path the run records no model traffic. Telemetry and update hosts; SSE / WebSocket? Any base-URL override variables (Goal
 Cup never sets them).
 
 ## 7. Process model

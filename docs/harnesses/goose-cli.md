@@ -30,7 +30,7 @@ The environment-variables page gives `~/Library/Application Support/Block/goose/
 
 ## 4. Session format and identity
 
-- One SQLite database for all sessions, with `-wal` and `-shm` files. Subagents are rows of the same tables with `session_type = 'sub_agent'` (source). The connector copies `sessions.db*` as a set when the run ends (`final`). Column names and the session id form: unknown.
+- One SQLite database for all sessions, with `-wal` and `-shm` files. Subagents are rows of the same tables with `session_type = 'sub_agent'` (source). The connector copies `sessions.db*` as a set when the run ends (`final`). Column names and the session id form: unknown. `goalcup-verify` reads only `sessions.id` and `parent_session_id` from the copy (`thread_db` in `usage/hints.rs`) and joins them to the wire's `agent-session-id` header, which is the id itself; calls come from the wire alone.
 
 ## 5. Auth
 
