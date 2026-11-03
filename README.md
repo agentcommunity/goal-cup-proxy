@@ -139,7 +139,7 @@ flow are [ARCHITECTURE](docs/ARCHITECTURE.md).
 
 | Platform | Status |
 |---|---|
-| macOS | The owner's Mac run is pending. Until it passes, macOS is not confirmed. |
+| macOS arm64 | Tested on the owner's Mac (macOS 26.6). |
 | Linux x86_64 | Tested in sandboxes. |
 | Linux arm64 | Built, not yet tested. |
 | Windows | Use WSL2 (below). |

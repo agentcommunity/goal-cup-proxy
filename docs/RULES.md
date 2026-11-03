@@ -267,8 +267,7 @@ disclosure and no-side-channel rules.
 - Each harness writes its sessions into Goal Cup Proxy's own home for that harness, never into your own
   store. Goal Cup Proxy records every session file new or written there since the run started.
 - **No connector in this build changes app-wide configuration.** Goal Cup Proxy reads nothing from and
-  writes nothing to your `~/.claude`, `~/.codex` or `~/.hermes`, and goalcup refuses a config home
-  inside any of them. A future connector that must change one would say so in its connector, and your
+  writes nothing to your `~/.claude`, `~/.codex` or `~/.hermes`. A future connector that must change one would say so in its connector, and your
   run would disclose it.
 - **Your agent is not limited the same way.** It runs with full access as your user, so it can read
   and write anything you can, those folders and your Keychain included. Goal Cup Proxy never copies
