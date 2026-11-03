@@ -326,7 +326,7 @@ class Walk(unittest.TestCase):
         calls = self.walk(case="gateway")
         self.assertEqual(sorted(c[c.index("--env") + 1] for c in calls if c[0] == "put-env"),
                          ["AI_GATEWAY_API_KEY", "CLAUDE_API_KEY"])
-        self.assertFalse([c for c in self.walk(case="gateway", key="none") if c[0] == "put-env"])
+        self.assertFalse([c for c in self.walk(case="direct", key="none") if c[0] == "put-env"])
 
     def test_create_timeout_still_removes_the_box(self):
         calls = self.walk(hang=("create",))
