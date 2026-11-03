@@ -101,8 +101,8 @@ def sh(argv, timeout=120, stdin=subprocess.DEVNULL, **kw):
     return subprocess.run(argv, capture_output=True, text=True, timeout=timeout, stdin=stdin, **kw)
 
 
-def tool(name):  # BOX_BIN first (pad puts the build in ~/bin), then PATH
-    mine = [os.path.expanduser("%s/%s" % (d, name)) for d in BOX_BIN]
+def tool(name):  # here: the pad's build (PAD_BIN); in a box: BOX_BIN first (pad puts the build in ~/bin); then PATH
+    mine = [os.path.expanduser("%s/%s" % (d, name)) for d in ([os.environ["PAD_BIN"]] if os.environ.get("PAD_BIN") else []) + list(BOX_BIN)]
     return next((p for p in mine if os.access(p, os.X_OK)), None) or shutil.which(name)
 
 
