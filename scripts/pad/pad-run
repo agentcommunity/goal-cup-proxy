@@ -490,7 +490,7 @@ class Run:
             for k in ([keys] if isinstance(keys, str) else keys):  # one screen per item
                 sh(["tmux", "send-keys", "-t", t, "-l", k.encode().decode("unicode_escape")])
                 time.sleep(3)
-        first = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "first-message.txt"))
+        first = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", self.st.get("run") or "*", "first-message.txt"))  # a signed-in home holds other runs
         text = open(first[-1] if first else self.path("prompt.txt")).read().strip()
         # tmux(1) FORMATS: bracket_paste_flag. Without it a multi-line paste can submit early: join lines.
         bracketed = sh(["tmux", "list-panes", "-t", t, "-F", "#{bracket_paste_flag}"]).stdout.strip() == "1"
