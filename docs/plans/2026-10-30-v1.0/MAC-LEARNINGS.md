@@ -29,6 +29,10 @@ macOS 26.6.2, M4 Pro. Worktree `mac-test-v1.0` at `origin/v1.0/integration` (`6c
 | 7b | Login rows run by hand: the pad cannot sign in. `goalcup setup` signs in inside the private home; `goalcup start --test` needs an empty folder away from `GOALCUP_HOME`; staging approval by the test key. Staging's approval link is `agentcommunity.org/goalcup/approve` (correct). | process | Not kept in the repo. |
 | 7c | Amp's server refuses the pinned 0.0.1792209635 ("needs to be updated"). Ran 0.0.1793664053. | Amp | Pin to bump. |
 | 7d | Codex in its private home still reads the user's `~/.agents/skills` (outside `CODEX_HOME`). Read-only, but personal skills shape the run. | Codex / goalcup isolation | Noted. |
+| 7e | `install.sh` ended with "Next: goalcup login", a command 1.0 does not have. | `packaging/install.sh` | Fixed: "Next: goalcup setup". |
+| 7f | `docs/HARNESS-SETUP.md` still describes 0.x: `capture-homes/`, `GOALCUP_CONFIG_DIR`, `goalcup mcp`. 1.0 homes are `$GOALCUP_HOME/homes/<id>`. | docs | Open: rewrite before release. |
+| 7g | One-hour run: after a watchdog kill and `goalcup recover`, `goalcup seal` said "goalcup seal stopped Hermes" but Hermes ran on; a recorder came back for the `after_seal` tail (12 more requests). A recovered watchdog leaves the harness alone by design (`watchdog/recover.rs:1-4`, `mod.rs:470`), but `cli/seal.rs:84` counts any live watchdog as one that ends it. The post-seal relay is designed (`watchdog/mod.rs:549-562`). | `goalcup seal` | Fixed: seal checks the harness after the seal and says "still running" when it is. Test `watchdog_recover_seal_says_the_harness_was_left` (Linux-only file; proved on the Mac with the gate lifted, and failing without the fix). |
+| 7h | One-hour run: after a kill of the watchdog alone (`goalcup start`), Hermes and the recorder ran on with nothing to restart the recorder, and `goalcup recover` said "nothing to recover". `goalcup status` checks the watchdog only when the recorder is gone (`pipeline/status.rs:94-111`). | watchdog / `goalcup status` | Open, design choice: a status line for "recorder up, watchdog gone, harness up". |
 | 8 | goalcup's CA, leaf and bundle pass macOS SecTrust (truststore, `security verify-cert`) with all 51 host subtrees. | goalcup | Proven. |
 | 9 | A network drop during a run: upload waited and caught up by itself, nothing lost. | goalcup | Proven. |
 
@@ -58,5 +62,27 @@ Subscription-login runs (by hand, staging, verified on the server copy with `goa
 | Amp 0.0.1793664053 | Amp account | 201, ampcode.com | linked from Task calls by the new Amp reader; Amp does not send subagent tokens | 0 | pass | main-thread turns only | not re-run with the reader |
 
 Claude Code on macOS keeps its login in a Keychain entry named per `CLAUDE_CONFIG_DIR` (`Claude Code-credentials-<hash>`): the sign-in in goalcup's home left the user's own entry untouched. The older note in `docs/harnesses/claude-code-cli.md` section 5 is out of date. `goalcup seal` needs a terminal or `--yes`.
+
+## One-hour run from scratch (3 November, INCONCLUSIVE)
+
+[Plan](MAC-ONE-HOUR-PLAN.md). Release archive installed by `install.sh`, fresh `GOALCUP_HOME`, `goalcup setup --harness hermes-cli`
+(Hermes 0.22.6 with the `ssl_ca_cert` line, DeepSeek), `goalcup start --test`, approved by the owner on
+`agentcommunity.org/goalcup/approve`. Run `r2ca1b9e0c9a1601f`, entry `e282df6e2bda4bc3e`, files in `~/gc-test`.
+
+- Install, website approval, setup and the version note: as the guide says. The start event reads
+  `Hermes Agent v0.22.6`, and the version note is in the record and on the status screen from minute 1.
+- 570 requests in 60 minutes (582 with the post-seal tail), all `api.deepseek.com`; 569 whole, 1 cut (21 kB).
+- Recorder `kill -9` at minute 20: the watchdog restarted it in under 1 s; gap `killed`, 789 ms; Hermes went on.
+- Watchdog kill at minute 40: see 7h. Recorder then killed by hand, and `goalcup recover` brought recording
+  back on the same port; gap `watchdog_lost`, 65 s (the length of the test step, not a detection time).
+- Seal: see 7g. Upload: the server holds the whole record (767 MB); `server_chunks_whole` and
+  `server_counts_match` PASS.
+- Verifier: inv1–5 and 7–9 PASS, inv6 and `gaps_named` name 3 gaps, `history_complete` warns (2 answers not
+  found), 10 subagents present and linked by task logs (calls not tied to them). `secrets` fails on 13 shape
+  hits and 4 glued `openai_key` shapes, which look like the fake secrets in the Paynest code Hermes wrote; the DeepSeek key is in no file. By the owner's rule of 1 November
+  (shape hits are a stated loss) C3 is PASS with a note.
+- Usage: 571 wire calls, 569 on `deepseek-flash`, about 0.76M input, 60.5M cached, 0.75M output tokens,
+  under 1 USD; `readable:false` (`no_native`), `harness_version` null.
+- Not met: 15 subagents with 10 at once (10 ran, 8 at most at once).
 
 Queue spend: about 0.08 USD for 8 rows. Copilot's C2 matches Linux (no subagent reader); not a Mac issue.

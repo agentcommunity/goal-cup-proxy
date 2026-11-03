@@ -349,7 +349,7 @@ main() {
         ;;
     esac
     say ""
-    say "Next: goalcup login"
+    say "Next: goalcup setup"
 }
 
 main "$@"

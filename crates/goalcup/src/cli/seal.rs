@@ -1,6 +1,7 @@
 //! `goalcup seal [PART] [--yes]` (PRD-10 section 1): ask, then tell PRD-02 to end the part, wait
 //! for the seal and print the end screen. The harness is never signalled here and descendants are
-//! never chased: the watchdog ends them (seam S8). Only written counts are read, from `status.json`.
+//! never chased: the watchdog ends them (seam S8), except one `goalcup recover` started, which leaves
+//! the harness running. Only written counts are read, from `status.json`.
 //! A part whose recorder and watchdog are both gone is closed here by `pipeline::close_dead_entry`;
 //! a harness still running there is left running.
 
@@ -65,15 +66,15 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
             return fail(text::SEAL_NOT_CONFIRMED);
         }
     }
-    let harness_ran = st
-        .harness
-        .as_ref()
-        .is_some_and(|h| h.exit.is_none() && alive(h.pid, h.start_id));
+    let harness_alive = || {
+        st.harness
+            .as_ref()
+            .is_some_and(|h| h.exit.is_none() && alive(h.pid, h.start_id))
+    };
+    let harness_ran = harness_alive();
     let Some((pid, start_id, signal)) = target else {
         return seal_dead(&found, name, harness_ran);
     };
-    // Only the watchdog ends the harness; the recorder alone, on SIGTERM, does not.
-    let watchdog_ends_it = signal == libc::SIGUSR1;
     if let Ok(p) = libc::pid_t::try_from(pid) {
         // SAFETY: `alive` just saw this pid with this start id; it is above 0.
         unsafe { libc::kill(p, signal) };
@@ -99,10 +100,12 @@ pub fn run(part: Option<String>, yes: bool) -> ExitCode {
     }
     match super::finish::end_screen(&dir) {
         Ok(screen) => {
-            if harness_ran && watchdog_ends_it {
-                println!("{}", text::seal_stopped(name));
-            } else if harness_ran {
+            // A watchdog seals its own harness only once it has exited. A recovered watchdog, or the
+            // recorder alone on SIGTERM, seals with the harness still running.
+            if harness_ran && harness_alive() {
                 println!("{}", text::seal_harness_left(name));
+            } else if harness_ran {
+                println!("{}", text::seal_stopped(name));
             }
             print!("{screen}");
             ExitCode::SUCCESS
