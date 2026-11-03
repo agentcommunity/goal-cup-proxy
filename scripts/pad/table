@@ -140,7 +140,13 @@ def release_check(commit):
     except ValueError:
         items.append("pad-rows.jsonl unreadable")
 
-    def need(name, want, ok=lambda r: r.get("result") == "PASS" and not g(r.get("facts"), "masked_upstream"),
+    def passed(r):  # PASS, or every check PASS but C3 not exercised (Hermes sends no plant back: owner, ask 4, 3 Nov)
+        c3 = [w for w in r.get("why") or [] if str(w).startswith("C3 INCONCLUSIVE")]
+        return r.get("result") == "PASS" or (all(g(r.get("checks"), c) == "PASS" for c in CHECKS if c != "C3")
+                                             and g(r.get("checks"), "C3") == "INCONCLUSIVE" and c3
+                                             and all("not exercised" in w or "exercise not done" in w for w in c3))
+
+    def need(name, want, ok=lambda r: passed(r) and not g(r.get("facts"), "masked_upstream"),
              say=lambda r: "result %s%s" % (r.get("result"), ", C3 passed as masked upstream (owner has not confirmed)"
                                             if g(r.get("facts"), "masked_upstream") else "")):
         r = latest(rows, want)
