@@ -78,8 +78,8 @@ fn setup_tty(home: &TempHome, path: &str, args: &[&str], typed: &str) -> (Option
             &mut master,
             &mut slave,
             none,
-            std::ptr::null(),
-            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
         )
     };
     assert_eq!(rc, 0, "no pty here");

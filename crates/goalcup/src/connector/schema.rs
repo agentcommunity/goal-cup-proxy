@@ -18,6 +18,9 @@ pub struct Connector {
     pub program: String,
     /// A prefix `program --version` must contain.
     pub version: Option<String>,
+    /// Said to the participant, and recorded, when the read version starts with one of `versions`
+    /// (as `version` matches). Never refuses a run.
+    pub version_notes: Vec<VersionNote>,
     pub args: Vec<String>,
     pub resume: Vec<String>,
     /// Variables pointed into the isolated home. Template `{home}`.
@@ -52,6 +55,14 @@ pub struct Connector {
     /// The shared host list in force (the built-in list or a `--hosts` file).
     #[serde(skip)]
     pub hosts: HostList,
+}
+
+/// A plain-words note for some versions of the harness.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VersionNote {
+    pub versions: Vec<String>,
+    pub say: String,
 }
 
 /// Before launch, a non-empty value at any of `keys` in `file` refuses the start.

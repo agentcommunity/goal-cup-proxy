@@ -13,14 +13,16 @@
 //! A WebSocket message still open when its boot ends (a PART of a new boot, or the end of the
 //! records) is read as cut (PRD-01 section 7).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use goalcup_format::{EndReason, FLAG_FIN, Record, StreamKind};
 use serde_json::Value;
 
 use super::shapes::{self, Client, End, Reply, Server};
 use super::sse::Sse;
-use super::{CallRow, Ctx, HostKind, Kind, Leg, Outcome, Shape, Via, hints, host_kind};
+use super::{
+    CallRow, Ctx, HostKind, Kind, Leg, Outcome, Shape, Tokens, Via, hints, host_kind, rpc,
+};
 
 type Key = (u64, u64);
 
@@ -36,6 +38,10 @@ pub struct Wire {
     ws: HashMap<Key, Ws>,
     socks: HashMap<Key, Sock>,
     gaps: Vec<Gap>,
+    /// The rows of thread socket turns, by message id.
+    turns: HashMap<String, usize>,
+    /// The `Task` calls thread socket turns made, each to the thread that made it.
+    pub tasks: BTreeMap<String, String>,
 }
 
 #[derive(Default)]
@@ -111,6 +117,8 @@ struct Sock {
     conn: u64,
     pending: VecDeque<(usize, Option<String>)>,
     cur: Option<usize>,
+    /// The thread a thread socket last named.
+    thread: Option<String>,
 }
 
 struct Gap {
@@ -415,10 +423,60 @@ impl Wire {
         };
         w.msgs += 1;
         match (w.op, w.up) {
+            (1, false) if hints::thread_rpc(ctx.connector.as_deref()) => self.rpc_msg(ctx, m),
             (1, true) => self.client_msg(ctx, m),
             (1, false) => self.server_msg(ctx, m),
             _ => {}
         }
+    }
+
+    /// A thread socket's server message: one row per model turn, by message id, a later frame
+    /// with an end or usage replacing it. A subagent's turn is a thread of its own, its `Task`
+    /// call, under the socket's thread; a turn the server made before the entry began is replayed
+    /// history, counted in the entry that made it.
+    fn rpc_msg(&mut self, ctx: &Ctx, m: Msg) {
+        let Ok(v) = serde_json::from_slice::<Value>(&m.bytes) else {
+            return;
+        };
+        let s = self.socks.entry(m.sock).or_default();
+        s.thread = rpc::thread(&v).or(s.thread.take());
+        let Some(turn) = rpc::turn(&v) else {
+            return;
+        };
+        if turn.at.zip(ctx.first).is_some_and(|(at, first)| at < first) {
+            return;
+        }
+        let fresh = turn.task.is_none()
+            && (turn.reply.end.is_some() || turn.reply.tokens != Tokens::default());
+        let (thread, parent) = match turn.task {
+            Some(task) => (Some(task), s.thread.clone()),
+            None => (s.thread.clone(), None),
+        };
+        let conn = s.conn;
+        if let Some(p) = &thread {
+            for t in turn.tasks {
+                self.tasks.insert(t, p.clone());
+            }
+        }
+        let i = match self.turns.get(&turn.id) {
+            Some(&i) if fresh => i,
+            Some(_) => return,
+            None => {
+                let c = self
+                    .conns
+                    .get(&(ctx.boot, conn))
+                    .cloned()
+                    .unwrap_or_default();
+                let at = (m.range.0, Some(m.n));
+                let i = self.row(ctx, at, (conn, &c), Kind::Call, Via::Ws, m.t0);
+                self.turns.insert(turn.id, i);
+                i
+            }
+        };
+        let r = &mut self.rows[i];
+        (r.row.thread, r.row.parent, r.reply) = (thread, parent, turn.reply);
+        (r.req_ok, r.seen_terminal, r.down_bad) = (true, true, !m.whole);
+        (r.down, r.t1, r.row.wall_end) = (Some(m.range), Some(m.t1), ctx.wall(m.t1));
     }
 
     fn client_msg(&mut self, ctx: &Ctx, m: Msg) {

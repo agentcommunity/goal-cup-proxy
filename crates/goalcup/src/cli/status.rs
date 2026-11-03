@@ -183,6 +183,10 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
             Some("parse_stopped") => {
                 text::parse_stopped(host, note_str(n, "at").and_then(super::unix_of))
             }
+            Some("version_note") => match note_str(n, "say") {
+                Some(say) => say.to_owned(),
+                None => continue,
+            },
             Some("local_model") => text::local_model(host.unwrap_or("a local address")),
             Some("fd_limit") => text::fd_limit(n.get("limit").and_then(Value::as_u64)),
             Some(what) if !goalcup_format::NOTES.contains(&what) => text::unknown_note(what),

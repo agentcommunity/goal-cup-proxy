@@ -128,8 +128,11 @@ pub struct LaunchPlan {
     pub mask_rules: Vec<MaskRule>,
     /// Empty in the default build: no `secret_files` are read (owner question 3 has no yes).
     pub secret_values: Vec<(String, Vec<u8>)>,
-    /// `local_model` notes, written once per entry after `start`.
+    /// `note` events (`local_model`, `version_note`), written once per entry after `start`.
     pub notes: Vec<serde_json::Value>,
+    /// The `say` of each connector `version_notes` row that holds for the read version: shown at
+    /// start, and also in `notes`.
+    pub version_notes: Vec<String>,
     /// Hint and refusal files there but not read (linked, over 1 MiB, unreadable, unparsable):
     /// PRD-10 shows one start line for each (section 2) and logs it.
     pub unread: Vec<PathBuf>,
@@ -243,6 +246,22 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         }),
         _ => None,
     };
+    // A note holds for a version when a word of the line starts with it and no digit follows:
+    // "0.22.6" is not "0.22.60".
+    let exact = |want: &str, got: &str| {
+        let word = |w: &str| {
+            let rest = w.strip_prefix('v').unwrap_or(w).strip_prefix(want);
+            rest.is_some_and(|r| !r.starts_with(|c: char| c.is_ascii_digit()))
+        };
+        got.split_whitespace().any(word)
+    };
+    let said = |n: &&schema::VersionNote| {
+        let hit = |v: &String| harness_version.as_deref().is_some_and(|got| exact(v, got));
+        n.versions.iter().any(hit)
+    };
+    let version_notes: Vec<String> = (connector.version_notes.iter().filter(said))
+        .map(|n| n.say.clone())
+        .collect();
     // `never` first, so `decide` is the one never test for participant and config hosts.
     let mut hosts = connector.hosts.clone();
     hosts.add_never(&env.server_host);
@@ -252,7 +271,11 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         unread: Vec::new(),
         log: hosts.add_participant(&env.goalcup_home),
     };
-    let (config, notes) = reader.collect(connector, &hosts);
+    let (config, mut notes) = reader.collect(connector, &hosts);
+    let events = version_notes
+        .iter()
+        .map(|say| serde_json::json!({"ev": "note", "what": "version_note", "say": say}));
+    notes.extend(events);
     hosts.add_config(config);
     let refusal = lock_refusal
         .or(version_refusal)
@@ -310,6 +333,7 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         mask_rules: connector.mask.clone(),
         secret_values: Vec::new(),
         notes,
+        version_notes,
         unread,
         log,
         refusal,

@@ -20,6 +20,7 @@ is the participant's project folder.
 | `name` | string | | Shown to the participant |
 | `program` | string | | The executable, found on the participant's `PATH` |
 | `version` | string | none | A word of the first non-empty line of `program --version`, with a leading `v` stripped, must start with it, else the start refuses, naming the program. A version that cannot be read (no output, a failed exit, 5 s without an exit) refuses nothing |
+| `version_notes` | list of `{versions, say}` | `[]` | When the read version has a word starting with one of `versions` (as `version` matches, but no digit may follow it: `0.22.6` is not `0.22.60`), `say` is printed by `goalcup start`, `continue` and `setup` and written as a `version_note` event after `start`. It never refuses a run; an unread version prints nothing |
 | `args` | string list | `[]` | Arguments for `goalcup start`. Template `{workspace}` only |
 | `resume` | string list | `[]` | Appended to `args` for `goalcup continue`. Template `{workspace}` only |
 | `home` | map, variable to template | empty | Variables pointed into the isolated home; each value starts with `{home}`. The folders are created with mode 0700. Where it sets `HOME`, goalcup also writes `$HOME/.profile`, putting the handed `PATH` back after a login shell resets it: replaced only when goalcup wrote it, else kept with a log line |

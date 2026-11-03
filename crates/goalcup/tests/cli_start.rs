@@ -9,7 +9,7 @@ use common::home::TempHome;
 use common::worker::{FakeWorker, Inject, RUN_ID, Route};
 use goalcup::cli::start::{Args, Ctx, prepare};
 use goalcup::cli::{Server, isolated_home, text};
-use serde_json::json;
+use serde_json::{Value, json};
 
 const TOKEN: &str = "ghp_START0123456789ABCDEFGH";
 
@@ -186,6 +186,7 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
         .arg(&fix.connector)
         .current_dir(&fix.project)
         .env("GOALCUP_SERVER", server)
+        .env("GOALCUP_KEEP_PARTS", "1") // uploaded parts stay, for a test to read
         .env("GOALCUP_HOME", fix.gc())
         .env("HOME", fix.t.home())
         .env("XDG_CONFIG_HOME", fix.t.home())
@@ -282,10 +283,24 @@ fn logs(dir: &std::path::Path) -> String {
     all
 }
 
+/// A fix whose harness is an executable script with `body`.
+fn scripted(body: &str, extra: &str) -> Fix {
+    use std::os::unix::fs::PermissionsExt;
+    let fix = Fix::new("{home}/skills", extra);
+    let script = fix.t.home().join("tester-bin");
+    std::fs::write(&script, body).unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let toml = std::fs::read_to_string(&fix.connector).unwrap();
+    let program = format!("program = \"{}\"", script.display());
+    std::fs::write(&fix.connector, toml.replace("program = \"true\"", &program)).unwrap();
+    fix
+}
+
 /// An unreadable harness version is said on the start screen and the run still starts; a read
-/// version says nothing of the kind.
+/// version says nothing of the kind, and neither says a version note.
 #[test]
 fn an_unread_harness_version_is_said_and_the_run_starts() {
+    let note = "[[version_notes]]\nversions = [\"1.2.3\"]\nsay = \"Tester 1.2.3 loses calls.\"\n";
     let screen = |fix: &Fix| {
         let w = FakeWorker::start();
         let mut out = Vec::new();
@@ -293,20 +308,58 @@ fn an_unread_harness_version_is_said_and_the_run_starts() {
             .unwrap_or_else(|s| panic!("{}", s.text));
         String::from_utf8(out).unwrap()
     };
-    let dir = Fix::new("{home}/skills", "");
-    let fake = |name: &str, body: &str| {
-        use std::os::unix::fs::PermissionsExt;
-        let script = dir.t.home().join(name);
-        std::fs::write(&script, body).unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        Fix::with_program(script.to_str().unwrap(), "{home}/skills", "")
-    };
     let line = text::version_unread("Tester", true);
-    let unread = fake("tester-none", "#!/bin/sh\nexit 1\n");
-    assert!(screen(&unread).contains(&line));
+    let unread = scripted("#!/bin/sh\nexit 1\n", note);
+    let shown = screen(&unread);
+    assert!(shown.contains(&line) && !shown.contains("loses calls"));
     // On record in goalcup.log too, for when the harness clears the terminal.
     assert!(logs(unread.t.home()).contains("version_unread"));
-    let read = fake("tester-bin", "#!/bin/sh\necho tester 1.2.3\n");
+    let read = scripted("#!/bin/sh\necho tester 1.2.3\n", "");
     assert!(!screen(&read).contains(&line));
     assert!(!logs(read.t.home()).contains("version_unread"));
+}
+
+/// Runs a real start whose harness reports `version`, with a note for 1.2.3. Returns the start
+/// screen and every `version_note` event in the record.
+fn start_with_note(version: &str) -> (String, usize) {
+    let note = "[[version_notes]]\nversions = [\"1.2.3\"]\nsay = \"Tester 1.2.3 loses calls.\"\n";
+    let fix = scripted(&format!("#!/bin/sh\necho tester v{version}\n"), note);
+    let w = FakeWorker::start();
+    let out = spawn_start(&fix, &w.url());
+    let shown = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert_eq!(out.status.code(), Some(0), "{shown}");
+    let entries = std::fs::read_dir(fix.gc().join("runs").join(RUN_ID)).unwrap();
+    let recorded = entries
+        .flatten()
+        .filter(|e| e.path().join("rec").is_dir())
+        .flat_map(|e| common::recorder::records(&e.path()))
+        .filter_map(|r| match r {
+            goalcup_format::Record::Event { json, .. } => {
+                serde_json::from_slice::<Value>(&json).ok()
+            }
+            _ => None,
+        })
+        .filter(|ev| ev["ev"] == "note" && ev["what"] == "version_note")
+        .count();
+    (shown, recorded)
+}
+
+/// A version with a note is told to the participant and recorded as a note event, and the run
+/// still opens.
+#[test]
+fn a_version_note_is_said_and_recorded_and_the_run_still_opens() {
+    let (shown, recorded) = start_with_note("1.2.3");
+    assert!(shown.contains("Tester 1.2.3 loses calls."), "{shown}");
+    assert!(shown.contains(text::PART_RECORDED), "{shown}");
+    assert_eq!(recorded, 1);
+}
+
+/// Another version says and records nothing; "1.2.30" is not "1.2.3".
+#[test]
+fn another_version_gets_no_note() {
+    for version in ["1.2.4", "1.2.30"] {
+        let (shown, recorded) = start_with_note(version);
+        assert!(!shown.contains("loses calls"), "{shown}");
+        assert_eq!(recorded, 0);
+    }
 }

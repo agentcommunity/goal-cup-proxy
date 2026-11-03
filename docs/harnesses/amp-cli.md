@@ -18,6 +18,7 @@ Source words: "docs" is [ampcode.com/docs](https://ampcode.com/docs/cli) as read
 - `curl -fsSL https://ampcode.com/install.sh | bash`, or `npm install -g @ampcode/cli@<version>`; the binary is a Bun single-file executable ([docs](https://ampcode.com/docs/cli); package metadata).
 - `amp --version` prints the version first, then the release date. The connector sets no `version` word, so any build runs and the `start` event records the one that ran.
 - About 7 builds a day on npm (registry, 29 Oct 2026). Amp installs updates in the background unless told not to (section 9).
+- Old builds are refused: on 3 Nov 2026 ampcode.com refused `0.0.1792209635-g24a9fe`. The pad pins `0.0.1793664053-ga6248e`, the build of a live run that day.
 
 ## 3. Where it keeps things, per OS
 
@@ -53,6 +54,7 @@ The connector is the only one that sets `HOME`, plus the four XDG folders, all u
 ## 7. Process model
 
 - The local CLI is an executor: Amp's server sends tool leases, the CLI runs the tool and returns the result (live). Subagents (`Task`) arrive on the same WebSocket with a parent tool id (live, 22 Oct).
+- What the verifier reads (live, `0.0.1793664053`): each main-thread model turn is a server `message_added` with `threadId` and `usage` (`model`, input, output, cache read and cache write tokens). A subagent's turns are not sent; each one that asks for a tool is a `tool_lease` whose `parentToolCallId` is its `Task` call, with no usage. So subagents are linked to their parent, and only main-thread tokens are counted. The expected subagents are the `Task` tool calls in the main turns' `content`: a subagent that leased no tool shows as missing. Each assistant message came as one complete `message_added` (the stream before it is `delta` frames). `client_resume` can replay a thread's history (`replayMessageCount`, 0 on a new thread): a turn whose `createdAt` is before the entry's start is not counted again.
 - Orbs (`-ox`) and runners run on Amp's machines; no local trace exists. Amp's Claude Code mode starts a second harness. [RULES](../RULES.md) does not allow either.
 
 ## 8. Things Goal Cup cannot isolate

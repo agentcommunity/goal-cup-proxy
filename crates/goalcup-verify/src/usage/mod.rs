@@ -9,6 +9,7 @@
 mod hints;
 mod native;
 mod out;
+mod rpc;
 mod shapes;
 mod sqlite;
 mod sse;
@@ -435,7 +436,7 @@ impl Calls {
 
     /// The table: wire rows in (boot, sid, msg) order, then native rows in (path, time) order,
     /// joined by reply id or by time (PRD-09 section 6).
-    pub fn finish(self) -> CallTable {
+    pub fn finish(mut self) -> CallTable {
         let c = &self.ctx;
         let base = CallTable {
             run: c.run.clone(),
@@ -446,6 +447,7 @@ impl Calls {
             not_on_wire: self.wire.not_on_wire(),
             ..CallTable::default()
         };
+        let tasks = std::mem::take(&mut self.wire.tasks);
         let (mut rows, replies) = self.wire.finish(&self.ctx);
         let ok = |r: &CallRow| r.kind == Kind::Call && r.outcome == Outcome::Ok;
         let c = self.ctx.connector.as_deref();
@@ -571,7 +573,7 @@ impl Calls {
         }
         let (db_set, native_until, harness_exited) =
             (leg.set).map_or((None, None, None), |u| (Some(u.id), u.until, u.exited));
-        let children = leg.children.or_else(|| wire_kids(&threads));
+        let children = leg.children.or_else(|| wire_kids(&threads, tasks));
         CallTable {
             rows,
             threads,
@@ -608,12 +610,21 @@ fn same_usage(w: &Tokens, n: &Tokens) -> bool {
     *n != Tokens::default() && key(w) == key(n)
 }
 
-/// Parent thread id to its child ids, from the threads that name a parent; `None` when none does.
-fn wire_kids(threads: &[Thread]) -> Option<BTreeMap<String, Vec<String>>> {
+/// Parent thread id to its child ids, from the threads that name a parent and the `Task` calls a
+/// thread socket's turns made (a child with no call of its own is still expected); `None` when
+/// none does.
+fn wire_kids(
+    threads: &[Thread],
+    tasks: BTreeMap<String, String>,
+) -> Option<BTreeMap<String, Vec<String>>> {
     let mut kids: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for t in threads {
-        if let Some(p) = &t.parent {
-            kids.entry(p.clone()).or_default().push(t.id.clone());
+    let named = threads
+        .iter()
+        .filter_map(|t| Some((t.id.clone(), t.parent.clone()?)));
+    for (id, p) in named.chain(tasks) {
+        let v = kids.entry(p).or_default();
+        if !v.contains(&id) {
+            v.push(id);
         }
     }
     (!kids.is_empty()).then_some(kids)

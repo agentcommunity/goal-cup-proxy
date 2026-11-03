@@ -8,3 +8,9 @@ telemetry:
     enabled: false
     send: false
     offer_version: 2
+# Hermes 0.22.6 drops SSL_CERT_FILE for provider clients (NousResearch/hermes-agent#148241): give this route the run CA
+# bundle explicitly. Remove this block when the pad leaves 0.22.6.
+providers:
+  goalcup-ca:
+    base_url: https://ai-gateway.vercel.sh/v1
+    ssl_ca_cert: ${env:SSL_CERT_FILE}

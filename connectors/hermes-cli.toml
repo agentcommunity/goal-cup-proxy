@@ -38,3 +38,7 @@ no_prompts = [
   { file = "{home}/config.yaml", key = "approvals.mode", value = "off" },
 ]
 update_off = [{ file = "{home}/config.yaml", key = "updates.check", value = "false" }]
+
+[[version_notes]]
+versions = ["0.22.6"]
+say = "Hermes 0.22.6 cannot reach its model through goalcup (NousResearch/hermes-agent#148241). Use Hermes 0.22.5 until a fixed release."

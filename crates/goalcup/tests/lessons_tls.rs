@@ -342,6 +342,7 @@ fn boot(entry: &Path, mode: &Path) -> std::process::ExitCode {
         mask_rules: vec![],
         secret_values: vec![],
         notes: vec![],
+        version_notes: vec![],
         unread: vec![],
         log: vec![],
         refusal: None,

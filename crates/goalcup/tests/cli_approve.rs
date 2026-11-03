@@ -67,6 +67,19 @@ fn start(
     String,
 ) {
     let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+    start_held(server, repo, api)
+}
+
+/// `start` for a caller that already holds `ONE` (a process-wide signal must not reach another test).
+fn start_held(
+    server: &Server,
+    repo: Option<&str>,
+    api: &str,
+) -> (
+    tempfile::TempDir,
+    Result<goalcup::cli::approve::Opened, Stop>,
+    String,
+) {
     let home = tempfile::tempdir().unwrap();
     let (c, mut out) = (connector(), Vec::new());
     let got = begin(home.path(), server, &ask(&c, repo, api), &mut out);
@@ -194,12 +207,13 @@ fn ctrl_c_while_waiting_creates_nothing() {
             ..Inject::default()
         },
     );
+    let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
     std::thread::spawn(|| {
         std::thread::sleep(Duration::from_millis(300));
         // SAFETY: signals this test process, whose handler `begin` has installed.
         unsafe { libc::kill(libc::getpid(), libc::SIGINT) };
     });
-    let (home, got, _) = start(&url(&w), None, "");
+    let (home, got, _) = start_held(&url(&w), None, "");
     assert_eq!(got.unwrap_err().code, 1);
     assert!(empty(home.path()));
 }

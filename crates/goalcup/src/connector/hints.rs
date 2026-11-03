@@ -57,7 +57,7 @@ impl Reader<'_> {
             let checked = hosts::check(host, Source::Config);
             if checked.as_ref().map_or_else(|s| s.local, |h| here(&h.name)) {
                 let (l, r) = [("", ""), ("[", "]")][host.contains(':') as usize];
-                let note = json!({ "what": "local_model", "host": format!("{l}{host}{r}:{port}") });
+                let note = json!({ "ev": "note", "what": "local_model", "host": format!("{l}{host}{r}:{port}") });
                 notes.extend((!notes.contains(&note)).then_some(note));
                 continue;
             }

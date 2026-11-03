@@ -1,0 +1,4 @@
+# Tests run the real commands; macOS has `open`, and no test may open a browser tab.
+# Only processes cargo itself runs get this: a release binary, a participant, never.
+[env]
+GOALCUP_NO_BROWSER = "1"

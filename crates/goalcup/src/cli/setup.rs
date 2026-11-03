@@ -129,6 +129,7 @@ fn write_home(
         v.split_whitespace().find(number).unwrap_or(v)
     });
     put(&text::harness_found(&c.name, version, &plan.program));
+    plan.version_notes.iter().for_each(|n| put(n));
     if ask {
         open(&plan, &c.name);
     }
