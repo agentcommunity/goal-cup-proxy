@@ -39,7 +39,7 @@ The connector sets `CLAUDE_CONFIG_DIR` to the isolated home and leaves `HOME` al
 ## 5. Auth
 
 - Sign-in with a claude.ai account (OAuth), `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, an `apiKeyHelper`, or a cloud provider's credentials ([docs](https://code.claude.com/docs/en/authentication)). Chat mode passes no key: the participant signs in once, in `goalcup setup`.
-- Does the harness have a variable that moves its config and login? Yes, `CLAUDE_CONFIG_DIR`; the connector sets it. On Linux the OAuth tokens are in `$CLAUDE_CONFIG_DIR/.credentials.json`, which the connector lists as a secret file. On macOS the login is in the user's Keychain, which no variable moves and which every config folder shares (measured: `loggedIn` was false under an empty `HOME`). Windows: unknown.
+- Does the harness have a variable that moves its config and login? Yes, `CLAUDE_CONFIG_DIR`; the connector sets it. On Linux the OAuth tokens are in `$CLAUDE_CONFIG_DIR/.credentials.json`, which the connector lists as a secret file. On macOS the login is a Keychain item named per config folder (`Claude Code-credentials-<hash>` of `CLAUDE_CONFIG_DIR`), so signing in under goalcup's home adds its own item and leaves the user's own login untouched (observed on macOS 26.6, Claude Code 2.1.312, 3 Nov 2026). Windows: unknown.
 - Login needs `USER` in the environment; `LOGNAME` alone was not enough (measured).
 
 ## 6. Network
@@ -58,7 +58,7 @@ The connector sets `CLAUDE_CONFIG_DIR` to the isolated home and leaves `HOME` al
 
 ## 8. Things Goal Cup cannot isolate
 
-- The macOS Keychain and the account's `~/.ssh`: the connector does not move `HOME`, so the harness has the access the participant has.
+- The account's `~/.ssh` and the rest of the participant's `HOME`: the connector does not move `HOME`, so the harness has the access the participant has. The Keychain login is per config folder (section 5).
 - Account state: claude.ai connectors, synced plugins and skills arrive from the account at each launch.
 - Managed settings override every settings file; their path per OS: unknown.
 - Background agents (`claude agents`, `--bg`, `/background`) run under a per-user supervisor that outlives the shell and keeps the environment of whichever shell started it first (docs). The connector sets `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`; a supervisor started earlier outside goalcup is not under that control.

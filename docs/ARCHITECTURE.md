@@ -43,7 +43,7 @@ flowchart LR
       QU[Held-bytes guard]
       MK[Masker]
       WR[Writer: GCR1 records, links, counts]
-      UP[Uploader: two plain threads]
+      UP[Uploader: three plain threads]
     end
   end
   H -- HTTPS_PROXY --> PX
@@ -78,14 +78,17 @@ The rules of the shape:
   seals the part when it exits, and starts a new recorder at once when one dies (D75). When the
   deadline passes, or the server's stop word says the reason is the deadline, it ends the harness
   and seals the part. Any other stop word seals the recorder at once and leaves the harness running
-  (D85). It never reads, masks, writes or uploads a recorded byte.
+  (D85). It never reads, masks, writes or uploads a recorded byte. (A watchdog started by
+  `goalcup recover` never ends the harness; see below.)
 - **Continue and recover.** `goalcup continue` re-enters a run with a new watchdog process and a new
   part. If the last entry has no seal and nothing of it lives, it first closes that entry
   (`pipeline/dead.rs`): one recovery frame with a `recorder_down` gap, a `seal` event with reason
   `recovered`, a LINK and the closing line. `goalcup recover` is for the case where the watchdog and
   the recorder both died while the harness still runs. It starts a new watchdog on the same port
   with the same run CA (`watchdog/recover.rs`), and that watchdog starts the recorder. The harness
-  is never restarted or signalled, and the time recording was down is a `recorder_down` gap.
+  is never restarted or signalled, and the time recording was down is a `recorder_down` gap. The
+  recovered watchdog still seals the part on `goalcup seal`, at the deadline, on any server stop and
+  when the harness exits, but leaves a running harness running (`goalcup seal` says so).
 - **Null mode.** If the recorder crashes three times in ten minutes, each within a minute of its
   start, the watchdog runs a relay-only recorder, says so in `status.json`, and retries a normal
   boot after 30 seconds, then 1, 2 and 5 minutes, never more than 5 minutes apart. The crash count
@@ -161,8 +164,9 @@ The recorder writes one record stream per entry as zstd part files under
 `runs/<run_id>/<entry_id>/rec/`. The format is in [RECORD-FORMAT.md](RECORD-FORMAT.md): framing,
 records, stream kinds, IDs, time, gaps, links, the seal, and a reader in Python. The upload is
 in [UPLOAD-API.md](UPLOAD-API.md): chunks of the part files, a heartbeat with the written counts,
-and the run credential. The server stores bytes and interprets nothing. The uploader runs on two
-plain threads with a blocking client, sends each part file soon after it is written, and frees
+and the run credential. The server stores bytes and interprets nothing. The uploader runs on
+three plain threads (rounds, heartbeat, and a queue for older entries) with a blocking client, sends
+each part file soon after it is written, and frees
 local disk only once the server holds the bytes. It never ends the process and never blocks the
 recorder.
 

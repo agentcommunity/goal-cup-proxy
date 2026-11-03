@@ -5,7 +5,7 @@ connector is its TOML file plus one `entry!("<id>")` line in `crates/goalcup/src
 one source file that names connector files; `tests/connector_builtin.rs` fails on a file missing from that
 list or an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
 connector. Nothing is pinned. The `start` event names the connector (`connector`, `connector_source`,
-`connector_sha256`) and the host list's hash (`hosts_sha256`). `setup` is built, and `start` loads the connector and the host list and runs the checks.
+`connector_sha256`) and the host list's hash (`hosts_sha256`).
 
 ## The connector contract
 
@@ -20,11 +20,11 @@ is the participant's project folder.
 | `name` | string | | Shown to the participant |
 | `program` | string | | The executable, found on the participant's `PATH` |
 | `version` | string | none | A word of the first non-empty line of `program --version`, with a leading `v` stripped, must start with it, else the start refuses, naming the program. A version that cannot be read (no output, a failed exit, 5 s without an exit) refuses nothing |
-| `version_notes` | list of `{versions, say}` | `[]` | When the read version has a word starting with one of `versions` (as `version` matches, but no digit may follow it: `0.22.6` is not `0.22.60`), `say` is printed by `goalcup start`, `continue` and `setup` and written as a `version_note` event after `start`. It never refuses a run; an unread version prints nothing |
+| `version_notes` | list of `{versions, say}` | `[]` | When the read version has a word starting with one of `versions` (as `version` matches, but no digit may follow it: `0.22.6` is not `0.22.60`), `say` is printed by `goalcup start`, `continue` and `setup` and recorded as a `note` event (`what = "version_note"`). It never refuses a run; an unread version prints nothing |
 | `args` | string list | `[]` | Arguments for `goalcup start`. Template `{workspace}` only |
 | `resume` | string list | `[]` | Appended to `args` for `goalcup continue`. Template `{workspace}` only |
 | `home` | map, variable to template | empty | Variables pointed into the isolated home; each value starts with `{home}`. The folders are created with mode 0700. Where it sets `HOME`, goalcup also writes `$HOME/.profile`, putting the handed `PATH` back after a login shell resets it: replaced only when goalcup wrote it, else kept with a log line |
-| `env` | map, variable to string | empty | Fixed variables (auto-update switches, daemon modes), set last |
+| `env` | map, variable to string | empty | Fixed variables (auto-update switches, daemon modes), set after `home` |
 | `ca_env` | string list | `[]` | The harness's own CA variables. Each is pointed at the run CA |
 | `unset` | string list | `[]` | Participant variables removed before launch, for those that beat `HTTPS_PROXY` |
 | `refuse_if_set` | list of `{file, keys}` | `[]` | A value at any of `keys` in `file` refuses the start, naming the file and key, never the value. `null`, `""`, `[]` and `{}` are unset; `false` is a value |
@@ -72,11 +72,12 @@ A parse error names the file and the line; a rule error names the file and the k
 ## The host list
 
 [`connectors/model-hosts.toml`](../connectors/model-hosts.toml) names the hosts decrypted and
-recorded byte for byte for every harness; every other host is a tunnel. It has five arrays, each
+recorded byte for byte for every harness; every other host is a tunnel. It has six arrays, each
 optional, and no other key. `provider`, `gateway` and `vendor` hold the hosts, the array name being
 each host's `kind`; `never` holds hosts never decrypted, whatever another list says; `pinned` holds
 names or patterns of hosts known to pin their certificate, which marks a listed host pinned (a
-`pinned` name in no other array is listed with kind `other`). goalcup's own server
+`pinned` name in no other array is listed with kind `other`); `expected` holds non-model hosts a
+harness opens on purpose, tunnelled unrecorded and flagged as expected. goalcup's own server
 (`agentcommunity.org` and its subdomains, any name holding `goalcup`, and the server a run uploads
 to) is `never` in code. A pattern is an exact name, `*.a.b` (one or more labels before `a.b`), or one
 `*` inside one label with at least two labels after it. A name outside `never` that fails the host
@@ -98,7 +99,7 @@ host from the participant list or a hint is left out with a log line.
 the same parser and checks; the `start` event gives `connector_source = "file"`. Both are for practice
 and test runs only: without `--practice` or `--test`, the start refuses before anything is read.
 `continue` has no `--practice` or `--test`: its two flags must name the same files, with the same
-connector id, as the run's first entry (none if it used none). A `continue` runs the connector profile the run's
+connector id, as the run's first entry (none if it used none). A `continue` runs the connector the run's
 `server.json` names, the same one the first entry used. It appends `resume` to `args` when the
 run's earlier entries wrote at least one model request or session file; if the last entry was itself
 a resume whose harness exited non-zero within 30 seconds, it starts a new session instead.

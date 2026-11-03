@@ -14,7 +14,7 @@ Source words: "docs" is [docs.github.com/copilot](https://docs.github.com/en/cop
 ## 2. Install and record a version
 
 - `npm install -g @github/copilot@<version>` (Node 22 or later), or `curl -fsSL https://gh.io/copilot-install | bash` ([docs](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli)). The package is a Node single-executable app with a Rust addon (package).
-- `copilot version` prints the version ([docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)). goalcup's probe runs `copilot --version` instead; whether that form works on 1.0.105 is not measured, and if it fails the `start` event records no version (the run is not stopped). Fifteen stable releases between 30 Sep and 28 Oct (npm); expect more during a run.
+- `copilot version` prints the version ([docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference)). goalcup's probe runs `copilot --version`, which prints `GitHub Copilot CLI 1.0.105.` with a full stop (pad `version_cmd`); if the probe fails the `start` event records no version (the run is not stopped). Fifteen stable releases between 30 Sep and 28 Oct (npm); expect more during a run.
 
 ## 3. Where it keeps things, per OS
 
@@ -30,7 +30,7 @@ All from the [config directory reference](https://docs.github.com/en/copilot/ref
 ## 4. Session format and identity
 
 - One folder per session, `session-state/<id>/`, with an append-only `events.jsonl` that supports `--continue` ([docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)). The connector reads every `events.jsonl` below it, and copies `session-store.db*` at the end.
-- Subagents have their own subagent session (changelog 1.0.81). Whether that is a separate folder or lines inside the parent's file: unknown.
+- Subagents have their own subagent session (changelog 1.0.81). Whether that is a separate folder or lines inside the parent's file: unknown. `goalcup-verify` has no Copilot reader (`reads_native` in `usage/hints.rs` lists none), so subagents are not linked and `usage` reports no native leg.
 
 ## 5. Auth
 

@@ -43,6 +43,9 @@ Gone since 0.7, and not coming back: the receipt, abandon and seal calls (`/rece
   | 429 | `rate_limited` | Too many calls. `Retry-After` says when. | backs off and retries |
   | 503 | `maintenance` | The server asks every client to wait (the maintenance switch). `Retry-After` says when. | backs off and retries |
   | 503 | `awaiting_final` | The run is over (`ends_at`), and the entry's final heartbeat has not arrived. | sends the final heartbeat, then retries at once |
+  | 405 | `method_not_allowed` | A wrong method on a known path (not part of the contract; `Allow` names the right one). | nothing; goalcup never sends one |
+  | 500 | `misconfigured`, `internal` | `misconfigured`: the deployment is wrong; the message names the setting. `internal`: an unhandled fault; the detail is only in the Worker log. | backs off and retries |
+  | 502 | `upstream_error` | Supabase, GitHub or R2 failed. | backs off and retries |
 
   During a run, no error stops the run or ends its upload (D64): only a heartbeat answer with
   `stop: true`, or goalcup's own count of the time left, stops it. After 3 refusals in a row the
@@ -360,7 +363,7 @@ booleans or `null`, at most 2 KiB serialized. The Worker fixes no key list and i
 in it. The client's keys (PRD-06 section 6 names them; this list copies it):
 
 - every whole-number counter of the COUNT event (PRD-01 section 9) as entry totals at the durable
-  LINK: `up_ms`, `http_req`, `http_post`, `ws_up_msgs`, `ws_down_msgs`, `req_whole`, `req_holes`,
+  LINK: `http_req`, `http_post`, `ws_up_msgs`, `ws_down_msgs`, `req_whole`, `req_holes`,
   `conns`, `tunnels`, `tunnel_up`, `tunnel_down`, `wire_bytes`, `native_files`, `native_bytes`,
   `snapshots`, `gaps`, `lost_bytes`, `lost_unknown`, `off_ms`, `mask_failclosed_bytes`, and
   `held_peak` (the largest over boots). The maps `hosts` and `tunnel_hosts` and the gauges

@@ -30,7 +30,7 @@ The connector sets the four XDG variables under the isolated home and leaves `HO
 
 ## 4. Session format and identity
 
-- One SQLite database for all sessions. The `task` tool starts a child session with `parentID` set, in the same database (source). The connector copies `kilo*.db*` as a set when the run ends (`final`). Table and column names for Kilo, and the session id form: unknown.
+- One SQLite database for all sessions. The `task` tool starts a child session with `parentID` set, in the same database (source). The connector copies `kilo*.db*` as a set when the run ends (`final`); `goalcup-verify` does not read that copy. Table and column names for Kilo: unknown. Threads come from the wire alone: Kilo's requests carry `x-session-id` and `x-parent-session-id` headers (`WIRE_IDS` in `usage/hints.rs`), so the session id is whatever value Kilo sends there.
 
 ## 5. Auth
 

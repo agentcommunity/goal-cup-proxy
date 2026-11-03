@@ -4,7 +4,7 @@ Connector id: `crush-cli` · Facts for version: `0.99.0` · Written by: Goal Cup
 Public disclosure: yes. Facts come from Crush's public README and source at `v0.99.0`. No keys, tokens, account names or personal paths are included.
 Status: shipped connector ([`connectors/crush-cli.toml`](../../connectors/crush-cli.toml))
 
-Source words: "README" is [github.com/charmbracelet/crush](https://github.com/charmbracelet/crush/blob/v0.99.0/README.md) at `v0.99.0`, read on 2026-10-31; "source" is the same tag, read on 29 Oct 2026 and not run; "unknown" is not measured or read. Nothing was run on a real Crush this cycle, so no fact here is "measured".
+Source words: "README" is [github.com/charmbracelet/crush](https://github.com/charmbracelet/crush/blob/v0.99.0/README.md) at `v0.99.0`, read on 2026-10-31; "source" is the same tag, read on 29 Oct 2026 and not run; "unknown" is not measured or read. Rung 1 (31 Oct 2026, with `--yolo`) and a pad run on the Mac (2 Nov 2026) ran on a real Crush; a fact here not tied to a run is read, not "measured".
 
 ## 1. Run one prompt, in chat mode first
 
@@ -30,7 +30,7 @@ The connector sets the four XDG folders under `{home}` and unsets `CRUSH_GLOBAL_
 
 ## 4. Session format and identity
 
-- One SQLite database for all sessions of that folder, with tables `sessions`, `messages` and `files`. A subagent is a child session row with `parent_session_id` (source). The connector copies `crush.db*` as a set when the run ends (`final`).
+- One SQLite database for all sessions of that folder, with tables `sessions`, `messages` and `files`. A subagent is a child session row with `parent_session_id` (source). The connector copies `crush.db*` as a set when the run ends (`final`). `goalcup-verify` reads only `sessions.id` and `parent_session_id` from the copy (`thread_db` in `usage/hints.rs`) and joins them to the wire's `X-Session-Id`, the xxh3-64 of the session id; calls come from the wire alone.
 - The workspace file also holds the participant's earlier Crush sessions for that folder, and the end-of-run copy takes the file whole. The session id form and where it first appears: unknown.
 
 ## 5. Auth
