@@ -1,0 +1,1 @@
+14:35Z seam from integrator: PRD-02 slice A adds common::recorder::entry_dir() (kept temp folder) and uses it in lessons_pipeline.rs; ruling OWN-2. Adopt it for any test that runs the real pipeline.

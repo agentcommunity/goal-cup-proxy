@@ -1,0 +1,35 @@
+# Claude Code 2.1.312: values checked against the vendor's docs on 30 Oct 2026.
+id = "claude-code-cli"
+name = "Claude Code"
+program = "claude"
+resume = ["--continue"]
+home = { CLAUDE_CONFIG_DIR = "{home}" }
+env = { DISABLE_AUTOUPDATER = "1", DISABLE_UPDATES = "1", CLAUDE_CODE_DISABLE_AGENT_VIEW = "1", CLAUDE_CODE_RETRY_WATCHDOG = "1" }
+unset = ["CLAUDE_CODE_CERT_STORE"]
+refuse_if_set = [
+  { file = "{home}/settings.json", keys = ["env.HTTPS_PROXY", "env.https_proxy", "env.NO_PROXY", "env.no_proxy", "env.CLAUDE_CODE_CERT_STORE", "env.NODE_EXTRA_CA_CERTS"] },
+  { file = "{workspace}/.claude/settings.json", keys = ["env.HTTPS_PROXY", "env.https_proxy", "env.NO_PROXY", "env.no_proxy", "env.CLAUDE_CODE_CERT_STORE", "env.NODE_EXTRA_CA_CERTS"] },
+  { file = "{workspace}/.claude/settings.local.json", keys = ["env.HTTPS_PROXY", "env.https_proxy", "env.NO_PROXY", "env.no_proxy", "env.CLAUDE_CODE_CERT_STORE", "env.NODE_EXTRA_CA_CERTS"] },
+]
+host_hints = [
+  { file = "{home}/settings.json", key = "env.ANTHROPIC_*BASE_URL" },
+  { file = "{workspace}/.claude/settings.json", key = "env.ANTHROPIC_*BASE_URL" },
+  { file = "{workspace}/.claude/settings.local.json", key = "env.ANTHROPIC_*BASE_URL" },
+]
+hint_env = [
+  "ANTHROPIC_BASE_URL", "ANTHROPIC_BEDROCK_BASE_URL", "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+  "ANTHROPIC_VERTEX_BASE_URL", "ANTHROPIC_FOUNDRY_BASE_URL", "ANTHROPIC_AWS_BASE_URL",
+]
+secret_files = ["{home}/.credentials.json"]
+native = [
+  { name = "tool-results", root = "{home}/projects", pattern = "**/tool-results/*", form = "snapshot", warn_missing = false },
+  { name = "meta", root = "{home}/projects", pattern = "**/*.meta.json", form = "snapshot", warn_missing = false },
+  { name = "transcripts", root = "{home}/projects", pattern = "**/*.jsonl" },
+]
+mask = [{ kind = "anthropic_billing_header", header_prefix = "x-anthropic-billing-" }]
+first_screen = "Claude Code may ask whether you trust this folder. Choose Yes. Background agents (agent view) are off during the run so every agent goes through the recorder."
+no_prompts = [
+  { file = "{home}/settings.json", key = "permissions.defaultMode", value = "bypassPermissions" },
+  { file = "{home}/settings.json", key = "skipDangerousModePermissionPrompt", value = "true" },
+]
+skills_dir = "{home}/skills"

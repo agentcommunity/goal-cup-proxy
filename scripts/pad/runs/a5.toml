@@ -1,0 +1,14 @@
+# a5.toml: A5, Codex direct, one-hour composite (owner 1 Nov 23:12Z); also the release check's Codex kill row and exec row
+# One row stands in for the old kill row and exec row: it keeps both kill steps and both exec steps, and no connector copy.
+# Run from the repository root: the prompt path is relative to it.
+harness = "codex-cli"
+key = "openai"
+case = "direct"
+mode = "full"
+minutes = 60
+keep_going = 2
+keep_going_count = 12
+cap_usd = 15
+box_extra_minutes = 15
+prompt = "scripts/pad/prompts/many-subagents.txt"
+steps = ["kill-recorder@10", "exec h2-parallel.sh@15", "exec long-tunnel.sh@20", "kill-recorder@30", "kill-watchdog-recover@45", "keep-going"]

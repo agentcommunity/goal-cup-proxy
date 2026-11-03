@@ -35,15 +35,13 @@ describe("replace, practice and segments against wrangler dev", { concurrency: f
     api.call("PUT", `/v1/runs/${run}/chunks/${offset}`, { token, body: c.body, headers: c.headers });
   const beat = (run: string, token: string, entry: string, seq: number, head: string, final: boolean) =>
     api.call("POST", `/v1/runs/${run}/heartbeat`, { token, json: { entry_id: entry, seq, head, offset_local: 1, final, repo_head: null } });
-  const seal = (run: string, token: string, entry: string) =>
-    api.call("POST", `/v1/runs/${run}/seal`, { token, json: { entry_id: entry, seal_json: '{"s":1}', baseline_json: '{"b":1}' } });
   const get = (run: string, token: string, entry?: string) => api.call("GET", `/v1/runs/${run}${entry === undefined ? "" : `?entry_id=${entry}`}`, { token });
   const cont = (run: string, token: string, previous: string, session: string) =>
     api.call("POST", `/v1/runs/${run}/continue`, {
       token,
       json: {
-        previous_entry_id: previous, connector_id: "codex-cli", manifest_sha256: "a".repeat(64), connector_dir_sha256: "c".repeat(64),
-        workspace: "/w/two", session_id: session, harness_version: "0.153.0", tracer_version: "0.1.0",
+        previous_entry_id: previous, connector_id: "codex-cli", connector_sha256: "a".repeat(64),
+        workspace: "/w/two", session_id: session, harness_version: "0.153.0", proxy_version: "0.1.0",
       },
     });
 
@@ -63,27 +61,27 @@ describe("replace, practice and segments against wrangler dev", { concurrency: f
     const wait = await put(a.run_id, c1, a2, a1.length);
     assertError(wait, 503, "awaiting_final");
     assert.equal(wait.headers.get("retry-after"), "60");
-    // ...but a chunk the server already holds is answered with its stored ack, whatever the run's state.
+    // ...but a chunk the server already holds is answered as the first time, whatever the run's state.
     const retry = await put(a.run_id, c1, a1, 0);
     assert.equal(retry.status, 200, JSON.stringify(retry.body));
-    assert.deepEqual(retry.body.ack, first.body.ack);
+    assert.deepEqual(retry.body, first.body);
 
     const f = await beat(a.run_id, c1, a.entry_id, a2.lastSeq, a2.head, true);
     assert.equal(f.status, 200, JSON.stringify(f.body));
     const { seconds_left, ...rest } = f.body;
-    assert.deepEqual(rest, { stop: true, deadline_at: a.deadline_at, reason: "replaced" });
+    assert.deepEqual(rest, { stop: true, deadline_at: a.deadline_at, reason: "replaced", sealed: false });
     assert.ok(seconds_left > 0, "a replaced run's deadline_at has not come; stop ends it");
-    assert.equal((await put(a.run_id, c1, a2, a1.length)).status, 200);
+    // The chunk that reaches the committed end seals the entry, and with it the run, which is over.
+    const last = await put(a.run_id, c1, a2, a1.length);
+    assert.equal(last.status, 200, JSON.stringify(last.body));
+    assert.equal(last.body.sealed, true);
     assertError(await put(a.run_id, c1, a3, a1.length + a2.length), 410, "closed"); // past the committed end
-
-    const s = await seal(a.run_id, c1, a.entry_id);
-    assert.equal(s.status, 200, JSON.stringify(s.body));
-    assert.deepEqual(s.body, { status: "sealed", run_status: "sealed" });
+    assert.equal((await get(a.run_id, c1)).body.status, "sealed");
     // The second run was never touched.
     assert.equal((await beat(b.run_id, c2, b.entry_id, 0, GENESIS, false)).body.stop, false);
   });
 
-  test("chunks and seal address an older segment by entry_id", async () => {
+  test("chunks address an older segment by entry_id", async () => {
     const token = await credentialFor(api, "bob");
     const run = await open(token, "bob-1");
     const e0a = makeChunk(run.entry_id, 0, 3, GENESIS, "e0a");
@@ -99,28 +97,27 @@ describe("replace, practice and segments against wrangler dev", { concurrency: f
     // The older segment keeps uploading where it stood, by its entry id.
     const more = await put(run.run_id, token, e0b, e0a.length);
     assert.equal(more.status, 200, JSON.stringify(more.body));
-    assert.equal(more.body.ack.entry_id, run.entry_id);
+    assert.equal(more.body.offset, e0a.length + e0b.length); // segment 0's offset, not segment 1's
     assert.equal((await get(run.run_id, token, run.entry_id)).body.offset, e0a.length + e0b.length);
     assert.equal((await get(run.run_id, token)).body.offset, e1a.length);
     assert.equal((await get(run.run_id, token)).body.entry_id, e1);
 
-    // An entry that is not this run's is 404, on a chunk and on a seal.
+    // An entry that is not this run's is 404, on a chunk and on a heartbeat.
     const other = await credentialFor(api, "carol");
     const theirs = await open(other, "carol-1");
     const stray = makeChunk(theirs.entry_id, 0, 1, GENESIS, "stray");
     assertError(await put(run.run_id, token, stray, 0), 404, "not_found");
-    assertError(await seal(run.run_id, token, theirs.entry_id), 404, "not_found");
+    assertError(await beat(run.run_id, token, theirs.entry_id, 0, GENESIS, true), 404, "not_found");
   });
 
-  test("a segment seal before the end leaves the run open", async () => {
+  test("a segment sealed before the end leaves the run open", async () => {
     const token = await credentialFor(api, "dave");
     const run = await open(token, "dave-1");
     const a = makeChunk(run.entry_id, 0, 3, GENESIS, "d-a");
     assert.equal((await put(run.run_id, token, a, 0)).status, 200);
-    assert.equal((await beat(run.run_id, token, run.entry_id, a.lastSeq, a.head, true)).status, 200);
-    const s = await seal(run.run_id, token, run.entry_id);
-    assert.equal(s.status, 200, JSON.stringify(s.body));
-    assert.deepEqual(s.body, { status: "sealed", run_status: "open" });
+    const f = await beat(run.run_id, token, run.entry_id, a.lastSeq, a.head, true);
+    assert.equal(f.status, 200, JSON.stringify(f.body));
+    assert.equal(f.body.sealed, true);
     assert.equal((await get(run.run_id, token)).body.status, "open");
 
     const c = await cont(run.run_id, token, run.entry_id, "dave-2");

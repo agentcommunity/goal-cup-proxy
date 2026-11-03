@@ -1,0 +1,14 @@
+id = "copilot-cli"
+name = "GitHub Copilot CLI"
+program = "copilot"
+resume = ["--continue"]
+home = { COPILOT_HOME = "{home}" }
+env = { COPILOT_AUTO_UPDATE = "false" }
+host_hints = [{ file = "{home}/providers.json", key = "providers.*.baseUrl" }]
+hint_env = ["COPILOT_PROVIDER_BASE_URL"]
+secret_files = ["{home}/config.json", "{home}/providers.json"]
+native = [
+  { name = "sessions", root = "{home}/session-state", pattern = "**/events.jsonl" },
+  { name = "store", root = "{home}", pattern = "session-store.db*", form = "final" },
+]
+no_prompts = [{ file = "{home}/settings.json", key = "defaultPermissionMode", value = "allow-all" }]

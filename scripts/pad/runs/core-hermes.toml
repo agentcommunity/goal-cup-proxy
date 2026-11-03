@@ -1,0 +1,6 @@
+# core-hermes.toml: the core tier rows for hermes-cli (fault-free full run for direct, gateway and dodger), PRD-12 release check
+harness = "hermes-cli"
+key = "deepseek"
+case = "all"
+mode = "full"
+box_extra_minutes = 10

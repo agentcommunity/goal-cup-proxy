@@ -1,0 +1,264 @@
+08:05Z | pad planner PRD-12 | decision | slice 7 planned: 5 harness files, per-key queue plus R1 nit, K2 fixtures plus A3-1 nit; K7/K11 fixtures wait on PRD-08 slice 6 and PRD-09
+08:05Z | pad queue-and-pad-nits PRD-12 | start | slice 7 queue and R1 nit
+08:07Z | pad queue-and-pad-nits PRD-12 | stop | queue and R1 pushed, test_pad 29 ok in box
+08:08Z | pad k2-fixtures-selftest PRD-12 | start | worktree /root/gc-wt/pad-k2fx
+08:08Z | pad harness-files-c PRD-12 | fix | five harness files pushed; docs hosts mostly unreachable, keys marked unverified
+08:12Z | pad k2-fixtures-selftest PRD-12 | stop | K2 fixtures committed, K2 ran as wanted, selftest exit 3, pushed
+08:13Z | pad merger PRD-12 | start | lane merge begins
+08:23Z | pad merger PRD-12 | stop | merged 3 task branches clean, pushed aef4aaa1; build, clippy, test_pad ok, selftest exit 3 (K2 pass, others no fixtures)
+08:25Z | pad reviewA PRD-12 | start | review of prd-12-pad slice 7 at aef4aaa1
+08:38Z | pad reviewA PRD-12 | stop | review of prd-12-pad slice 7 done: no blocker, 2 fix, 3 nit; box selftest K2 PASS (exit 3, others not run), fixtures regenerate byte-identical
+08:40Z | pad fixer PRD-12 | fix | A-1..B4 fixed, tests green in box, pushed
+08:42Z | pad merge-requester PRD-12 | decision | queued v1.0/prd-12-pad slice 7 as 084219-prd-12-pad
+08:54Z | pad replan PRD-12 | amendment | slice 7 note in PRD-12 and PRD-16: scripts/pad 4303 lines vs row 1350-1450, K7/K11 fixtures pending, selftest exit 3 not a pass
+08:55Z | pad planner PRD-12 | decision | slice 8 planned: one task, K2 re-export plus K7 and K11 fixtures once PRD-08 slice 6 is on integration; no other PRD-12 code left
+08:56Z | pad k7-k11-fixtures PRD-12 | start | checking precondition
+09:02Z | pad k7-k11-fixtures PRD-12 | seam | PRD-08 slice 6 now on integration
+09:19Z | pad k7-k11-fixtures PRD-12 | stop | fixtures pushed; selftest exit 1: K11c, K11d differ (usage readable with no native, tokens null, C2 skip=FAIL); K6b not run (one chunk)
+09:19Z | pad merger PRD-12 | start | merging integration and fixtures branch
+09:25Z | pad merger PRD-12 | stop | merged integration and k7-k11-fixtures, pushed c5712975e76dd50479f267adaeedbeb79503099f; build, clippy, 29 unit tests pass; selftest K11c and K11d differ (check.py treats skip of threads_match, wire_keeps_up, subagents_present as FAIL on wire-only fixtures)
+09:30Z | pad reviewer-A PRD-12 | stop | review of v1.0/prd-12-pad slice 8 at c5712975: selftest exits 1 in a box (K11c, K11d differ; K6b not run); findings returned
+09:31Z | pad fixer PRD-12 | start | fixer starts on A1..A7
+09:37Z | pad fixer PRD-12 | stop | A1,A2,A5,A7 fixed in check.py/selftest; K6b and K11d all-six stay not run (need PRD-08 helper: multi-chunk, usage, subagent, S13 fields); selftest exit 3, 29 unit tests ok
+09:39Z | pad reviewerA PRD-12 | start | re-review of prd-12-pad K7/K11 slice, box run of selftest
+09:42Z | pad reviewerA PRD-12 | stop | re-review done at 254e3c38: selftest exit 3 (K6b, K11d not run), 29 unit tests OK; 3 fix findings open
+09:49Z | pad fixer PRD-12 | fix | A8 A9 A10 applied, selftest K11a-c pass, K6b/K11d not run (fixtures), pushed
+09:52Z | pad fixer PRD-12 | start | fixing A11 A12
+09:54Z | pad fixer PRD-12 | fix | A11 A12 fixed, box green, pushed
+09:55Z | pad reviewer-B PRD-12 | review | slice 8 re-check at 34572180: one stale-doc fix, two nits; no box run
+09:58Z | pad stop | PRD-12 Slice 8: the K7 and K11 fixtures and the K2 re-export, built from PRD-08 slice 6's test exports. Data only; no new pad code beyond one selftest line. not merged: findings still open after the last review round: B8 (branch v1.0/prd-12-pad)
+09:59Z | pad fixer PRD-12 | fix | B8, A13, B9 done, unit tests green, selftest controls not run (no verifier build), pushed
+10:00Z | pad reviewer-A PRD-12 | start | re-review slice 8 at a75a5d7399896979150ed5744a275937517fa8a0, selftest box
+10:02Z | pad reviewer-A PRD-12 | stop | re-review done: selftest box K2 K6a K6c K7 K9 K10 K11a-c as wanted, K6b and K11d not run (exit 3), 29 unit tests OK
+10:02Z | pad merge-requester PRD-12 | decision | queued v1.0/prd-12-pad slice 8 as 100256-prd-12-pad; all paths owned
+11:58Z | pad planner PRD-12 | decision | rung 1 readiness: two rig faults found against PRD-10 folder rule (project and GOALCUP_HOME are siblings; .git and pad-setup-check.sh planted before start); slice = move home, plant after start
+11:58Z | pad builder PRD-12 | start | start-folder-rule worktree ready
+12:09Z | pad builder PRD-12 | fix | start-folder-rule pushed; 30 tests green, real-build probe passes folder checks (stops at start not built)
+12:09Z | pad merger PRD-12 | start | merging lane
+12:10Z | pad merger PRD-12 | stop | merged, pushed 4b4578dd, box green
+12:14Z | pad fixer PRD-12 | fix | A1 A3 A4 B1 B2 B3 applied, tests green; A5: harness now starts in a non-repo folder, watch pane text and ready_text timing on rung 1
+12:15Z | pad fixer PRD-12 | fix | A6 A7 A8 R1 fixed, 30 tests green, pushed
+12:16Z | pad merge-requester PRD-12 | seam | queued 121640-prd-12-pad
+12:23Z | pad replan PRD-12 | amendment | slice 9 rung 1 readiness: notes in PRD-12 and PRD-16; pad is 4,344 lines vs row of about 1,400; no seam or ledger change
+12:25Z | pad planner PRD-12 | decision | slice 10 planned: rung 1 rig fixes (GOALCUP_SERVER missing from setup/seal env so setup would probe production; seal step 120 s timeout uncaught; end-screen regex misses singular)
+12:28Z | pad rung1-env-seal PRD-12 | fix | env, seal timeout, end-screen count pushed
+12:30Z | pad fixer PRD-12 | start | fixing A1-A4,B1
+12:31Z | pad fixer PRD-12 | start | fixing A1-A4,B1
+12:31Z | pad fixer PRD-12 | fix | A1-A4,B1 fixed, 32 tests green, pushed
+12:33Z | pad fixer PRD-12 | fix | A1b and A5 fixed, pad tests green in box, pushed
+12:34Z | pad reviewer-A PRD-12 | decision | re-check of slice 10 at 30c1683: A1b and A5 fixed, R1 decline accepted, one new fix (end screen zero matched by warning text)
+12:36Z | pad fixer PRD-12 | fix | N1 end-screen sentence match, B-dup merged into pane(text=); tests green, pushed
+12:37Z | pad merge-requester PRD-12 | seam | queued 123721-prd-12-pad (paths all under scripts/pad)
+19:26Z | pad preparer PRD-12 | start | slice 11 rung 1 rig fixes, apply rung1-patch.diff
+19:28Z | pad preparer PRD-12 | fix | slice 11 rung 1 patch applied, 33 pad tests, build, clippy green in box, pushed 41832d6fc27e4d58ceb5a031b318d396ced0d5ff
+19:28Z | pad fixer PRD-12 | start | fixing RIG-1..4
+19:29Z | pad fixer PRD-12 | fix | RIG-1 tails, RIG-4 merge; RIG-2/3 already on tip; tests green
+19:32Z | pad fixer PRD-12 | fix | RIG-5/6/7, B-2 fixed, tests green, pushed
+19:33Z | pad merge-requester PRD-12 | seam | queued merge request 193335-prd-12-pad for slice 11
+02:26Z | pad planner PRD-12 | decision | slice 12 planned: rung 2 rig faults RIG-5 user agent and plain error body, RIG-6 stop at once when start exits, RIG-7 DATABASE_URL only to fetch-run (already so in code, document and prove)
+02:27Z | pad rig-7-prd-doc PRD-12 | seam | doc note and section 7 fetch credential rule pushed
+02:28Z | pad rig-5-6-7-code PRD-12 | fix | RIG-5/6/7 pushed, 38 pad tests green in box
+02:28Z | pad merger PRD-12 | start | merging integration and task branches
+02:30Z | pad merger PRD-12 | stop | merged integration plus 2 task branches, box green, pushed
+02:32Z | pad fixer PRD-12 | fix | A1 A2 B1 B2 B4 done, 38 tests green, pushed
+02:34Z | pad fixer PRD-12 | fix | A4 R1 R2 fixed, 38 tests green in box, pushed
+02:36Z | pad fixer PRD-12 | fix | A5 dead pane ends server-off status wait; pushed
+02:36Z | pad PRD-12 PRD-12 | stop | PRD-12 PRD-12 slice 12: rung 2 rig faults. RIG-5 (approve() sends a named User-Agent on every pad HTTP call and reports a non-JSON error body plainly), RIG-6 (stop at once and report start-refused when goalcup start exits), RIG-7 (DATABASE_URL reaches only fetch-run on the conductor; prove it and document it). not merged: findings still open after the last review round: A6, A7, A5 (branch v1.0/prd-12-pad)
+02:37Z | pad fixer PRD-12 | fix | A6 start-refused raised with server off, A7 test
+02:38Z | pad merge-requester PRD-12 | seam | queued merge request 023858-prd-12-pad (slice 12, no Cargo.toml change)
+02:47Z | pad replan PRD-12 | amendment | slice 12 replan: size note in PRD-16 and PRD-12 entry, B1 nit only, no plan change
+03:15Z | pad planner PRD-12 | decision | slice 13: RIG-8 paste waits for status.json recording, RIG-9 mask fetch credentials out of said(); one task; branch merged with integration and pushed
+03:17Z | pad builder PRD-12 | fix | RIG-8 paste waits for recording status, RIG-9 child stderr masked; tests green in box
+03:27Z | pad merger-12 PRD-12 | stop | merged integration and rig-8-9-paste-and-mask, box ok, pushed
+03:28Z | pad reviewer-A PRD-12 | stop | review of slice 13 (RIG-8, RIG-9) done: no blocker, box test_pad 42 tests OK
+03:29Z | pad merge-requester PRD-12 | seam | queued 032905-prd-12-pad (slice 13 RIG-8/RIG-9)
+03:37Z | pad replan PRD-12 | amendment | slice 13 replan: size 3221 code + 695 tests vs row 1,350-1,450, nits queued in PRD-12, no plan change
+05:51Z | pad planner PRD-12 | decision | slice: rig faults F1 (kill timing, R1 bound from kill time) and F2 (dodger work signal); prd branch fast-forwarded to integration
+05:53Z | pad builder PRD-12 | fix | F1 kill timing and F2 dodger wait-calls pushed (pc.work not yet on PRD branch)
+05:53Z | pad check-gap PRD-12 | fix | F1 gap-end bound and F2 work() helper pushed; unit tests green in box
+05:54Z | pad merger PRD-12 | start | merging integration and two task branches
+05:54Z | pad merger PRD-12 | stop | pushed b3253a9c, 44 unittest pass
+05:57Z | pad fixer PRD-12 | start | fixing A1-A5 B1-B5
+05:59Z | pad fixer PRD-12 | fix | A1-A5 B1-B3 B4 fixed, tests green, pushed; B5 dropped, B6 skipped
+06:01Z | pad fixer PRD-12 | fix | quiet long-gap kill is INCONCLUSIVE; restarts field cut; pad tests green (44)
+06:02Z | pad fixer PRD-12 | fix | A7 quiet kill no longer fails on missing request; B9 tidied; 46 tests green
+06:03Z | pad merge-requester PRD-12 | seam | queued 060315-prd-12-pad
+06:18Z | pad planner PRD-12 | decision | slice: P1-P6 rig fixes, 3 tasks; prd branch merged with integration
+06:18Z | pad check-c3-echo-scan PRD-12 | start | P2 P3 slice
+06:20Z | pad check-c3-echo-scan PRD-12 | fix | P2 P3 pushed, 49 pad tests green in box
+06:20Z | pad image-rebuild PRD-12 | start | slice 13 P1 image rebuild
+06:21Z | pad harness-files PRD-12 | fix | slice 13 P4-P6 harness data pushed
+06:24Z | pad image-rebuild PRD-12 | decision | sbx.mjs CJS load cannot reach the API from here (fetch failed); using an ESM shim via PAD_NODE_MODULES, no repo change
+06:29Z | pad image-rebuild PRD-12 | stop | image rebuilt, 16/16 pins match, pushed
+06:29Z | pad merger PRD-12 | start | merging lane
+06:34Z | pad merger PRD-12 | stop | merged 3 branches, box green, pushed
+06:36Z | pad reviewerA PRD-12 | stop | slice 13 review done: 1 blocker (C3 passes a headerless PEM body raw in the record), 3 fix; box tests skipped
+06:36Z | pad fixer PRD-12 | start | fixer started on prd-12-pad
+06:38Z | pad fixer PRD-12 | fix | A1-A5,B1-B4,B6 fixed, A4 and A6 declined; 50 tests green in box; pushed
+06:39Z | pad fixer PRD-12 | start | fixing A7 B7 and nits
+06:40Z | pad fixer PRD-12 | fix | A7 B7 and nits done, 50 tests green, pushed
+06:42Z | pad merge-requester PRD-12 | seam | queued 064213-prd-12-pad (slice 13, paths all under scripts/pad, no Cargo.toml)
+06:55Z | pad replan PRD-12 | amendment | slice 13: C3 not-exercised INCONCLUSIVE noted, nits A12 B10 queued, size 4074 vs 1350-1450 reported in PRD-16
+06:57Z | pad planner PRD-12 | decision | slice 14 planned: P0a dbfetch box route, P0b keep rec on failed fetch, G1 per-case pre_keys, G3 rung 4 kill@0; 3 tasks
+06:57Z | pad builder PRD-12 | start | slice14 fetch-via-index-box P0a P0b
+06:57Z | pad builder PRD-12 | start | G1+G3 keys and kill0
+06:59Z | pad builder PRD-12 | fix | G1+G3 pushed, 57 tests green in box
+06:59Z | pad prd-12-fetch-route-doc PRD-12 | seam | docs for slice 14 committed and pushed
+07:02Z | pad builder PRD-12 | fix | P0a P0b done, 62 tests green in box, pushed v1.0/prd-12-pad-fetch-via-index-box
+07:03Z | pad merger-12 PRD-12 | stop | merged 3 task branches, box python tests ok, pushed
+07:06Z | pad fixer PRD-12 | start | fixing A1-A6 B1-B6
+07:09Z | pad fixer PRD-12 | fix | A1 A2 A3 A5 A6 B1-B5 done, 67 tests green in box, pushed; A4 skipped
+07:11Z | pad fixer PRD-12 | start | fixing A7 A4 A8 B7 B8
+07:13Z | pad fixer PRD-12 | fix | A7 A4 A8 B7 B8 done, 68 tests green, pushed
+07:16Z | pad fixer PRD-12 | fix | A9 keep_rec only after wipe ok, bounded by wipe share; B10 B11 done
+07:17Z | pad merge-requester PRD-12 | seam | queued 071736-prd-12-pad
+07:31Z | pad replan PRD-12 | amendment | slice 14: nits A10 B12 queued, size 4613 src+tests (3537 src) vs 1350-1450 reported in PRD-16
+07:32Z | pad planner PRD-12 | decision | slice 15 planned: R5-1 L3+L2 rung 5/5b, R5-2, R5-3, R5-4, selftest exit 3
+07:33Z | pad check-reason-fixes PRD-12 | start | R5-2 R5-3
+07:33Z | pad rung5-shell PRD-12 | decision | L3 launch shell kept for kill-watchdog-recover, 5b script added
+07:35Z | pad check-reason-fixes PRD-12 | fix | R5-2 R5-3 pushed, 52 tests ok
+07:35Z | pad rung5-shell PRD-12 | stop | pushed, 70 tests ok in box
+07:36Z | pad codex-exit-keys PRD-12 | decision | cause is paste-burst Enter; pad-run needs a split send; comment-only commit pushed; exit not run
+07:37Z | pad selftest-exit PRD-12 | stop | selftest still exit 3 in box at integration head; PRD-08 helpers cannot write multi-chunk k7 export or k11-d fetched/usage record; no fixture change
+07:39Z | pad merger PRD-12 | stop | merged 4 task branches, 72 python tests pass in box, pushed
+07:43Z | pad reviewerA PRD-12 | stop | review of slice 15 at cfc6a855: box unit tests 60 OK; probe shows rung 5b row reads C1 FAIL from its own expected gap; 0 blocker, 3 fix, 3 nit
+07:43Z | pad fixer PRD-12 | start | fixing A1-A6 B1-B6
+07:45Z | pad fixer PRD-12 | fix | A1-A6 B1-B6 fixed, tests green in box, pushed
+07:48Z | pad fixer PRD-12 | fix | A7 A8 A9 A10b R1 R2 fixed, 53 tests green, pushed
+07:49Z | pad merge-requester PRD-12 | seam | queued 074936-prd-12-pad for slice 15
+08:03Z | pad replan PRD-12 | amendment | slice 15: size 4697 src+tests (3593 src) vs 1350-1450; notes in PRD-12, PRD-08, PRD-16
+09:28Z | pad planner PRD-12 | decision | sweep2 fixes slice planned: harness data (hermes, crush, cline) and check.py rules (C3 upstream mask, history warn)
+09:30Z | pad harness-data PRD-12 | stop | hermes fixed; crush and cline marked not verified; pushed
+09:30Z | pad merger PRD-12 | start | merging lane PRD-12
+09:49Z | pad merger PRD-12 | stop | pushed df1d7d07; task branch check-c3-upstream-and-history-warn does not exist on origin, not merged
+09:51Z | pad fixer PRD-12 | start | fixer on v1.0/prd-12-pad
+09:52Z | pad fixer PRD-12 | stop | A1..B4 handled, pad unit tests 72 OK, pushed
+09:53Z | pad fixer PRD-12 | fix | table reads not_verified; test added; 74 tests green in box
+09:54Z | pad merge-requester PRD-12 | seam | queued merge request 095421-prd-12-pad for v1.0/prd-12-pad
+10:09Z | pad replan PRD-12 | amendment | sweep2 fixes: notes in PRD-12, PRD-11 (Cline acc 5 unexercised), PRD-16 size (pad 4473 py + 832 data vs 1350-1450)
+10:56Z | pad c3-stated-loss PRD-12 | start | worktree ready
+10:57Z | pad kill-times PRD-12 | seam | kill_minutes per harness (Codex 3,5) pushed v1.0/prd-12-pad-kill-times; 81 unit tests green in box
+10:57Z | pad c3-stated-loss PRD-12 | stop | pushed v1.0/prd-12-pad-c3-stated-loss, 77 tests green; C3U skipped
+10:58Z | pad merger PRD-12 | start | joining pad lane
+10:59Z | pad merger PRD-12 | stop | merged, box ok, pushed c0257fb6fd606c23f5c4c53700989b75d5251e12
+11:04Z | pad fixer PRD-12 | start | fixing A1-A7,B1-B6
+11:07Z | pad fixer PRD-12 | fix | A1-A7,B1-B6 done, 66 tests green in box, pushed; owner question on C3 stated loss open
+11:09Z | pad fixer PRD-12 | fix | A8-A11 R1-R3 fixed, 66 pad tests green in box, pushed
+11:11Z | pad fixer PRD-12 | fix | A12 stated loss keeps C1 exit rule when any check is named; R5 done; tests green, pushed
+11:12Z | pad merge-requester PRD-12 | seam | queued 111232-prd-12-pad
+11:18Z | pad replan PRD-12 | amendment | full-row fixes: notes in PRD-12, PRD-16 (kill minutes wording, C3 open, size pad 4726 py/js + 850 data vs 1350-1450)
+13:55Z | pad builder PRD-12 | start | live-dodger-and-early-pane
+13:56Z | pad builder PRD-12 | fix | live-dodger-and-early-pane pushed, tests green in box
+13:57Z | pad builder PRD-12 | fix | c3-upstream-redaction pushed, 88 pad tests green in box
+13:58Z | pad merger PRD-12 | stop | joined c3 + live-dodger into prd-12-pad, 93 pad tests ok, pushed
+14:01Z | pad fixer PRD-12 | fix | A1-A7,B1-B6 done, tests green in box, pushed; A3 vendor page unreachable
+14:03Z | pad fixer PRD-12 | start | fixing A3 N1 B7 B8
+14:04Z | pad fixer PRD-12 | fix | A3 N1 B7 B8 done, 89 tests green in box, pushed
+14:05Z | pad merge-requester PRD-12 | seam | queued 140547-prd-12-pad
+15:07Z | pad planner PRD-12 | decision | next slice: C3 stated-loss planted loop (F2) and goalcup.log out + post-approval pane (F3); merged integration into prd-12-pad
+15:07Z | pad builder PRD-12 | start | goalcup.log copy and post-approval pane
+15:08Z | pad c3-stated-loss-planted PRD-12 | fix | C3 stated loss no longer FAILs unmasked planted kinds; pushed
+15:08Z | pad builder PRD-12 | fix | goalcup.log in OUT, pane at top of type_prompt; 92 pad tests green, pushed
+15:09Z | pad merger PRD-12 | fix | merged into main checkout by mistake (cd failed), reset it to its prior head 786d68c5; redoing in own worktree
+15:09Z | pad merger PRD-12 | fix | merges first ran in the main checkout by mistake; moved its HEAD back to 786d68c5, redone in own worktree
+15:10Z | pad merger PRD-12 | stop | pushed v1.0/prd-12-pad 4c823337; 94 pad tests ok
+15:13Z | pad fixer PRD-12 | fix | goalcup-new.log carried, C3 loss read simplified, tests green in box, pushed
+15:14Z | pad merge-requester PRD-12 | seam | queued 151435-prd-12-pad
+18:57Z | pad planner PRD-12 | decision | package slice: exact-value C3 (plain hit FAIL, run_secret MASK proof) + masked-upstream PASS; one task in check.py/test_pad.py; prd-12-pad merged with integration
+18:57Z | pad builder PRD-12 | start | c3 exact values and upstream pass
+19:02Z | pad builder PRD-12 | stop | c3 exact values and upstream pass pushed, 97 pad tests green, ready for package merge
+19:02Z | pad merger PRD-12 | stop | merged c3-exact-values-and-upstream-pass into prd-12-pad, 97 pad tests ok in box, pushed
+19:06Z | pad reviewerA PRD-12 | stop | review of prd-12-pad 7ea97ad3 done: 1 blocker (masked-upstream PASS with no exercise evidence), 3 fix, 2 nit; unit tests 67 OK in a box
+19:06Z | pad fixer PRD-12 | start | fixing A1-A6 B1-B5
+19:08Z | pad fixer PRD-12 | fix | A1-A6,B1-B5 done, 99 tests green in box, pushed
+19:11Z | pad fixer PRD-12 | start | fixing A7 A1b A8 A9 B1-B4
+19:13Z | pad fixer PRD-12 | fix | A7 A1b A8 A9 B1-B4 fixed, tests green in box, pushed
+19:13Z | pad fixer PRD-12 | fix | repaired PRD-12 doc edit, pushed
+19:17Z | pad reviewer-A PRD-12 | decision | re-review of prd-12-pad 4f72e151: one blocker (exact-on Hermes run_secret covers gated kinds, PASS without masked_upstream flag); prior findings fixed
+19:18Z | pad fixer PRD-12 | start | fixing A10 A11 R1 R2
+19:19Z | pad fixer PRD-12 | fix | A10 A11 R1 R2 fixed, pushed, 101 pad tests green in box
+19:22Z | pad reviewerA PRD-12 | stop | re-check of prd-12-pad d9843ed8: A10/A11/R1/R2 closed, 101 pad tests OK in box; 2 fix open (masked-upstream PASS for kinds the vendor page does not name, amendment bullet 1 still says run_secret is proof)
+19:22Z | pad PRD-12 | stop | PRD-12 Package with PRD-05 exact-value masking: C3 treats a plain hit of the planted .env value as a LEAK once exact values are on and counts a run_secret MASK as the exercise proof; C3 PASS 'masked upstream' for a redacts_tool_output harness whose planted kinds never reach the wire. F2/F3 are already merged (a31a45e4 on integration). not merged: findings still open after the last review round: A12, A13 (branch v1.0/prd-12-pad)
+19:24Z | pad fixer PRD-12 | fix | A12 A13 A14 fixed, 101 pad tests green in box, pushed
+19:25Z | pad merge-requester PRD-12 | seam | queued 192532-prd-12-pad for v1.0/prd-12-pad
+01:14Z | pad mini | row | claude-code-cli gateway on B0 (diagnostic): PASS C1..C6 PASS PASS PASS PASS PASS PASS, 0.01 USD est, 12.0 box min, /root/gc-wt/canary/pad-out/claude-code-cli/gateway/20261102T010142Z-pad-6b07eb/
+01:14Z | pad mini | row | codex-cli gateway on B0 (diagnostic): PASS C1..C6 PASS PASS PASS PASS PASS PASS, 0.02 USD est, 11.9 box min, /root/gc-wt/canary/pad-out/codex-cli/gateway/20261102T010142Z-pad-ab1802/
+01:50Z | pad mini | wave | 04044320 canary done earlier; Amp and Droid dry check: PAD_EXIT=3 not verified: no key, no box
+01:50Z | pad mini | row | hermes-cli direct on B0 (diagnostic): FAIL C1=PASS C2=FAIL C3=INCONCLUSIVE C4=PASS C5=FAIL C6=PASS, 0.02 USD est, 12.0 box min, pad-out/hermes-cli/direct/20261102T011507Z-pad-6b4660/
+01:50Z | pad mini | row | gemini-cli direct on B0 (diagnostic): FAIL C1=PASS C2=FAIL C3=FAIL C4=PASS C5=FAIL C6=PASS, 0.12 USD est, 12.0 box min, pad-out/gemini-cli/direct/20261102T011509Z-pad-ecd82e/
+01:50Z | pad mini | row | opencode2-cli direct on B0 (diagnostic): FAIL C1=PASS C2=INCONCLUSIVE C3=FAIL C4=PASS C5=PASS C6=PASS, 0.01 USD est, 12.0 box min, pad-out/opencode2-cli/direct/20261102T011511Z-pad-664a0d/
+01:50Z | pad mini | row | opencode-cli direct on B0 (diagnostic): INCONCLUSIVE C1=PASS C2=INCONCLUSIVE C3=PASS C4=PASS C5=PASS C6=PASS, 0.01 USD est, 12.0 box min, pad-out/opencode-cli/direct/20261102T011513Z-pad-a97bc9/
+01:50Z | pad mini | row | kilo-cli direct on B0 (diagnostic): INCONCLUSIVE C1=PASS C2=INCONCLUSIVE C3=PASS C4=PASS C5=PASS C6=PASS, 0.01 USD est, 11.8 box min, pad-out/kilo-cli/direct/20261102T011515Z-pad-3f983b/
+01:50Z | pad mini | row | qwen-cli direct on B0 (diagnostic): FAIL C1=PASS C2=INCONCLUSIVE C3=FAIL C4=PASS C5=PASS C6=PASS, 0.05 USD est, 11.9 box min, pad-out/qwen-cli/direct/20261102T011517Z-pad-94b4fb/
+01:50Z | pad mini | row | goose-cli direct on B0 (diagnostic): FAIL C1=PASS C2=INCONCLUSIVE C3=FAIL C4=PASS C5=PASS C6=PASS, 0.01 USD est, 11.9 box min, pad-out/goose-cli/direct/20261102T011519Z-pad-a6fef4/
+01:50Z | pad mini | row | copilot-cli direct on B0 (diagnostic): INCONCLUSIVE C1=PASS C2=INCONCLUSIVE C3=INCONCLUSIVE C4=PASS C5=PASS C6=PASS, 0.01 USD est, 11.8 box min, pad-out/copilot-cli/direct/20261102T011521Z-pad-a9b76f/
+01:50Z | pad mini | row | openclaw-cli direct on B0 (diagnostic): FAIL C1=PASS C2=INCONCLUSIVE C3=FAIL C4=PASS C5=PASS C6=PASS, 0.05 USD est, 12.1 box min, pad-out/openclaw-cli/direct/20261102T012705Z-pad-1f8274/
+01:50Z | pad mini | row | kimi-code-cli direct on B0 (diagnostic): FAIL setup (sbx put fetch failed) C1..C6 none, 0 USD est, 0.6 box min, pad-out/kimi-code-cli/direct/20261102T012712Z-pad-67021b/
+01:50Z | pad mini | row | crush-cli direct on B0 (diagnostic): INCONCLUSIVE C1=PASS C2=INCONCLUSIVE C3=PASS C4=PASS C5=PASS C6=PASS, 0.01 USD est, 12.0 box min, pad-out/crush-cli/direct/20261102T012714Z-pad-c94caf/
+01:50Z | pad mini | row | claude-code-cli api.anthropic.com finding: 10 telemetry POSTs (event_logging batch), 0 model calls; all 11 model calls to the gateway
+02:56Z | pad long | run | a2 a5 a3 started on H2 13ce0d62 (settings a2.toml a5.toml a3.toml)
+03:08Z | pad mini | row | hermes-cli direct on H2 (diagnostic, r2): INCONCLUSIVE C1=PASS C2=PASS C3=INCONCLUSIVE C4=PASS C5=PASS C6=PASS, 0.01 USD est, 11.9 box min, pad-out/hermes-cli/direct/20261102T025632Z-pad-f92038/
+03:08Z | pad mini | row | gemini-cli direct on H2 (diagnostic, r2): FAIL C1=PASS C2=FAIL C3=PASS C4=PASS C5=FAIL C6=PASS, 0.12 USD est, 12.0 box min, pad-out/gemini-cli/direct/20261102T025634Z-pad-616a26/
+03:08Z | pad mini | row | opencode2-cli direct on H2 (diagnostic, r2): FAIL C1=PASS C2=INCONCLUSIVE C3=FAIL C4=PASS C5=PASS C6=PASS, 0.01 USD est, 12.1 box min, pad-out/opencode2-cli/direct/20261102T025636Z-pad-84dcdf/
+03:08Z | pad mini | row | qwen-cli direct on H2 (diagnostic, r2): INCONCLUSIVE C1=PASS C2=INCONCLUSIVE C3=PASS C4=PASS C5=PASS C6=PASS, 0.03 USD est, 12.1 box min, pad-out/qwen-cli/direct/20261102T025638Z-pad-622469/
+03:08Z | pad mini | row | goose-cli direct on H2 (diagnostic, r2): FAIL C1=PASS C2=INCONCLUSIVE C3=FAIL C4=PASS C5=PASS C6=PASS, 0.01 USD est, 11.9 box min, pad-out/goose-cli/direct/20261102T025640Z-pad-109fa0/
+03:21Z | pad mini | row | openclaw-cli direct on H2 (diagnostic, r2): FAIL C1=FAIL C2=INCONCLUSIVE C3=INCONCLUSIVE C4=PASS C5=PASS C6=PASS, 0.03 USD est, 12.2 box min, pad-out/openclaw-cli/direct/20261102T030838Z-pad-29be05/
+03:20Z | pad mini | row | kimi-code-cli direct on H2 (diagnostic, r2): INCONCLUSIVE C1=PASS C2=INCONCLUSIVE C3=PASS C4=PASS C5=PASS C6=PASS, 0.01 USD est, 11.4 box min, pad-out/kimi-code-cli/direct/20261102T030845Z-pad-05ecd3/
+03:27Z | pad reviewer PRD-12 | finding | C3 stated-loss rule does not match the owner rulings at 13ce0d62: scripts/pad/check.py:242-264 (stated_loss counts known hits when all are in /deltas) and check.py:500-503 give C3 PASS on known-value hits in joined streamed replies (from b9fbb154); owner ruling 20:32Z (draft item 10) says known hits still FAIL, and the 2 Nov 02:00Z PASS rule is a conductor reading "for the owner to confirm", not in the draft at H2 (added ffcd25bd); the comment at check.py:500 ("a known hit makes loss None, so it still fails") contradicts the code. Not exercised by the first row (stated_loss_known_hits 0). Fix: owner confirms, or loss_known()>0 maps to FAIL
+03:27Z | pad reviewer PRD-12 | finding | no H2 evidence that a known-value hit maps to C3 FAIL: selftest wants no C3 result (scripts/pad/selftest:19-20, :143 only forbids FAIL), all 11 offline controls read C3 INCONCLUSIVE, and the real K5 control is not in the H2 trust evidence, while check.py's C3 mapping changed in this train (4bf5f55a, b9fbb154). Need a K5 row (or an offline known-hit fixture) on this scripts/pad tree before trust
+03:27Z | pad reviewer PRD-12 | finding | cleanup proves only the run box gone: scripts/pad/pad:959-961 filters the list to self.name, so the index box pad-dbf-<id> (pad:790, removed at pad:820-826 on rm exit code alone) is never confirmed by the list; first row: rm pad-dbf-f92038 03:08:08Z, list 03:08:22Z checked pad-f92038 only. Fix: also require no live pad-dbf-<id> in the same list
+03:27Z | pad reviewer PRD-12 | finding | A2 kill step lines not available yet (only calls.log and watch/spend.jsonl local at 03:2x); for the conductor: A2 spend flat at 1.74 USD from 03:07:01Z to 03:22:06Z, i.e. since about the minute-10 kill-recorder, which meets the Task 7 Step 4 15-minute no-new-usd stop rule; read again when A2 ends
+03:54Z | pad reviewer PRD-12 | decision | first-output read at 13ce0d62 found 3 pad findings (stated-loss comment, no offline C3 control, index box cleanup); all fixed in f7048ed8 and proven by the f7048ed8 selftest (C3-body FAIL, C3-deltas PASS, all controls ran); trust holds at f7048ed8
+04:05Z | pad long | run | a2 (claude-code-cli direct, H2 13ce0d62, untrusted): FAIL C1..C5=PASS C6=INCONCLUSIVE x2=INCONCLUSIVE (6 subagents, 5 at once) x3=PASS x4=FAIL (check.py gap count), 2.08 USD est, 2.1 USD/h, 62.9 box min, pad-out/claude-code-cli/direct/20261102T025641Z-pad-2e9b2b/
+04:05Z | pad long | run | a5 (codex-cli direct, H2 13ce0d62, untrusted): FAIL C1..C5=PASS C6=INCONCLUSIVE x2=INCONCLUSIVE (9 subagents, 3 at once) x3=PASS x4=FAIL (check.py gap count), 2.87 USD est, 2.8 USD/h, 62.5 box min, pad-out/codex-cli/direct/20261102T025641Z-pad-5b2a7d/
+04:05Z | pad long | run | a3 (hermes-cli gateway, H2 13ce0d62, untrusted): FAIL C1=PASS C2=PASS C3=FAIL (147 secret hits, planted values unmasked in requests) C4,C5=PASS C6=INCONCLUSIVE x2=INCONCLUSIVE (12 subagents, 0 at once by calls) x3=PASS x4=FAIL, 1.97 USD est, 2.0 USD/h, 64.6 box min, pad-out/hermes-cli/gateway/20261102T025641Z-pad-a87ac9/
+05:56Z | pad long2 | run | a2 (claude-code-cli direct, H4 ad32a2a4, untrusted): INCONCLUSIVE C1..C6=PASS x2=INCONCLUSIVE (6 subagents, 6 at once) x3=PASS x4=FAIL (faults INCONCLUSIVE line, quiet kill/no recovery observed), 1.95 USD, 1.9 USD/h, keep going typed 10 times
+05:56Z | pad long2 | run | a5 (codex-cli direct, H4 ad32a2a4, untrusted): INCONCLUSIVE C1..C6=PASS x2=INCONCLUSIVE (6 subagents, 5 at once) x3=PASS x4=FAIL (faults INCONCLUSIVE line), 2.90 USD, 2.9 USD/h, no new usd from about minute 25 (credit_balance_exhausted 7, rate_limit_exceeded 17), keep going typed 12 times
+05:56Z | pad long2 | run | a3 (hermes-cli gateway, H4 ad32a2a4, untrusted): INCONCLUSIVE C1,C2,C4,C5,C6=PASS C3=INCONCLUSIVE x2=INCONCLUSIVE (15 subagents, 0 at once) x3=PASS x4=PASS, 2.10 USD, 2.1 USD/h
+07:20Z | pad paynest | run | claude-code-cli gateway, a437988d, paynest prompt 15 min: INCONCLUSIVE C1,C2,C4,C5,C6=INCONCLUSIVE C3=PASS (1 subagent, 1 at once, planner then waited; 2 wire threads 1 with parent; native subagent files read), 0.17 USD est
+07:20Z | pad paynest | run | codex-cli gateway, a437988d, paynest prompt 15 min: INCONCLUSIVE C1,C2,C4,C5,C6=INCONCLUSIVE C3=PASS (10 subagents; 12 wire threads 10 with parent; 11 rollout files read), 1.12 USD est
+07:20Z | pad paynest | run | hermes-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (2 model requests, no subagent evidence, no native files), 0.0 USD est
+07:20Z | pad paynest | run | gemini-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE C3=PASS others INCONCLUSIVE (5 requests; native child session file with parent, 0 wire threads, no_native), 0.17 USD est
+07:20Z | pad paynest | run | opencode2-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (3 requests, no subagent evidence, no_reader), 0.0 USD est
+07:20Z | pad paynest | run | opencode-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (2 requests, no subagent evidence, no_reader), 0.0 USD est
+07:20Z | pad paynest | run | kilo-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (2 requests, no subagent evidence, no_reader), 0.0 USD est
+07:20Z | pad paynest | run | qwen-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (wait-calls timeout, 1 request, no subagent evidence, no_reader), 0.0 USD est
+07:20Z | pad paynest | run | goose-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (2 requests, no subagent evidence, no_reader), 0.0 USD est
+07:20Z | pad paynest | run | copilot-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (wait-calls timeout, 1 request, no subagent evidence, no_reader), 0.0 USD est
+07:20Z | pad paynest | run | openclaw-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (wait-calls timeout, 1 request, no subagent evidence, no_reader), 0.0 USD est
+07:20Z | pad paynest | run | kimi-code-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (6 wire requests, no subagent evidence, no_reader), 0.0 USD est
+07:20Z | pad paynest | run | crush-cli direct, a437988d, paynest prompt 15 min: INCONCLUSIVE all C INCONCLUSIVE (3 requests, no subagent evidence, no_reader), 0.0 USD est
+07:20Z | pad paynest | wave | Paynest diagnostic wave on a437988d: 13 rows, all INC 'did no work' except subagent evidence: codex gateway 10 subagents linked (12 threads, 10 with parent), claude-code gateway 1 planning subagent linked (waited on it); 10 DeepSeek rows stalled on 402 Insufficient Balance; 1.46 USD est; keyscan 0.
+08:27Z | pad paynest2 | run | claude-code-cli gateway, 284c2610, paynest prompt 15 min: INCONCLUSIVE (C3 PASS, others did no work), 13 subagent sessions in native files, gateway budget 402 killed them, server fetch 429 so no parent view, 0.68 USD est
+08:27Z | pad paynest2 | run | codex-cli gateway, 284c2610, paynest prompt 15 min: INCONCLUSIVE (C3 PASS, provider quota 401/403 x42), 11 subagent rollouts, server fetch 429 so no parent view, 1.23 USD est
+08:27Z | pad paynest2 | run | gemini-cli direct, 284c2610, paynest prompt 15 min: INCONCLUSIVE (C3 PASS), 0 subagents, stalled on an Apply this change permission screen (package.json), 5 requests, server fetch 429, 0.12 USD est
+08:27Z | pad paynest2 | run | hermes-cli direct, 284c2610, paynest prompt 15 min: C1 C2 C4 C5 C6 PASS, C3 INCONCLUSIVE (no MASK exercised), 12 subagents, 12 of 12 linked to parent by task logs, 0 matched / 654 wire_only, local_log none (no_native), 1.75 USD est
+08:27Z | pad paynest2 | run | opencode2-cli direct, 284c2610, paynest prompt 15 min: PASS C1..C6, 28 subagents, 29 threads 28 with parent, 0 matched / 1011 wire_only, local_log none (no_reader), 2.42 USD est
+08:27Z | pad paynest2 | run | opencode-cli direct, 284c2610, paynest prompt 15 min: FAIL C4 (server copy not fetched, R2 HTTP 429), C1 C3 C6 PASS, C2 C5 INCONCLUSIVE, no reader, 378 requests, 1.26 USD est
+08:27Z | pad paynest2 | run | kilo-cli direct, 284c2610, paynest prompt 15 min: FAIL C4 (server copy not fetched, R2 HTTP 429), C1 C3 C6 PASS, C2 C5 INCONCLUSIVE, no reader, 497 requests, 1.33 USD est
+08:27Z | pad paynest2 | run | qwen-cli direct, 284c2610, paynest prompt 15 min: FAIL C4 (server copy not fetched, R2 HTTP 429), C1 C3 C6 PASS, C2 C5 INCONCLUSIVE, 15 subagent sessions in native files, no parent view, 1.07 USD est
+08:27Z | pad paynest2 | run | goose-cli direct, 284c2610, paynest prompt: INTERRUPTED at the stop rule, no seal, no upload, no evidence, spend not measured
+08:27Z | pad paynest2 | run | copilot-cli direct, 284c2610, paynest prompt: INTERRUPTED at the stop rule, no seal, no upload, no evidence, spend not measured
+08:27Z | pad paynest2 | run | openclaw-cli direct, 284c2610, paynest prompt: INTERRUPTED at the stop rule, no seal, no upload, no evidence, spend not measured
+08:27Z | pad paynest2 | run | kimi-code-cli direct, 284c2610, paynest prompt: INTERRUPTED at the stop rule, no seal, no upload, no evidence, spend not measured
+08:27Z | pad paynest2 | run | crush-cli direct, 284c2610, paynest prompt: INTERRUPTED at the stop rule, no seal, no upload, no evidence, spend not measured
+08:27Z | pad paynest2 | wave | Paynest subagent wave 2 on 284c2610: 13 rows, 8 with data; subagents seen on claude-code 13, codex 11, qwen 15, hermes 12, opencode2 28; parents linked 28/28 (opencode2) and 12/12 (hermes, task logs, 0 matched); gateway key budget 402 ended claude-code and codex; R2 HTTP 429 blocked the server fetch on 6 rows; ~9.9 USD est on 8 rows (over the 8 USD rule), 5 rows interrupted unmeasured; keyscan 0
+10:06Z | pad paynest3 | run | opencode-cli direct, 284c2610, paynest prompt: INCONCLUSIVE (no reader, no tool turn seen); 14 subagent threads, 14 with parent on the wire; no stall; ~1.6 USD
+10:06Z | pad paynest3 | run | kilo-cli direct, 284c2610, paynest prompt: PASS C1-C6; 18 subagents, 18 with parent (wire, no reader); ~2.0 USD
+10:06Z | pad paynest3 | run | qwen-cli direct, 284c2610, paynest prompt: PASS C1-C6; 12 subagents, 12 with parent, matched 681 wire_only 7 native_only 0, local log read; ~1.5 USD
+10:06Z | pad paynest3 | run | goose-cli direct, 284c2610, paynest prompt: PASS C1-C6; 10 subagents, 10 with parent (wire, no reader); ~0.9 USD
+10:06Z | pad paynest3 | run | copilot-cli direct, 284c2610, paynest prompt: INCONCLUSIVE C2 (450 requests, no child thread, no reader); ~1.3 USD
+10:06Z | pad paynest3 | run | openclaw-cli direct, 284c2610, paynest prompt: INCONCLUSIVE, 38 requests, prompt pasted but not submitted, recorder refused once; ~0.07 USD
+10:06Z | pad paynest3 | run | kimi-code-cli direct, 284c2610, paynest prompt: PASS C1-C6; 20 subagents, 20 with parent, matched 1036 wire_only 9 native_only 0, local log read; ~2.3 USD
+10:06Z | pad paynest3 | run | crush-cli direct, 284c2610, paynest prompt: INCONCLUSIVE, stalled on the init question (Yep/Nope), 6 requests; 0 USD
+10:06Z | pad paynest3 | run | gemini-cli direct, 284c2610, paynest prompt: INCONCLUSIVE, stalled on a WriteFile confirmation despite YOLO, 3 requests; ~0.17 USD
+10:06Z | pad paynest3 | run | claude-code-cli gateway, 284c2610, paynest prompt: INTERRUPTED at 402 key budget exceeded on the first request, no evidence; codex not started
+10:06Z | pad paynest3 | wave | Paynest subagent wave 3 on 284c2610: 10 of 11 rows ran; PASS kilo, qwen, goose, kimi-code (children all linked to parent: 18, 12, 10, 20); opencode 14/14 linked on wire; copilot, openclaw, crush, gemini no subagent evidence (stalls); gateway 402 ended claude-code, codex not started; R2 fetch retry worked on all rows; ~9.85 USD est (rule 18); keyscan 0
+12:05Z | pad paynest4 | run | opencode-cli direct, 7fdaf9a3, paynest prompt: PASS C1-C6; 19 subagents, 20 threads, 19 with parent (wire links), local log none/no_reader; ~1.38 USD
+12:05Z | pad paynest4 | run | crush-cli direct, 7fdaf9a3, paynest prompt: PASS C1-C6; init answer worked; 4 subagents, 5 threads, 4 with parent, local log none/no_reader; ~0.45 USD
+12:05Z | pad paynest4 | run | gemini-cli direct, 7fdaf9a3, paynest prompt: INCONCLUSIVE, stalled on package.json build-file write approval (Allow once) despite unattended mode, 3 requests; ~0.11 USD
+12:05Z | pad paynest4 | run | openclaw-cli direct, 7fdaf9a3, paynest prompt: INCONCLUSIVE, prompt submitted but only "pondering" with 61 requests, no tool turn, no subagents; ~0.28 USD
+12:05Z | pad paynest4 | wave | Paynest wave 4 on 7fdaf9a3: opencode and crush PASS, gemini and openclaw INCONCLUSIVE (new stalls); keyscan 0; ~2.22 USD est
+13:11Z | integrator | result | A2 pass 3 (H6, Paynest, run r5095e871faedf7bd entry eb0db7de184dbe232): C1 to C6 PASS, 13 subagents, 12 at once, 3.65 USD, gaps 380 ms / 57329 ms quiet kill (harness idle) / watchdog_lost 119788 ms, faults INC on pad status sampling, keyscan 0. Evidence only, not a release row. Reports updated.
+14:25Z | integrator | result | A2 pass 4 (run r0f037b39c4e6efc7 entry ec07bfa0b7a302bf6, fixed pad): X2 PASS 15 subagents 11 at once, C1 to C6 PASS, 4.97 USD, gaps 176 ms / 47331 ms quiet kill / watchdog_lost 116180 ms, faults INC on the quiet minute-30 kill only, keyscan 0. Evidence only.
+15:47Z | integrator | W-CASE key | A2 pass 5 void: Claude key credit balance too low from the first request (71 refused requests recorded, kills recovered 1488 ms / 459 ms, recover ok). Owner top-up needed before a rerun.

@@ -1,0 +1,42 @@
+08:04Z | judge prep PRD-08 | start | merging slice 6 branches
+08:08Z | judge reviewer-A PRD-08 | start | review slice 6 history_complete on origin/v1.0/prd-08-verify
+08:10Z | judge reviewer-A PRD-08 | stop | slice 6 review done: 1 blocker (2nd call dropped reads as compaction, exit 0), 2 fix, nits; probes run in box, not pushed
+08:10Z | judge fixer PRD-08 | start | fixer on prd-08-verify (local branch v1.0/prd-08-verify-fixer)
+08:25Z | judge fixer PRD-08 | fix | history chain rule, GAP replies, joiner, tests; 75 of 75 green in box; pushed
+08:25Z | judge reviewerA PRD-08 | start | re-check slice 6 after fixes
+08:38Z | judge reviewerA PRD-08 | stop | re-check done: A1-A8 fixed or declined soundly; 2 new fix findings (streamed thinking text joined into answer key; GAP on undecoded response not a cover), box probes confirm
+08:40Z | judge fixer PRD-08 | seam | R2: PRD-09 seam request, share Buf and Sse line/hole bookkeeping from src/usage/ with history Sink::data (about 40 to 60 lines cut in verify); not blocking
+08:41Z | judge fixer PRD-08 | fix | N1 N2 R1 fixed, R2 logged as seam request, R3 noted; verify tests 76 of 76 green in box, pushed
+08:43Z | judge fixer PRD-08 | start | fixing N3 N4 N5
+08:45Z | judge fixer PRD-08 | fix | N3 N4 N5 fixed, 77 tests green in box, pushed
+08:45Z | judge reviewer-A PRD-08 | start | re-check slice 6 at 030674e2
+08:46Z | judge reviewer-A PRD-08 | stop | re-check at 030674e2: N3 N4 N5 fixed, R3 decline accepted, no open findings; no box run
+08:46Z | judge merge-requester PRD-08 | seam | queued v1.0/prd-08-verify slice 6 as 084635-prd-08-verify
+09:01Z | judge planner PRD-08 | decision | slice 7: seam shapes (mask_failed, empty ws DATA) + timeline + harness-files manifest + nits
+09:01Z | judge builder PRD-08 | start | seam-shapes slice 7
+09:02Z | judge timeline-manifest PRD-08 | start | worktree created
+09:06Z | judge builder PRD-08 | fix | seam-shapes pushed, 80 tests green; real-entry check not run (tempdirs not kept)
+09:06Z | judge timeline-manifest PRD-08 | start | committed, running box
+09:07Z | judge nits PRD-08 | decision | nits B-N4/B-N5 already in base, no change; branch pushed equal to base
+09:07Z | judge timeline-manifest PRD-08 | stop | pushed, box nextest 85 pass, clippy and fmt clean
+09:09Z | judge merge-prd08 PRD-08 | stop | merged integration+3 task branches, box green (87 tests, build, clippy), pushed; local v1.0/integration in main checkout got stray merges, reset denied
+09:09Z | judge reviewerA PRD-08 | start | review slice 7 of prd-08-verify
+09:13Z | judge reviewerA PRD-08 | stop | slice 7 review done: 3 fix, 2 nit; 89/89 tests pass in box
+09:13Z | judge fixer PRD-08 | start | fixing A1-A5,B-1..B-8
+09:16Z | judge fixer PRD-08 | fix | A1-A5,B-1..B-7 fixed, tests 87 green, pushed
+09:19Z | judge reviewer-A PRD-08 | decision | slice 7 re-check: A1-A5 resolved; 2 fix (timeline off span before first PART dropped; mask_failed GAP wall 0 lands in bucket 0), 2 nit; no box run
+09:20Z | judge fixer PRD-08 | start | fixing A6 A7 A8 A9 B2
+09:20Z | judge fixer PRD-08 | start | fixing A6 A7 A8 A9 B2
+09:21Z | judge fixer PRD-08 | fix | A6 A7 A8 A9 B2-1..3 fixed, 88 tests green, pushed
+09:21Z | judge reviewerA PRD-08 | start | re-check slice 7 fixes at 405d11a0
+09:23Z | judge reviewerA PRD-08 | stop | re-check 405d11a0: A6..B2-3 fixed; box fmt/clippy/nextest 88/88 green; one nit open (off_ms floored per piece, stale module doc)
+09:23Z | judge merge-requester PRD-08 | seam | queued v1.0/prd-08-verify slice 7 as 092335-prd-08-verify
+09:34Z | judge replan PRD-08 | amendment | notes on PRD-08 and PRD-16: slice 7 nits, size report (src 4,177 vs 1,400)
+09:35Z | judge planner PRD-08 | decision | slice 8 planned: timeline ns nit plus Tail::raw replaces Raw/Meter; two tasks
+09:36Z | judge builder PRD-08 | fix | input uses Tail::raw/open_frame, Raw/Meter removed, pushed
+09:38Z | judge builder PRD-08 | fix | timeline ns carry done, pushed v1.0/prd-08-verify-timeline-ns-nit
+09:39Z | judge merger PRD-08 | stop | merged both task branches (fast-forward + merge), box green, pushed eec80b9b
+09:40Z | judge reviewer-A PRD-08 | start | review of prd-08-verify slice 8, box run of fmt clippy nextest
+09:41Z | judge reviewer-A PRD-08 | stop | slice 8 review done; box fmt, clippy, 106 nextest pass; no blocker
+09:43Z | judge fixer PRD-08 | fix | pushed prd-08-verify: dump tail once, off_ms comment; 91 tests green
+09:43Z | judge merge-requester PRD-08 | seam | queued 094340-prd-08-verify for v1.0/prd-08-verify slice 8

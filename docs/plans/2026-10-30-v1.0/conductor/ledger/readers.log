@@ -1,0 +1,34 @@
+06:39Z | readers A-wire-ids | start | worktree /root/gc-wt/sub-a on aa36af92
+06:44Z | readers A-wire-ids | stop | pushed v1.0/prd-09-subagent-wire-ids at 7e28f16e; not compiled (no box); verifier/check.py runs on pad-out records still owed
+06:45Z | readers reviewer-A-r1 | review | prd-09-subagent-wire-ids read
+06:46Z | readers fixer-A | start | A1: drop the parent-only wire thread
+06:46Z | readers fixer-A | stop | A1 fixed: parent-only wire thread dropped, pushed 2f1d4c71; not compiled (no box)
+06:48Z | readers reviewer-r2 | review | prd-09-subagent-wire-ids: A1 closed; open: rustfmt --check fails in hints.rs (2 spots) and tests/check_wire_ids.rs (5 spots), gate step cargo fmt would fail
+06:49Z | readers impl-C | start | C-qwen-chats on v1.0/prd-09-qwen-chats
+06:49Z | readers B-gemini-rows | start | worktree /root/gc-wt/sub-b on 2f1d4c71
+06:52Z | readers impl-C | stop | C-qwen-chats pushed a8f39d7e on v1.0/prd-09-qwen-chats (red de6ad7db); rustfmt clean on my lines; not compiled, real-record verifier run not done (no box)
+06:53Z | readers impl-D | start | D-kimi-wire on v1.0/prd-09-kimi-wire
+06:54Z | readers B-gemini-rows | stop | pushed v1.0/prd-09-gemini-rows at 6eeea246; not compiled (no box); verifier/check.py run on gemini pad-out record still owed
+06:54Z | readers impl-E | start | E-sqlite-threads on v1.0/prd-09-sqlite-threads at 2f1d4c71
+06:59Z | readers impl-D | stop | D-kimi-wire pushed 3e1dfdc8 on v1.0/prd-09-kimi-wire (red 9a124da3); rustfmt clean on my lines; not compiled, real-record verifier run not done (no box)
+07:01Z | readers impl-E | stop | E-sqlite-threads pushed 577db8a6 on v1.0/prd-09-sqlite-threads (red da9a5938); twox-hash (MIT) not xxhash-rust (BSL-1.0, refused by licence list); not compiled; verifier/check.py on crush and goose pad-out records owed
+07:01Z | readers reviewer-r1 qwen-chats | review | origin/v1.0/prd-09-qwen-chats: approve with fixes (PRD-09 row 252 stale, Qwen token row missing; output convention vs Gemini wire shape to confirm on pad)
+07:02Z | readers reviewer-kimi-wire | start | round 1 review of v1.0/prd-09-kimi-wire
+07:04Z | readers reviewer-kimi-wire | verdict | round 1: changes requested, native time is llm.request start but the time join expects a call end (1 fix, 3 nits)
+07:04Z | readers reviewer-B-r1 | review | origin/v1.0/prd-09-gemini-rows: approve with fixes (PRD-09 Gemini rows stale, hints.rs:9 over 100 cols, pad-out verifier/check.py run owed)
+07:06Z | readers reviewer-E | review | origin/v1.0/prd-09-sqlite-threads round 1 read
+07:06Z | readers fixer | fixed | C-qwen-chats F1 F2: PRD-09 rows, qwen() output comment, fixture total; pad record confirms candidates = wire output on 11 calls with thoughts > 0
+07:07Z | readers fixer | fixed | B-gemini-rows B1: PRD-09 Gemini chat row, thread row, reader list; hints.rs:9 rewrapped. B2 declined here: needs a box build and run, none allowed in this lane
+07:08Z | readers fixer | fix | D-kimi-wire F1: native kimi rows end at usage.record, join reads the end; red test a_long_call_joins_its_own_wire_call_by_its_end; pushed 55532f72; pad-05ecd3 check not run (no box, needs verifier build)
+07:08Z | readers reviewer-r2 qwen-chats | review | origin/v1.0/prd-09-qwen-chats at 97f8f53c: F1 F2 closed; open: real-record run not done, time join can take an earlier extractor wire call; PRD line wrap nit
+07:09Z | readers fixer | fixed | E1 empty Crush parent now checked by hints::id before hashing; pushed v1.0/prd-09-sqlite-threads c67f36a7
+07:10Z | readers review-r2 | review | prd-09-kimi-wire: F1 fix sound (join on usage.record end, Codex/Claude unchanged, rustfmt clean); open: pad-05ecd3 box check, one doc-wording nit
+07:10Z | readers reviewer-r2 gemini-rows | review | origin/v1.0/prd-09-gemini-rows at 60b94150: B1 closed; open: B2 box build/test and pad-616a26 acceptance run; nits: same-usage preference also changes Hermes and fallback time joins untested, PRD reader line wrap
+07:10Z | readers reviewer-E-r2 | review | origin/v1.0/prd-09-sqlite-threads at c67f36a7: E1 fixed, red test pins it, nothing open
+07:11Z | readers assembler | start | worktree sub-asm from prd-09-subagent-wire-ids, merging four lanes
+07:13Z | readers assembler | merged | v1.0/prd-09-subagent-links 28f9ec3a: four lanes merged, every arm kept (hints.rs, native.rs, PRD-09 doc), fmt fix for A R2-1; box next
+07:20Z | readers assembler | box | box 1 on 28f9ec3a: fmt clean, 689 passed, 2 failed (check_kimi_wire native_calls_join_the_wire_by_time, check_wire_ids codex_websocket_client_metadata_names_the_parent)
+07:20Z | readers assembler | fixed | two test fixture bugs (codex ws response.completed with no response object; kimi sorted thread order), pushed a13e8b93; box 2 next
+07:27Z | readers assembler | box | box 2 on a13e8b93: fmt clean, 691 tests run: 691 passed (6 slow), 4 skipped, exit 0; real-record runs (B2, C R2-1, D R2-1) still owed
+07:27Z | readers final-review | start | reviewing integration...prd-09-subagent-links
+07:29Z | readers final-review | review | integration...prd-09-subagent-links at a13e8b93: design A-E met in code, privacy and hints.rs rule hold; blocker: no real-record verifier+check.py run on any named pad-out record; fixes: PRD-09 and harness docs stale, same-usage tie-break untested on Hermes/Claude, silent thread-db failure

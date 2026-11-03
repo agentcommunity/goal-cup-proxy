@@ -1,0 +1,81 @@
+19:31Z | verify builder PRD-08 | fix | C3 placeholder() and masker-identical glued guard pushed on v1.0/prd-08-verify-c3-placeholder-and-glued-guard; nextest 93/93, clippy, fmt green in box; SEAM NOTE PRD-05: export glued
+19:34Z | verify reviewerA PRD-08 | start | review slice 8 C3 placeholder and glued fix on prd-08-verify
+19:36Z | verify reviewerA PRD-08 | stop | slice 8 review: 1 blocker (glued warn to pass breaks PRD acceptance), fixes on split PEM test filter and size; box 94/94 green, clippy green
+19:36Z | verify fixer PRD-08 | start | fixing A1-A4
+19:40Z | verify fixer PRD-08 | fix | A1-A4 done, tests green 92/92, pushed; A5 logged as seam request to PRD-05
+19:42Z | verify reviewer-A PRD-08 | start | re-review slice 8 C3 fix at 2c6c477e, box run fmt clippy nextest
+19:43Z | verify reviewer-A PRD-08 | stop | slice 8 re-review: A1 A2 A4 closed, box fmt clippy nextest 92/92 pass; open: size decision line sits in a stray new PRD-08-verifier.md, not the PRD's Amendments, and states 270 for a 291-line test file
+19:43Z | verify fixer PRD-08 | fix | size decision moved into PRD-08-verifier-checks.md with true counts, stray file removed; docs only, no box run
+19:44Z | verify merge-requester PRD-08 | seam | queued merge request 194411-prd-08-verify (slice 8, C3 placeholder/glued fix)
+02:07Z | verify replan PRD-08 | amendment | slice 8 notes on PRD-08, PRD-05 (glued seam request), PRD-16; verifier src 4171 outside usage vs 1400 row
+02:26Z | verify planner PRD-08 | decision | next slice: C3 placeholder ellipsis fix, one task; prd-08-verify merged with integration
+02:28Z | verify c3-ellipsis PRD-08 | fix | C3 ellipsis around placeholder accepted, pushed v1.0/prd-08-verify-c3-ellipsis
+02:29Z | verify merger PRD-08 | stop | lane merge pushed, box build+clippy+92 tests pass
+02:31Z | verify fixer PRD-08 | start | fixing A1 placeholder escaped ellipsis
+02:32Z | verify fixer PRD-08 | fix | A1 escaped ellipsis token added, 92 tests green, pushed
+02:32Z | verify merge-requester PRD-08 | seam | queued 023258-prd-08-verify (C3 placeholder fix)
+05:51Z | verify planner PRD-08 | decision | next slice: report counts gain hosts and tunnel_hosts (S6, rung 8 F3) plus history text-warn look; one task
+05:54Z | verify report-hosts-tunnels PRD-08 | seam | history_complete text warn on Claude Code chain-1 'resends answer 3 (text)' not decided without the real record. Read history.rs turn/texts/event and secrets answer_text: resent text blocks are joined with no separator and thinking blocks skipped; SSE text_delta joined the same and whitespace-collapsed, so split text blocks and thinking-plus-text give the same key (no verifier fault found, no code changed, warn kept). Remaining cause is likely a harness-synthesised assistant turn (e.g. interrupt or no-response placeholder) or a response recorded with a hole; owner PRD-09/PRD-01 to check against the pad record.
+05:54Z | verify merger PRD-08 | start | merging lane
+05:55Z | verify merger PRD-08 | stop | pushed 3d73051f, box 93/93 pass, clippy clean
+05:56Z | verify reviewerA PRD-08 | stop | slice report hosts/tunnel_hosts review: no blockers, 3 nits; box run skipped (diff read only)
+05:56Z | verify fixer PRD-08 | start | fixing A1,A2,B1
+05:57Z | verify fixer PRD-08 | fix | A1 B1 A2 done, 93 tests pass, pushed
+05:58Z | verify merge-requester PRD-08 | seam | queued 055806-prd-08-verify (S6 hosts/tunnel_hosts, history_complete warn)
+06:22Z | verify builder PRD-08 | fix | v1 zero-byte listed tunnel no longer fails; branch pushed
+06:22Z | verify builder-v2 PRD-08 | fix | history_complete second key (name+args) for rewritten tool-call ids; box green; pushed
+06:24Z | verify v3 PRD-08 | fix | timeline nits already on branch; added unaligned-span test, box green
+06:26Z | verify merger PRD-08 | fix | merged v1..v3 into prd-08-verify, box green; note: first merge attempt hit the primary checkout detached HEAD (now 2c474cb8), reset denied
+06:29Z | verify reviewerA PRD-08 | start | review of prd-08-verify slice 9, box run of verify crate tests
+06:30Z | verify reviewerA PRD-08 | stop | slice 9 review done; box fmt, clippy, 96 of 96 verify tests pass; V1 ok, V2 fallback loosens real orphans
+06:33Z | verify fixer PRD-08 | fix | A1 id-normalised key replaces name+args key; nits fixed; 96 tests green; pushed
+06:36Z | verify fixer PRD-08 | fix | A6 A7 R1 R2 R3 done, A5 declined, box green, pushed
+06:37Z | verify fixer PRD-08 | fix | removed stray call-id doc lines from websocket test, 95 pass, pushed
+06:39Z | verify reviewer-A PRD-08 | stop | slice 9 re-check: R1/R1b closed; one new fix (zero-byte listed tunnel drops out of listed_conns breakdown); no box run, doc-only change since last green run
+06:39Z | verify verify PRD-08 | stop | PRD-08 Slice 9: rung 1 sweep fixes V1 (zero-byte listed tunnel is no loss) and V2 (OpenClaw history_complete orphans), plus the two open slice 7 nits not merged: findings still open after the last review round: A7 (branch v1.0/prd-08-verify)
+06:41Z | verify fixer PRD-08 | fix | A7 listed tunnels with no byte counted in tunnels_empty; tests green, pushed
+06:41Z | verify merge-requester PRD-08 | seam | queued merge request 064152-prd-08-verify for v1.0/prd-08-verify slice 9
+06:55Z | verify replan PRD-08 | amendment | slice 9 replan: A8 unended-tunnel bucket nit and B-A7-1 queued in PRD-08 note, size report in PRD-16, no seam change
+09:28Z | verify builder PRD-08 | start | gemini-parent-test worktree ready
+09:30Z | verify builder PRD-08 | seam | gemini-parent-test pushed; 4 reader cases fail until the reader lands, wire case and rest of suite green
+09:31Z | verify gemini-parent-reader PRD-08 | fix | Gemini chat reader pushed v1.0/prd-08-verify-gemini-parent-reader; box nextest 96 pass, clippy and fmt clean; vendor pages unreachable (host not allowed)
+09:35Z | verify merger PRD-08 | stop | lane merged and pushed; also: an early merge ran in the primary checkout by mistake
+09:37Z | verify reviewer-A PRD-08 | start | review of prd-08-verify Gemini parent slice; box run of goalcup-verify tests
+09:39Z | verify reviewer-A PRD-08 | stop | prd-08-verify Gemini parent review done at 8c1563a3: box nextest 100/100 pass, clippy clean, rustfmt fails on the new test; 1 blocker (src/usage/ is PRD-09 owned), fixes on id fallback
+09:40Z | verify fixer PRD-08 | decision | A1: reassignment recorded as PRD-08 amendment (integrator routing 09:27Z); code fixes A2,A4,A5,B1-B3 applied
+09:43Z | verify reviewerA PRD-08 | stop | re-check of prd-08-verify gemini parent: fixes not on origin branch (head still 8c1563a3); local 478aeaf7 passes 101 tests but fails cargo fmt --check
+09:44Z | verify fixer PRD-08 | start | R1 push 478aeaf7 ff, rustfmt native.rs
+09:45Z | verify fixer PRD-08 | fix | pushed f3ee1b81 (ff of 478aeaf7 + rustfmt); box: fmt ok, 101/101 passed
+09:46Z | verify reviewer-A PRD-08 | start | re-review of v1.0/prd-08-verify head f3ee1b81
+09:47Z | verify reviewer-A PRD-08 | stop | re-review of f3ee1b81: fixes pushed, fmt ok, nextest 101/101 in box, no open findings
+09:47Z | verify merge-requester PRD-08 | seam | queued merge request 094742-prd-08-verify for v1.0/prd-08-verify gemini parent slice
+09:59Z | verify replan PRD-08 | amendment | notes added to PRD-08 and PRD-16: src 7136 vs 1400 budget, no gate effect
+10:12Z | verify builder PRD-08 | fix | history_complete masked-resend ends key pushed on v1.0/prd-08-verify-history-masked-ends, box green
+10:13Z | verify lanemerge PRD-08 | stop | merged integration + history-masked-ends, box 105 tests pass, clippy clean, pushed
+10:15Z | verify revA PRD-08 | start | review slice 10 history masked ends; probe box run for chain break on masked request
+10:17Z | verify revA PRD-08 | stop | slice 10 review: blocker, a MASK on a later request rekeys earlier starred text turns, breaks the chain, and a dropped tool call is skipped as compacted (box probe)
+10:17Z | verify fixer PRD-08 | start | fixing A1 A2 B1
+10:20Z | verify fixer PRD-08 | fix | A1 A2 B1 done, 107 tests green in box, pushed
+10:20Z | verify reviewerA PRD-08 | start | re-check slice 10 history masked resend fix
+10:23Z | verify reviewerA PRD-08 | stop | re-check slice 10 done: A1 A2 fixed, box 107/107, new fixtures fail on old code; one new fix (ws held message flushed late)
+10:23Z | verify fixer PRD-08 | start | fixing A5 R1
+10:27Z | verify fixer PRD-08 | fix | A5 R1 fixed, box green 108 tests, pushed
+10:28Z | verify reviewer-A PRD-08 | start | re-review of slice 10 history masked-resend after A5 and R1 fixes
+10:29Z | verify reviewer-A PRD-08 | stop | slice 10 re-review: A5 and R1 fixed, R2 R3 R4 declines accepted, box fmt nextest 108 pass clippy clean, no open findings
+10:29Z | verify merge-requester PRD-08 | seam | queued 102941-prd-08-verify (history.rs, check_history.rs only)
+10:38Z | verify replan PRD-08 | amendment | slice 10 notes added to PRD-08 and PRD-16: src 7220 vs 1400 budget, no gate effect
+19:05Z | verify planner PRD-08 | decision | next slice: Hermes delegation task-log subagent reader (HermesTask) plus PRD-08 R5 reword and PRD-09 row seam note; two tasks; prd-08-verify merged with integration
+19:06Z | verify prd08-hermes-docs PRD-08 | fix | Hermes state.db dropped docs amendment pushed
+19:09Z | verify hermes-task-reader PRD-08 | fix | Hermes task-log reader pushed, fmt/clippy/nextest green
+19:09Z | verify merger PRD-08 | fix | merged into main checkout by mistake (cd failed), restored detached HEAD to 786d68c5; redoing in own worktree
+19:10Z | verify merger PRD-08 | seam | merged integration + hermes-task-reader + hermes-docs, pushed v1.0/prd-08-verify at 2f9d3d80; box build, clippy, nextest 116/116 pass
+19:13Z | verify reviewer-A PRD-08 | decision | review of v1.0/prd-08-verify slice 11: 2 blockers (missing 'not tied to calls' wording; state.db+task children double count), box run skipped
+19:13Z | verify fixer PRD-08 | start | fixing A1 A2 B1 and nits
+19:26Z | verify fixer PRD-08 | fix | A1 A2 A3 A4 B1 B2 B4 fixed, tests green, pushed
+19:28Z | verify reviewer-A PRD-08 | start | re-check of prd-08-verify slice 11 at e321670d58eee3572fdd5dcb0b2df73163a0dc1d
+19:29Z | verify reviewer-A PRD-08 | stop | re-check done: nextest 117/117 in box; A1-A5 fixed, open: stale amendment text (fix), two nits
+19:30Z | verify fixer PRD-08 | fix | A6 B6 B7 A8 done, tests green, pushed; A7 A9 B5 left
+19:31Z | verify reviewer-A PRD-08 | start | re-review slice 11 hermes task logs at 83a2abdb
+19:32Z | verify reviewer-A PRD-08 | stop | re-review done: fmt, clippy, 117/117 nextest pass at 83a2abdb; A6 B6 B7 A8 fixed, declines accepted, no open fix
+19:32Z | verify merge-requester PRD-08 | seam | queued 193247-prd-08-verify (slice 11 Hermes task logs; usage/* is PRD-08 per 09:27Z routing)
+19:42Z | verify replan PRD-08 | amendment | slice 11 notes in PRD-08, PRD-09, PRD-16: verify src 7359 vs 1400 budget, tests 5099 vs 1100, no gate effect

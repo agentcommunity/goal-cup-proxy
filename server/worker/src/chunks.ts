@@ -2,21 +2,22 @@
 // (section "PUT /v1/runs/{run_id}/chunks/{offset}"); the steps below follow its order.
 //
 //   1. refuse early, before the body is read (offset, size, headers, the run and entry)
-//   2. a retry of a chunk already stored: answer with the stored ack, body unread (before the
+//   2. a retry of a chunk already stored: answer from the stored chunk, body unread (before the
 //      run state is looked at, so a retry is answered whatever has happened since)
 //   3. the run state: open, the entry not sealed, and nothing past the end of the run
 //   4. offset / prev / first_seq must continue exactly where the entry stands (409 otherwise)
-//   5. the run's size limit: the run's stored bytes plus this chunk's Content-Length must stay
-//      within RUN_MAX_COMPRESSED_BYTES (413 quota_exceeded otherwise, body unread, nothing stored)
-//   6. stream the body into R2, create-only, with R2 checking the sha256 (422 if wrong)
-//   7. sign the ack; one atomic database step advances offset/head, records chunk + ack, and adds
-//      the chunk's compressed size to the entry's stored_bytes and one to its chunk_count
-//   8. return the ack
+//   5. stream the body into R2, create-only, with R2 checking the sha256 (422 if wrong); there is
+//      no per-run size limit, a run that crosses each 10 GiB writes one log line instead
+//   6. one atomic database step advances offset/head, records the chunk, and adds the chunk's
+//      compressed size to the entry's stored_bytes and one to its chunk_count
+//   7. answer with the new position {offset, next_seq, head, received_at, sealed}; if this chunk
+//      ends at the end the final heartbeat committed, the server now holds the whole chain and
+//      seals the entry (runs.ts trySeal)
 
 import type { Ctx } from "./context.ts";
 import { type ChunkRecord, type EntryRow, type RunRow, isPastEnd } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
-import { FINAL_RETRY_AFTER, requireOpen, requireRun } from "./runs.ts";
+import { FINAL_RETRY_AFTER, requireOpen, requireRun, trySeal } from "./runs.ts";
 import { formatTime, isEntryId, isHex64, parseSafeUint } from "./util.ts";
 
 export const MAX_CHUNK_BYTES = 33_554_432; // 32 MiB, compressed
@@ -42,11 +43,11 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   const { run, entry } = await requireRun(ctx, member, runId, h.entryId);
 
   // 2. A chunk the server already holds, sent again (a reply was lost): same offset, same length,
-  //    same head -> the stored ack, without touching the body.
+  //    same head -> the same answer as the first time, without touching the body, and `sealed` as the entry stands.
   const held = offset < entry.offset ? await ctx.db.getChunk(member, runId, entry.entry_id, offset) : null;
-  if (held !== null && held.length === h.length && held.head === h.head) return storedAnswer(held);
+  if (held !== null && held.length === h.length && held.head === h.head) return storedAnswer(held, entry.sealed_at !== null);
 
-  // 3. The run state: open (not abandoned, not closed) and the entry not sealed.
+  // 3. The run state: open (not closed) and the entry not sealed.
   requireOpen(ctx, run, entry);
 
   // 3. ...and the end. Once the run is over a chunk is accepted only after the final heartbeat has
@@ -69,17 +70,12 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   if (h.prev !== entry.head) throw conflict("Goalcup-Prev is not the head the server holds.");
   if (h.firstSeq !== entry.next_seq) throw conflict(`Goalcup-First-Seq is ${h.firstSeq} but the server expects ${entry.next_seq}.`);
 
-  // 5. The run's size limit, before a byte of the body is read or stored. A retry of a chunk the
-  //    server holds was answered above, so it is never refused here.
-  checkQuota(ctx, run, contentLength);
-
-  // 6. Stream into R2.
+  // 5. Stream into R2.
   const key = chunkKey(run, entry, offset, h.sha256);
   await storeBody(ctx, request, contentLength, key, h.sha256);
 
-  // 7. The ack, then one atomic step that records everything; 8. the answer.
+  // 6. One atomic step that records everything; 7. the answer.
   const receivedAt = formatTime(ctx.now());
-  const ack = await ctx.signer.signAck(entry.entry_id, h.lastSeq, h.head, receivedAt);
   const chunk: ChunkRecord = {
     entry_id: entry.entry_id,
     offset,
@@ -91,18 +87,17 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
     head: h.head,
     r2_key: key,
     received_at: receivedAt,
-    ack,
   };
   const result = await ctx.db.commitChunk({ member_id: member, run_id: runId, chunk, stored_bytes: contentLength });
   switch (result) {
     case "committed":
-      noteQuota(ctx, run, contentLength);
-      return storedAnswer(chunk);
+      noteLargeRun(run, contentLength);
+      return storedAnswer(chunk, await sealIfComplete(ctx, member, runId, entry, h));
     case "conflict": {
       // Someone moved the run between our check and our commit. If that someone was a retry of
-      // this very chunk, its ack is the answer; otherwise goalcup must re-read the position.
+      // this very chunk, answer as for that retry; otherwise goalcup must re-read the position.
       const stored = await ctx.db.getChunk(member, runId, entry.entry_id, offset);
-      if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored);
+      if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored, await sealIfComplete(ctx, member, runId, entry, h));
       throw conflict("The run moved while this chunk was being stored; read the position again.");
     }
     case "beyond_final":
@@ -114,33 +109,22 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   }
 }
 
-/**
- * 413 quota_exceeded when this chunk would take the run past RUN_MAX_COMPRESSED_BYTES. goalcup
- * keeps its data and retries, so raising the variable resumes the upload where it stopped.
- * The check reads the run's total as it was a moment ago, so concurrent uploads to several entries
- * of one run can pass it by at most one chunk (32 MiB) each.
- */
-function checkQuota(ctx: Ctx, run: RunRow, contentLength: number): void {
-  const max = ctx.cfg.runMaxCompressedBytes;
-  if (run.stored_bytes + contentLength <= max) return;
-  // One line per refusal for the operators (Workers Logs). goalcup retries with backoff, so a
-  // run at its limit repeats this line every few minutes until the limit is raised or the run ends.
-  console.error(`quota-exceeded ${run.run_id} stored=${run.stored_bytes} chunk=${contentLength} max=${max}`);
-  throw new ApiError(
-    413,
-    "quota_exceeded",
-    `This run holds ${run.stored_bytes} compressed bytes; this chunk would pass the server's limit of ${max} per run. ` +
-      "Nothing was stored. Keep the data: the upload resumes when the organizers raise the limit.",
-  );
-}
+const LOG_EVERY_BYTES = 10 * 1024 ** 3; // 10 GiB
 
-/** A log line for the operators when a committed chunk takes the run to half its limit, or to all of it. */
-function noteQuota(ctx: Ctx, run: RunRow, contentLength: number): void {
-  const max = ctx.cfg.runMaxCompressedBytes;
+/** One log line each time a committed chunk takes the run across another 10 GiB, so the owner sees a large run. */
+function noteLargeRun(run: RunRow, contentLength: number): void {
   const before = run.stored_bytes;
   const after = before + contentLength;
-  if (before < max && after >= max) console.warn(`quota-full ${run.run_id} stored=${after} max=${max}`);
-  else if (2 * before < max && 2 * after >= max) console.warn(`quota-half ${run.run_id} stored=${after} max=${max}`);
+  if (Math.floor(after / LOG_EVERY_BYTES) > Math.floor(before / LOG_EVERY_BYTES)) console.warn(`large-run ${run.run_id} stored=${after}`);
+}
+
+/**
+ * After a commit: if the final heartbeat had committed an end and this chunk ends exactly there, the
+ * server holds the whole chain, so it seals the entry. Only the committed final head is ever passed.
+ */
+async function sealIfComplete(ctx: Ctx, member: string, runId: string, entry: EntryRow, h: ChunkHeaders): Promise<boolean> {
+  if (entry.final === null || h.lastSeq !== entry.final.seq || h.head !== entry.final.head) return false;
+  return trySeal(ctx, member, runId, entry.entry_id, entry.final.head);
 }
 
 /** Past the committed end: it ends after the final seq, or ends at it with another head. */
@@ -148,8 +132,8 @@ function goesBeyond(h: ChunkHeaders, final: { seq: number; head: string }): bool
   return h.lastSeq > final.seq || (h.lastSeq === final.seq && h.head !== final.head);
 }
 
-function storedAnswer(c: ChunkRecord): Response {
-  return json(200, { ack: c.ack, offset: c.offset + c.length, next_seq: c.last_seq + 1, head: c.head });
+function storedAnswer(c: ChunkRecord, sealed: boolean): Response {
+  return json(200, { offset: c.offset + c.length, next_seq: c.last_seq + 1, head: c.head, received_at: c.received_at, sealed });
 }
 
 /** traces/{event}/{run_id}/{entry_id}/{offset:016}-{sha256}.zst. The hash is in the name, so a name is only ever those bytes. */

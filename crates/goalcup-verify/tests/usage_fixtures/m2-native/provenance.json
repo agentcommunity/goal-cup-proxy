@@ -1,0 +1,15 @@
+{
+ "purpose": "PRD-09 usage reader fixtures: native transcript excerpts (Codex rollout, Claude Code session transcript) for the native readers and the id join",
+ "copy": "all four byte for byte (sha256 equal to the source) from crates/goalcup-verifier/tests/fixtures/m2-native/ at commit 15a6963b57f1cb341b4efcaf10aa92d6dc633c31; the two E01 excerpts are redacted, ids and workspace paths replaced by placeholders, as the old crates/goalcup-verifier/tests/it/m2_native_observations.rs doc comment says (sha256 6e3cc8725a58861deeeb45a0603fc11eac89e3f38c0d4664e7901d985c1bcef8); the two spike excerpts are sanitized spike fixtures that keep their real session ids (and, for Claude Code, request ids) and workspace paths, and hold no key or token; the four empty *.redactions.jsonl audit files were not copied",
+ "files": {
+  "codex-native-excerpt.jsonl": {"sha256": "d716ba6e8441d882e1a88bd01bc7f5680378fcf71489ddc133ce766d0d2ffd25", "bytes": 6024, "lines": 12, "source": "Codex CLI 0.153.0 TUI rollout spike fixture"},
+  "codex-native-e01-excerpt.jsonl": {"sha256": "0d6fc5792ef4a9434961d2c0264478ca2cdf51d89524456fd371e54d9ae2c79a", "bytes": 1331, "lines": 2, "source": "Codex CLI 0.153.0 exec, E01 run codex-20260928T032110Z"},
+  "claude-code-native-excerpt.jsonl": {"sha256": "fb048b0d8363d2674c601f15bdbbca2098effd4e6b181178fc0af98b392cc97b", "bytes": 7339, "lines": 11, "source": "Claude Code CLI 2.1.259 main session spike fixture"},
+  "claude-code-native-e01-excerpt.jsonl": {"sha256": "24e7c70b1d7833800d632aa7483fe6643616c2fd68e66a15a6c496607d0a34e8", "bytes": 4700, "lines": 6, "source": "Claude Code CLI 2.1.283 sdk, E01 run claude-20260928T032648Z, plus one system.api_error line from claude-20260928T032205Z"}
+ },
+ "secret_scan": {
+  "how": "the pattern scan named in ../m2-openai/provenance.json, in a build box on the committed branch",
+  "result": {"codex-native-excerpt.jsonl": 0, "codex-native-e01-excerpt.jsonl": 0, "claude-code-native-excerpt.jsonl": 0, "claude-code-native-e01-excerpt.jsonl": 0},
+  "follow_up": "rerun goalcup-verify secrets (PRD-08) over this folder when it lands"
+ }
+}

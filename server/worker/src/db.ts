@@ -10,12 +10,12 @@
 //   * Every write is atomic: it either applies fully against the state the caller saw, or it
 //     reports why not and changes nothing.
 
-import type { Ack, StartReceipt } from "./sign.ts";
 import { addSeconds, formatTime } from "./util.ts";
 
 /** Twenty-four hours after a run ends the server closes it: no upload is accepted after that. */
 export const CLOSE_AFTER_SECONDS = 24 * 3600;
 
+/** `abandoned` is only read: rows from before 1.0 may carry it, and nothing sets it any more. */
 export type RunStatus = "open" | "sealed" | "incomplete" | "abandoned";
 /** `test`: an organizer's test run (allowlisted accounts only, its own event and R2 prefix, deleted in one go). */
 export type RunMode = "competition" | "practice" | "test";
@@ -43,7 +43,7 @@ export function isPastClose(run: { deadline_at: string; replaced_at: string | nu
 /**
  * What the run's status is at `now`. A run is `sealed` once it is over and its current entry is
  * sealed, and `incomplete` once it has been over for the close time with that entry unsealed.
- * `abandoned` and the words already written stay as they are.
+ * Words already written stay as they are.
  */
 export function statusAt(run: RunRow, now: Date, closeAfterSeconds: number = CLOSE_AFTER_SECONDS): RunStatus {
   if (run.status !== "open" || !isPastEnd(run, now)) return run.status;
@@ -93,19 +93,19 @@ export interface RunRow {
   current_sealed_at: string | null;
   /**
    * What the run holds in R2 so far, over all its entries: the compressed bytes (each committed
-   * chunk's Content-Length) and the number of committed chunks. The per-run size limit
-   * (RUN_MAX_COMPRESSED_BYTES) is checked against `stored_bytes`.
+   * chunk's Content-Length) and the number of committed chunks. There is no per-run size limit;
+   * the chunk path logs each 10 GiB a run crosses.
    */
   stored_bytes: number;
   chunk_count: number;
 }
 
-/** One segment of a run: its own chain, receipt and seal. Segment 0 is made by `POST /v1/runs`. */
+/** One segment of a run: its own chain and seal. Segment 0 is made by `POST /v1/runs`. */
 export interface EntryRow {
   entry_id: string;
   run_id: string;
   segment: number;
-  // What the open (or continue) call sent; the receipt signs these.
+  // What the open (or continue) call sent.
   connector_id: string;
   manifest_sha256: string;
   connector_dir_sha256: string;
@@ -115,11 +115,9 @@ export interface EntryRow {
   offset: number;
   next_seq: number;
   head: string;
-  last_ack: Ack | null;
   /** Set once, by the final heartbeat. */
   final: FinalRow | null;
   // Set once.
-  receipt: StartReceipt | null;
   seal_sha256: string | null;
   baseline_sha256: string | null;
   sealed_at: string | null;
@@ -142,7 +140,6 @@ export interface ChunkRecord {
   head: string;
   r2_key: string;
   received_at: string;
-  ack: Ack;
 }
 
 /** The facts about the machine goalcup sends: a flat object of strings, numbers, booleans and nulls. */
@@ -207,15 +204,6 @@ export interface ContinueRunArgs {
  */
 export type ContinueRunResult = ({ kind: "created" | "existing" } & RunAndEntry) | { kind: "conflict" | "closed" | "not_found" };
 
-export type StoreReceiptResult =
-  | { kind: "stored"; receipt: StartReceipt }
-  | { kind: "existing"; receipt: StartReceipt } // same chain_head as the stored one
-  | { kind: "conflict" } // a receipt exists with a different chain_head
-  | { kind: "closed" } // the run is abandoned or incomplete, or the entry is sealed
-  | { kind: "not_found" };
-
-export type AbandonResult = "abandoned" | "has_chunks" | "closed" | "not_found";
-
 export interface CommitChunkArgs {
   member_id: string;
   run_id: string;
@@ -234,22 +222,18 @@ export type CommitChunkResult = "committed" | "conflict" | "beyond_final" | "clo
 export type RecordingState = "ok" | "gaps" | "failed" | "unknown";
 
 /**
- * What a heartbeat may say about goalcup's own processes and the machine's free disk, and
- * nothing else (docs/UPLOAD-API.md, heartbeat). Every field is optional; a field goalcup sent
- * as null is left out. `agent_paused: "disk"`: goalcup has paused the agent because the disk is
- * almost full; vitals without it say the agent is not paused.
+ * A heartbeat's written counts (docs/UPLOAD-API.md, heartbeat): a flat object the server checks for
+ * shape and size only and never interprets. It fixes no key list.
  */
-export interface Vitals {
-  disk_free_bytes?: number;
-  disk_short?: boolean;
-  agent_paused?: "disk";
-  rss_bytes?: number;
-  cpu_ms?: number;
-  open_files?: number;
-}
+export type Counts = Record<string, number | string | boolean | null>;
 
-/** A disk pause that begins is owed a disk_full email unless the run's last one began less than this long ago. */
-export const DISK_NOTICE_GAP_SECONDS = 6 * 3600;
+/**
+ * What a heartbeat stores in its `vitals` column and as the run's `last_vitals` (the column names
+ * stay; renaming them would be a migration): the counts nested under one key, or, when the
+ * heartbeat's `counts` was not valid, only its length as JSON. Nothing the client names ever sits at
+ * the top level of this object.
+ */
+export type HeartbeatVitals = { counts: Counts } | { counts_dropped: number };
 
 export interface HeartbeatArgs {
   member_id: string;
@@ -263,8 +247,8 @@ export interface HeartbeatArgs {
   /** Optional facts the heartbeat carries; null when it did not send them. */
   recording: RecordingState | null;
   model_requests: number | null;
-  /** Null when the heartbeat sent none. */
-  vitals: Vitals | null;
+  /** Null when the heartbeat sent no `counts`. */
+  vitals: HeartbeatVitals | null;
   /** Server-side facts about the connection (never shown to anyone). */
   client_ip: string | null;
   client_country: string | null;
@@ -276,11 +260,10 @@ export interface HeartbeatArgs {
  * the run (once, the first wins). `model_requests` is kept per entry (a continued process counts
  * from zero): the first one an entry reports, and any above that entry's stored value, stores it
  * and moves the run's last model request to `at`; a lower or equal one changes nothing. `vitals`
- * are kept on the heartbeat and as the run's latest (none keeps the last). Vitals saying
- * `agent_paused: "disk"` start a disk pause if none is running, and set the run's `disk_notice_at`
- * to `at` unless it is less than `DISK_NOTICE_GAP_SECONDS` old; vitals without it end the pause;
- * no vitals change neither (a pause that began while one began less than that long ago is
- * owed nothing). Anything else changes nothing. `final_committed` / `final_existing`: the final
+ * (`HeartbeatVitals`) are kept, as given, on the heartbeat and as the run's latest (none keeps the
+ * last); nothing in them starts a disk pause, because the counts sit one level down. Anything else
+ * changes nothing. A repeat of the committed final heartbeat (`final_existing`) records nothing:
+ * no heartbeat row. `final_committed` / `final_existing`: the final
  * heartbeat's (seq, head) is now / already was the committed end. `final_conflict`: a different end is committed, or the
  * chain the server holds already contradicts this one. `closed`: the run is abandoned or incomplete.
  */
@@ -292,8 +275,9 @@ export interface SealArgs {
   entry_id: string;
   seal_sha256: string;
   baseline_sha256: string;
-  seal_key: string;
-  baseline_key: string;
+  /** Null when the seal stores no documents of its own: the server seals by itself with the final head. */
+  seal_key: string | null;
+  baseline_key: string | null;
   sealed_at: string;
 }
 /**
@@ -473,10 +457,8 @@ export interface Db {
   recordFinalCommit(memberId: string, runId: string, commit: string, at: string, detail?: FinalCommitDetail): Promise<void>;
   /** A stored chunk of the entry that starts at `offset`, or null. */
   getChunk(memberId: string, runId: string, entryId: string, offset: number): Promise<ChunkRecord | null>;
-  storeReceipt(memberId: string, runId: string, entryId: string, chainHead: string, receipt: StartReceipt): Promise<StoreReceiptResult>;
-  abandonRun(memberId: string, runId: string, reason: string, at: string): Promise<AbandonResult>;
   /**
-   * Advance the chunk's entry past `chunk` and record the chunk and its ack, only if the entry still
+   * Advance the chunk's entry past `chunk` and record the chunk, only if the entry still
    * stands where the chunk expects; in the same step add `stored_bytes` and one chunk to the entry's counters.
    */
   commitChunk(args: CommitChunkArgs): Promise<CommitChunkResult>;

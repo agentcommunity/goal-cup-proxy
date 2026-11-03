@@ -1,20 +1,16 @@
 #!/bin/sh
 # Package one release tarball from binaries already built for <target>:
 #
-#   cargo build --release --locked --target <target> -p goalcup-cli -p goalcup-daemon -p goalcup-verifier
+#   cargo build --release --locked --target <target> -p goalcup -p goalcup-verify
 #   sh scripts/package-release.sh <target> <version> <outdir>
 #
 # Writes <outdir>/goalcup-<version>-<target>.tar.gz, laid out as an install prefix, so the
 # unpacked directory runs as it is and packaging/install.sh copies it file for file:
 #
-#   bin/goalcup bin/goalcup-daemon bin/goalcup-verify
-#   share/goalcup/connectors/   goalcup finds it as <exe dir>/../share/goalcup/connectors;
-#                               every folder under connectors/, with no list of names, so a
-#                               merged harness ships by being merged
+#   bin/goalcup bin/goalcup-verify
 #   LICENSE NOTICE THIRD-PARTY-LICENSES.md
 #
-# The connectors are the committed tree (`git archive HEAD`), never a working copy: their pins
-# cover every byte, so a stray local file would make every start refuse.
+# The connectors are embedded in goalcup (PRD-11), so the tarball ships no connectors folder.
 set -eu
 
 if [ $# -ne 3 ]; then
@@ -31,11 +27,10 @@ stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 root="$stage/$name"
 
-mkdir -p "$root/bin" "$root/share/goalcup"
-for binary in goalcup goalcup-daemon goalcup-verify; do
+mkdir -p "$root/bin"
+for binary in goalcup goalcup-verify; do
     install -m 0755 "target/$target/release/$binary" "$root/bin/$binary"
 done
-git archive HEAD connectors | tar -x -C "$root/share/goalcup"
 cp LICENSE NOTICE "$root/"
 python3 scripts/third-party-licenses.py --target "$target" >"$root/THIRD-PARTY-LICENSES.md"
 

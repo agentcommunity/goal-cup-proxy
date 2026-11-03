@@ -1,10 +1,8 @@
-// A tiny HTTP client for the contract, and helpers to build chunks and check signatures.
+// A tiny HTTP client for the contract, and helpers to build chunks.
 
 import { createHash } from "node:crypto";
 import { request as httpRequest } from "node:http";
 import { zstdCompressSync } from "node:zlib";
-import { ackSigningBytes, receiptSigningBytes, type Ack, type StartReceipt } from "../../src/sign.ts";
-import { fromHex } from "../../src/util.ts";
 
 export const GENESIS = "0".repeat(64);
 export const sha256 = (b: Uint8Array | string) => createHash("sha256").update(b).digest("hex");
@@ -82,7 +80,7 @@ export const deviceBody = (overrides: Record<string, unknown> = {}) => ({
   purpose: "run",
   mode: "competition",
   connector_id: "codex-cli",
-  proxy_version: "0.1.0",
+  proxy_version: "1.0.0",
   ...overrides,
 });
 
@@ -104,12 +102,11 @@ export async function credentialFor(api: Client, member: string, mode: "competit
 export function openBody(overrides: Record<string, unknown> = {}) {
   return {
     connector_id: "codex-cli",
-    manifest_sha256: "a".repeat(64),
-    connector_dir_sha256: "c".repeat(64),
+    connector_sha256: "a".repeat(64),
     workspace: "/Users/p/goal-1/run-x/workspace — ünï",
     session_id: "6f1c2d3e-0000-4000-8000-000000000001",
     harness_version: "0.153.0",
-    proxy_version: "0.1.0",
+    proxy_version: "1.0.0",
     repo_url: "https://github.com/someone/goal-cup-entry",
     ...overrides,
   };
@@ -148,11 +145,3 @@ export function makeChunk(entryId: string, firstSeq: number, count: number, prev
     },
   };
 }
-
-async function verify(publicKeyHex: string, signatureHex: string, bytes: Uint8Array): Promise<boolean> {
-  const key = await crypto.subtle.importKey("raw", fromHex(publicKeyHex) as BufferSource, { name: "Ed25519" }, false, ["verify"]);
-  return crypto.subtle.verify({ name: "Ed25519" }, key, fromHex(signatureHex) as BufferSource, bytes as BufferSource);
-}
-
-export const verifyReceipt = (r: StartReceipt, publicKeyHex: string) => verify(publicKeyHex, r.signature, receiptSigningBytes(r.claims));
-export const verifyAck = (a: Ack, publicKeyHex: string) => verify(publicKeyHex, a.server_signature, ackSigningBytes(a));

@@ -1,5 +1,5 @@
 // Goal Cup upload Worker: routing, maintenance switch, authentication, error mapping, and the
-// 5-minute cron (notices.ts). Contract: docs/UPLOAD-API.md. No framework; eleven routes and a health check.
+// 5-minute cron (notices.ts). Contract: docs/UPLOAD-API.md. No framework; eight routes and a health check.
 
 import { type Auth, authenticate } from "./auth.ts";
 import { putChunk } from "./chunks.ts";
@@ -8,7 +8,7 @@ import { approveDevice, createDevice, pollDevice } from "./device.ts";
 import type { Env } from "./env.ts";
 import { ApiError, errorResponse, json, notFound } from "./errors.ts";
 import { runTick } from "./notices.ts";
-import { abandonRun, continueRun, getPosition, heartbeat, issueReceipt, openRun, sealRun } from "./runs.ts";
+import { continueRun, getPosition, heartbeat, openRun } from "./runs.ts";
 import { RUN_ID } from "./util.ts";
 
 type Handler = (ctx: Ctx, auth: Auth, request: Request) => Promise<Response>;
@@ -22,7 +22,7 @@ type Route = { method: string } & (
 
 /** Match the method and path; null for an unknown path. A known path with the wrong method is the caller's 405. */
 function route(path: string): Route | null {
-  const parts = path.split("/"); // "/v1/runs/r…/seal" -> ["", "v1", "runs", "r…", "seal"]
+  const parts = path.split("/"); // "/v1/runs/r…/heartbeat" -> ["", "v1", "runs", "r…", "heartbeat"]
   if (parts[0] !== "" || parts[1] !== "v1") return null;
   if (parts[2] === "device") {
     const open = (handler: PublicHandler): Route => ({ method: "POST", public: true, handler });
@@ -40,12 +40,6 @@ function route(path: string): Route | null {
   if (parts.length === 4) return authed("GET", runId, (c, a, r) => getPosition(c, a.member, runId, r));
   if (parts.length === 5) {
     switch (parts[4]) {
-      case "receipt":
-        return authed("POST", runId, (c, a, r) => issueReceipt(c, a.member, runId, r));
-      case "abandon":
-        return authed("POST", runId, (c, a, r) => abandonRun(c, a.member, runId, r));
-      case "seal":
-        return authed("POST", runId, (c, a, r) => sealRun(c, a.member, runId, r));
       case "heartbeat":
         return authed("POST", runId, (c, a, r) => heartbeat(c, a.member, runId, r));
       case "continue":

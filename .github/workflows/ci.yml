@@ -1,24 +1,15 @@
-# Light CI: one Linux job, deliberately small. It is NOT the gate. The gate is
-# `sh scripts/gate.sh fast|full` (README.md, "The gate"), run by hand on macOS.
-# See README.md and docs/OPERATING.md ("CI").
+# CI runs the gate, nothing less: one job, `sh scripts/gate.sh fast`, the same command a build box
+# runs before every merge (README.md, "The gate"). There is no scope step and no path filter, so
+# every pull request gets a completed `check` that can be required.
+# Only a superseded pull request run is cancelled. Each push has a group of its own (its sha), so no
+# push run is ever left pending behind another and cancelled by a third: every push to main and
+# v1.0/integration runs to the end.
 #
-# Why it's this small (the owner's rule is that CI stays lean; do not add heavy jobs):
-# - Runner minutes cost something on every pull request, and a Linux run proves little about a
-#   macOS-targeted recorder.
-# - It runs for pull requests into `main`, pushes to `main`, or a manual start. There is no path
-#   filter, so every pull request gets a completed `check` that can be required.
-# - The `scope` step decides whether the Rust smoke runs (scripts/ci-scope.py). Only a change
-#   made entirely of Markdown under docs/, root Markdown or the pull request template skips it.
-#   Anything else, an unknown or failed comparison, or a manual start runs it. The scope tests,
-#   the link checker, the check-connector.sh tests and the CODEOWNERS path check run on every
-#   event; a failure in any step fails the job.
-# - It skips the goalcup-daemon and goalcup-cli test suites. They spawn real process trees,
-#   and on a 2-core Linux runner they hang or kill the VM (docs/OPERATING.md, "CI").
-#   The Linux chain reservation is measured in Docker on ext4 and XFS, not in the gate. The
-#   runner's checkout is on ext4, so the platform crate's Linux reservation tests reserve for
-#   real there; GOALCUP_TRACECAP_REQUIRE_QUALIFIED makes a missing ext4 or XFS root a failure.
-# - It holds no secrets and runs with a read-only token, so a pull request from a fork can run
-#   it. Keep it that way: never use `pull_request_target`, and never pass a secret to a step.
+# A test that hangs the runner moves to the full tier (the night log names it); CI is never
+# narrowed by crate.
+#
+# It holds no secret and runs with a read-only token, so a pull request from a fork can run it.
+# Keep it that way: never use `pull_request_target`, and never pass a secret to a step.
 
 name: ci
 
@@ -26,68 +17,44 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, v1.0/integration]
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
-
-defaults:
-  run:
-    shell: bash
 
 jobs:
   check:
     name: check
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       # A fresh runner never reuses incremental artifacts; they only eat disk.
       CARGO_INCREMENTAL: 0
     steps:
-      # Build scripts and tests run PR code; keep the token out of .git/config. Full history so
-      # the scope step can compare the event's two commits.
+      # Build scripts and tests run PR code; keep the token out of .git/config.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
-          fetch-depth: 0
-      # Event values reach the shell only as quoted environment variables. A manual start, or an
-      # empty, all-zero or unknown commit, runs the Rust smoke.
-      - id: scope
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.after }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            result=rust=true
-          else
-            result="$(python3 scripts/ci-scope.py --base "$BASE_SHA" --head "$HEAD_SHA")"
-          fi
-          case "$result" in
-            rust=true|rust=false) ;;
-            *) echo "::error::unexpected ci-scope output: $result"; exit 1 ;;
-          esac
-          echo "$result"
-          echo "$result" >> "$GITHUB_OUTPUT"
-      - run: python3 -m unittest discover -s scripts -p 'test_ci_scope.py' -v
-      - run: python3 -m unittest discover -s scripts -p 'test_check_links.py'
-      - run: python3 -m unittest discover -s scripts -p 'test_check_connector.py'
-      - run: python3 -m unittest discover -s scripts -p 'test_codeowners.py'
-      - run: python3 scripts/check-links.py --root .
-      # Build first, as in the gate (README.md, "The gate"): the shipped, test-hooks-off build,
-      # which clippy --all-targets does not compile. It also puts on disk the binaries that the
-      # workspace tests drive.
-      - if: steps.scope.outputs.rust == 'true'
-        run: cargo build --workspace
-      - if: steps.scope.outputs.rust == 'true'
-        run: cargo fmt --all --check
-      - if: steps.scope.outputs.rust == 'true'
-        run: cargo clippy --workspace --all-targets -- -D warnings
-      - if: steps.scope.outputs.rust == 'true'
-        env:
-          GOALCUP_TRACECAP_REQUIRE_QUALIFIED: "1"
-        run: cargo test --workspace --exclude goalcup-daemon --exclude goalcup-cli
+      # The one compiler: with no arguments rustup installs what rust-toolchain.toml names,
+      # components included.
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+        with:
+          tool: cargo-nextest
+      # The Worker tests run .ts files natively (server/worker/package.json: node >=22.18).
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22
+      - run: npm ci --prefix server/worker
+      - run: sh scripts/gate.sh fast
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-junit
+          path: target/nextest/default/junit.xml
+          if-no-files-found: ignore

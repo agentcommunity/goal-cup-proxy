@@ -1,0 +1,69 @@
+goalcup 1.0 full4 Hermes rows for the conductor. integration head 90a07d78 (origin/v1.0/integration; contains 680d4e71 and 5dc8cbde).
+Worktree /root/gc-wt/full4 (detached, unmodified, nothing committed or pushed).
+Build: build box aqua-occupational-narwhal-qwwzjY, keys/GH_TOKEN/DATABASE_URL unset, `cargo build --release --locked -p goalcup -p goalcup-verify`
+  exit 0. goalcup sha256 1a85797f..., goalcup-verify e6ddc0a3... (build.log).
+Both rows: `scripts/pad/pad <settings>` via padrun.sh, in parallel, server staging, where sandbox, DeepSeek key through put-env. GH_TOKEN unset.
+Copy-outs scrubbed (scrub2.py): 0 fragments. keyscan: 0 hits on row 1. Row 2 has 1 hit, a false positive: GOALCUP_TEST_MEMBER_ID
+  in fetched rec.gcr.zst. That test member id is low-entropy (26 of its 36 characters are '0'). The model wrote an all-zero fixture
+  UUID ('paymentId: 0...-...') in DeepSeek request bodies, which matches 31 of the 36 characters. The full value occurs 0 times. No key
+  hit anywhere. No live pad- box at the end. Spend: 0.01 + 0.76 = 0.77 USD.
+
+ROW 1  Hermes rung 3 smoke (hermes-cli 0.22.5, direct, micro). pad FAIL (C3), exit 1
+  box pad-ad9263  run r33097c56bbee24d5  entry edbfd3e9e5a2eb6e2  4m 37s (14:37:59 to 14:42:37Z)
+  C1 PASS  gaps none; wire_keeps_up pass (harness 10, wire_ok 11); history 8 checked, 0 missing; threads_match 2.
+  C2 PASS  subagents_present children 1; thread 20261101_143857_b21d has parent local-caf71f250df6 (main), 4 calls; main 6.
+  C3 FAIL  known_hits 2 kinds: the same known value, raw, in 0.110 (n1) and 0.112 (n6) [x2 with fetched], sha12 f1e81df0a219.
+           It is a real known-value hit, not the rule pattern of full3. Identified here: the value is 32 hex characters (it matches
+           no conductor key). The only planted 32-hex value is the pad's remote password (pad-run plant(), token_hex(16)).
+           sids 110/112 are native files state:state.db and state:state.db-wal (Hermes SQLite, form final). The hits sit on
+           FTS index leaf pages (prefix-compressed terms), so Hermes's FTS tokenizer split the password out of its URL, and
+           the url_password rule cannot see it there. Copied into the record unmasked and uploaded (staging).
+           Also shape masked_key in 0.80/deltas; masks generic 6, masked_key 28, url_password 56; plain_hits 8.
+  C4 PASS  check-server: 3 chunks, whole, db_match true, equals_local true.
+  C5 PASS  deepseek-flash input 26058, cached 132864, output 3809, reasoning 1445; matched 10, wire_only 1, unattributed 0.
+  C6 PASS  status.json 11 = end screen 11 = verifier 11; off 0.
+  status.json: mode sealed, model_requests 11, seal.reason seal_command. upload: final sealed; fetched edbfd3e9e5a2eb6e2. spend 0.01
+
+ROW 2  Hermes direct full, payments, kill-recorder@8 and @10 (the rig default: hermes-cli.toml has no kill_minutes). pad FAIL (C3), exit 1
+  box pad-0fb6fa  run r2df63daf5bcb17b0  entry e767fe9c3a8f2539b  24m 01s (14:38:19 to 15:02:21Z)
+  C1 PASS  gaps only the 2 killed recorder_down; boots 3, links 1112; history 321 checked, 0 missing_call, 0 missing_text;
+           wire_keeps_up skip (totals harness); threads_match 6.
+  C2 PASS  subagents_present children 5; 5 threads with parent local-934731de68a2 (main), calls 42/99/58/74/18; main 58.
+  C3 FAIL  known_hits 0. shape hits only in joined deltas (stated loss): generic_secret_assignment 0.188, 0.302; masked_key 0.74;
+           url_password 0.218, 0.232, 0.242. Then "hits of openai_key/github_token/jwt/private_key: no MASK" -> FAIL.
+           glued_shape openai_key x11 (warn). masks generic 716, masked_key 286, url_password 908; plain_hits 76.
+           Live alarm "secrets fail" from 14:39:48.
+  C4 PASS  check-server: 11 chunks, whole, db_match true, equals_local true.
+  C5 PASS  deepseek-flash input 302808, cached 29981440, output 408553, reasoning 170002; matched 349, wire_only 17, unattributed 0.
+  C6 PASS  status.json 366 = end screen 366 = verifier 366; off_ms 1170 = status (2 spans).
+  faults PASS  quiet null for both kills.
+  kill gaps: kill 1 14:47:41.890 (pid 183, 0.9 s after a written request): gap 41.622 to 42.121, 498 ms; recorder 7420 back 6.3 s.
+             kill 2 14:49:43.902 (pid 7420, 1.9 s after): gap 43.510 to 44.183, 672 ms; recorder 9661 back 6.0 s.
+  status.json: mode sealed, model_requests 366, seal.reason seal_command, off 2 spans 1170 ms.
+  upload: state done, confirmed seq 1111 raw 257987453; fetched e767fe9c3a8f2539b. spend 0.76 (live 0.75)
+  End screen: "366 model requests written: api.deepseek.com 366." "Recording was off 2 times, 1 s in total." Hermes exited signal 9.
+
+QUESTIONS ASKED
+  'version could not be read': NOT in any pane copy, either row. goalcup.log is not copied out (pad-run OUT, scripts/pad/pad-run:26),
+    so it cannot be checked. The record start event has harness_version null (the Hermes connector has no version command), so
+    start.rs:292-294 ran and wrote version_unread to the in-box goalcup.log. Panes 1 and 2 show only the approval wait: the
+    early copy (pad-run:352-353) runs before approval, while goalcup prints the launch block after approval (start.rs:286+).
+    Hermes's TUI then clears it, before pane-3.
+  PROBLEM line for a telemetry host: none in either end screen. They list unread hosts only ("Not recorded, passed through unread: ...").
+
+NON-PASS, WITH OWNER
+  F1 row 1 C3 known value in record and upload: the planted remote password, raw, in Hermes state.db/state.db-wal (FTS terms).
+     Owner PRD-11 connector connectors/hermes-cli.toml:30 (state.db* copied whole, form final, FTS index included) and
+     PRD-05 masker crates/goalcup/src/mask/stream.rs:52-58 (url_password needs the URL form; a bare FTS token has no shape).
+     full3 row 1 copied the same files but had no hit (run variance), so this is a latent leak path, not new code.
+  F2 row 2 C3 FAIL from stated-loss deltas: 680d4e71 adds the redacts_tool_output note only when hit == 0. A stated-loss-only shape
+     hit still makes every planted kind with no MASK a FAIL. Owner PRD-12 rig scripts/pad/check.py:490,498-502 (the "FAIL if hit"
+     in the PLANTED loop should ignore stated-loss hits, as scan() does). By its own design (hermes-cli.toml comment) C3 is at
+     best INCONCLUSIVE for Hermes, never PASS, so "C1-C6 PASS" cannot happen for Hermes on this rig.
+     PRD-05 masker: the deltas-join owner question (check.py stated_loss) stays open.
+  F3 version line evidence: owner PRD-12 rig scripts/pad/pad-run:26 (add goalcup.log to OUT) and :352-353 (copy the pane right
+     after approval, before the paste).
+  W  keyscan false positive on the low-entropy GOALCUP_TEST_MEMBER_ID (conductor tooling, keyscan.py); glued openai_key x11 (row 2).
+
+FILES /root/gc-night/full4/: REPORT.txt, build.log, build/, jobs/, runs/ (r3-hermes.toml, full-hermes.toml), logs/, pad-out/ (scrubbed),
+  padrun.sh, scrub2.py, keyscan.py, summ.py, ev2.py, tools/ (gcr.js, gcr2.js, findenv.js: record walkers that print no values).

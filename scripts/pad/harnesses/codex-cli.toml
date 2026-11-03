@@ -1,0 +1,31 @@
+# Pad data for Codex (PRD-12 section 6): test data, never connector data; goalcup never reads it.
+# Vendor pages read 30 Oct 2026: https://github.com/openai/codex/releases/tag/rust-v0.165.0 (the release),
+# https://learn.chatgpt.com/docs/auth (`codex login --with-api-key` reads the key on stdin; auth.json in CODEX_HOME),
+# https://vercel.com/docs/ai-gateway/coding-agents/openai-codex (gateway provider in config.toml, AI_GATEWAY_API_KEY).
+version = "0.165.0"
+version_cmd = "codex --version"
+install = "npm i -g @openai/codex@0.165.0"
+key_kind = "openai"
+key_route = "login"
+login = "codex login --with-api-key"
+# Pad data for the dodger copy only (section 2): an API-key login calls https://api.openai.com/v1.
+model_host = "api.openai.com"
+# Exit: /quit is documented (codex-rs/tui/src/slash_command.rs at rust-v0.165.0).
+# One item per key: Codex 0.165 leaves `/quit\r` unsubmitted (rung 5 F6).
+exit_keys = ['/quit', '\r']
+subagent_word = "sub-agent"
+keep_going = true
+# Codex finishes the payments prompt in about 7 minutes (first full rows, 1 Nov 2026), so a kill pair at 8 and 10 meets no stream.
+kill_minutes = [3, 5]
+
+[direct]
+model = "gpt-6.1-sol"
+files = { "config.toml" = "direct/codex-config.toml" }
+
+[gateway]
+model = "anthropic/claude-haiku-5.5"
+files = { "config.toml" = "gateway/codex-config.toml" }
+# Only this line in {home}/.env: Codex's .env overwrites HTTPS_PROXY, NO_PROXY and SSL_CERT_FILE.
+key_route = "file"
+key_file = "{home}/.env"
+key_line = "AI_GATEWAY_API_KEY={key}"

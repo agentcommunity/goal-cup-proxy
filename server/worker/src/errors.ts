@@ -10,7 +10,6 @@ export type ErrorCode =
   | "conflict" // 409
   | "closed" // 410
   | "too_large" // 413
-  | "quota_exceeded" // 413: the chunk would take the run past RUN_MAX_COMPRESSED_BYTES; nothing stored, goalcup retries
   | "digest_mismatch" // 422
   | "rate_limited" // 429: the device flow's per-address limit
   | "maintenance" // 503

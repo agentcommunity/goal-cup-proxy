@@ -1,0 +1,21 @@
+08:06Z | judge-usage reviewer-A PRD-09 | start | review of prd-09-usage slice 5 (Hermes state.db join) at 9480f0f0
+08:07Z | judge-usage reviewer-A PRD-09 | stop | box at 9480f0f0: fmt ok, clippy -D warnings ok, nextest 64/64, WAL-repair and resumed mutations both fail the Hermes case; no blocker, 1 fix, nits
+08:09Z | judge-usage fixer PRD-09 | fix | A5r-1..5 fixed or recorded, tests green, pushed
+08:09Z | judge-usage reviewerA PRD-09 | start | re-check slice 5 fixes at 2317d53a
+08:10Z | judge-usage reviewerA PRD-09 | stop | re-check 2317d53a: box fmt/clippy -D warnings/nextest 64 of 64 green; 1 fix (resumed tokens undercount unmarked), 1 nit (no test on resumed values)
+08:12Z | judge-usage fixer PRD-09 | fix | A5r2-1 resumed marker + native_partial, A5r2-2 asserts; box green, pushed
+08:12Z | judge-usage merge-requester PRD-09 | decision | queued 081259-prd-09-usage for v1.0/prd-09-usage slice 5
+08:23Z | judge-usage merge-requester PRD-09 | stop | fmt fix pushed, queued 082311-prd-09-usage
+08:35Z | judge-usage replan PRD-09 | amendment | PRD-09 and PRD-16 notes after slice 5: src 2861 vs 2550 ceiling, tests 676 vs 520, carried by recorded decision; slice 6 is job script only
+08:35Z | judge-usage planner PRD-09 | decision | slice 6: usage-job.sh plus carried nits; branch merged with integration
+08:36Z | judge-usage builder PRD-09 | start | usage-nits slice started
+08:37Z | judge-usage builder PRD-09 | stop | usage-nits pushed, 64 of 64 green; B2/B3 and A5r-2 assert not done
+08:38Z | judge-usage builder PRD-09 | decision | usage-job.sh pushed; run.json written in the script, last-entry copy wins for continued threads
+08:39Z | judge-usage merger PRD-09 | start | merging
+08:39Z | judge-usage merger PRD-09 | stop | merged, box green, pushed
+08:42Z | judge-usage fixer PRD-09 | start | fixing usage-job.sh findings
+08:43Z | judge-usage fixer PRD-09 | fix | usage-job.sh findings A-1..A-9,B1,B2 fixed, pushed; staging run not done (no credentials)
+08:46Z | judge-usage fixer PRD-09 | start | fixing usage-job findings
+08:47Z | judge-usage fixer PRD-09 | fix | N1 N2 N3 B-r1 B-r2 fixed, box job with stub fetch/verify green (first run, rerun no puts, run.json-only repair); A-2r not closed: no GOALCUP_USAGE_TOKEN or R2 read token here, box.mjs has no exec/copy; --box now uses GOALCUP_BOX_CLI
+08:50Z | judge-usage fixer PRD-09 | fix | usage-job: run.json put whenever an entry is put (A-3), --entry puts only E (A-4), --box cut (B-box), nits; test_usage_job.py green in box. Staging run A-2r still needs the conductor with tokens
+08:52Z | judge-usage judge PRD-09 | stop | PRD-09 Slice 6: the organizer job scripts/usage-job.sh (list sealed entries, fetch, decode in a box, run.json, put to the usage bucket), plus the carried review nits in usage src and tests (size-neutral). CSV, usage table and --text are cut per the slice 5 replan. not merged: findings still open after the last review round: A-2r, A-box, A-5, A-2r (branch v1.0/prd-09-usage)

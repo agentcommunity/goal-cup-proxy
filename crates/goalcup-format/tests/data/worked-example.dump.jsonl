@@ -1,0 +1,10 @@
+{"o":0,"k":"part","entry":"e0123456789abcdef","boot":0,"part":0,"raw_offset":0,"wall":"2026-11-07T00:00:00Z","mono":5000000000,"next_link":0}
+{"o":90,"k":"event","t":5000000000,"ev":"start","run":"r0123456789abcdef","entry":"e0123456789abcdef","goalcup":"1.0.0","build":"0123456789abcdef0123456789abcdef01234567","connector":"codex-cli","connector_source":"builtin","mask_rules":["openai_key","bearer"],"resume":false}
+{"o":336,"k":"open","sid":1,"t":5001000000,"skind":"conn","meta":{"host":"api.openai.com","port":443,"mode":"decrypt","listed":"shared","reason":null,"alpn":"http/1.1","tls":"1.3","fingerprint":"0123456789abcdef"}}
+{"o":494,"k":"open","sid":2,"t":5003000000,"skind":"http_req","conn":1,"meta":{"method":"POST","path":"/v1/responses","ver":"1.1","headers":[["authorization","********************"],["content-type","application/json"]],"masked":["authorization"],"coding":null}}
+{"o":687,"k":"data","sid":2,"t":5004000000,"off":0,"len":27,"text":"{\"model\":\"m1\",\"input\":\"hi\"}"}
+{"o":722,"k":"end","sid":2,"t":5004000000,"reason":"complete","seen":27}
+{"o":728,"k":"open","sid":3,"t":5304000000,"skind":"http_resp","conn":1,"req":2,"meta":{"status":200,"ver":"1.1","headers":[["content-type","text/event-stream"],["content-encoding","br"]],"masked":[],"coding":["br"],"decoded":true}}
+{"o":884,"k":"data","sid":3,"t":5309000000,"off":0,"len":37,"text":"data: {\"type\":\"response.completed\"}\n\n"}
+{"o":930,"k":"end","sid":3,"t":5310000000,"reason":"complete","seen":37,"tail":{"wire":41}}
+{"o":949,"k":"link","seq":0,"wall":"2026-11-07T00:00:00.310Z","mono":5310000000,"hash":"87e927badc48e694b3f55d0e8f129502bb8b27c605c25e05bd8bc8616dde8dbd"}

@@ -1,0 +1,19 @@
+First run sh ./pad-setup-check.sh and show me its output. Then build Paynest from scratch in this repository: a complete payments service in the style of PayPal, with test payment rails only (no real money, no real card network).
+
+What Paynest must do:
+- Accounts: customers (personal), merchants (business) and teams (a merchant with several members and roles: owner, admin, finance, support, viewer). Sign up, log in, sessions, password reset by a fake email outbox, two-factor codes from a fake SMS outbox.
+- Wallets and a double-entry ledger: every balance change is a pair of ledger entries; balances are always derived from the ledger. Multiple currencies with a fixed test exchange-rate table.
+- Payments: send money between users, request money, pay a merchant through a hosted checkout page, refunds (full and partial), payouts to a fake bank account, scheduled and recurring payments, payment links and invoices.
+- Test payment rails: a fake card processor (test card numbers that succeed, decline, or need a challenge), a fake bank transfer rail with delayed settlement, and a webhook simulator that sends signed events to merchants. Settlement, fees and chargebacks run as background jobs.
+- Risk and compliance: velocity limits, a simple rules engine that flags payments for review, KYC status per account with fake document upload, freezing and unfreezing accounts, a disputes flow (open, evidence, decision) and an audit log of every admin action.
+- Three web frontends: a customer app (wallet, send, request, activity, disputes), a merchant and team dashboard (checkout setup, payment links, invoices, payouts, team members and roles, webhooks, API keys for test mode), and an admin console (users, KYC review, risk queue, disputes, freezes, ledger explorer, audit log).
+- A public REST API with API keys and idempotency keys, an OpenAPI document, and a small client SDK.
+- Tests at every level: unit tests for the ledger and rules, API tests, and end-to-end tests of the main flows. A seed script with demo users. A README that explains how to run all of it.
+
+How to work. This is far too big for one agent working alone, so organise it as a team of subagents running in parallel. Use your own subagent, task or delegation feature (whatever your tool calls it) and keep several of them busy at the same time all the way through:
+1. Spend at most five minutes planning yourself: write the architecture, the data model, the API contract and the split into independent pieces into docs/plan.md. Do not hand the planning to a subagent and do not wait for anyone before step 2.
+2. Then, in one go, start at least ten subagents at the same time, one per piece: ledger and wallets, accounts and auth and teams, payments and refunds, test card processor, bank rail and payouts, webhooks, risk rules and KYC, disputes, customer frontend, merchant and team dashboard, admin console, public API and SDK. Give each one a clear brief and the files it owns. Never wait for one subagent to finish before starting the next: start them all, then check on them.
+3. While they work, start reviewer subagents that read the finished pieces, run the tests and report problems back; send each problem to a fixer subagent.
+4. Start an integration subagent that wires the pieces together and keeps the end-to-end tests green, and a docs subagent that keeps the README and API docs current.
+5. When a wave finishes, plan the next one and start the next batch of subagents in parallel: hardening, more tests, edge cases, performance, accessibility, and polish of each frontend.
+Run the tests often, commit and push as you go with clear messages, and never stop to ask me questions: make reasonable choices and write them down in docs/decisions.md. Keep going until every part works end to end, then keep improving it.

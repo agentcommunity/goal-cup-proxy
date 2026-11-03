@@ -1,0 +1,16 @@
+# Hermes with its built-in Vercel AI Gateway provider; the key is AI_GATEWAY_API_KEY in {home}/.env.
+model:
+  provider: ai-gateway
+  default: deepseek/deepseek-v4.1-flash
+# The "Help improve Hermes?" answer, preset to "No thanks" (shared_metrics_consent.py at v0.22.5; docs only, not run).
+telemetry:
+  shared_metrics:
+    enabled: false
+    send: false
+    offer_version: 2
+# Hermes 0.22.6 drops SSL_CERT_FILE for provider clients (NousResearch/hermes-agent#148241): give this route the run CA
+# bundle explicitly. Remove this block when the pad leaves 0.22.6.
+providers:
+  goalcup-ca:
+    base_url: https://ai-gateway.vercel.sh/v1
+    ssl_ca_cert: ${env:SSL_CERT_FILE}

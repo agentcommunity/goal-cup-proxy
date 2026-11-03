@@ -1,0 +1,12 @@
+# Amp 0.0.1793275344-g17bf52, checked against ampcode.com/manual (docs/cli, docs/cli/settings, docs/threads, docs/tools)
+# and the 0.0.1793275344-g17bf52 package. Amp reads the XDG folders when set, so they are pinned under {home} too.
+id = "amp-cli"
+name = "Amp"
+program = "amp"
+resume = ["last"]
+home = { HOME = "{home}", XDG_CONFIG_HOME = "{home}/.config", XDG_DATA_HOME = "{home}/.local/share", XDG_STATE_HOME = "{home}/.local/state", XDG_CACHE_HOME = "{home}/.cache" }
+env = { AMP_SKIP_UPDATE_CHECK = "1" }
+secret_files = ["{home}/.local/share/amp/secrets.json", "{home}/.local/share/amp/accounts.json"]
+native = [{ name = "thread-metadata", root = "{home}/.cache/amp/logs/threads", pattern = "T-*.log" }]
+mask = [{ kind = "amp_ws_token", json_field = "wsToken", value = "string" }]
+first_screen = "If Amp asks you to sign in, do it now, before you type your prompt."

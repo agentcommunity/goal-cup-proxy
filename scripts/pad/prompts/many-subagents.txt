@@ -1,0 +1,6 @@
+First run sh ./pad-setup-check.sh and show me its output. Then build Paynest, a payments platform
+in the style of PayPal: users with wallets, payments and refunds between users, and an admin role
+that can freeze accounts and review disputes. Build the data model and API, an admin web frontend
+and a user web frontend, with tests. Plan the work, then use many subagents in parallel: at least
+one each for the data model, the API, the admin frontend, the user frontend and the tests. Use up to 20 subagents in parallel. Commit
+and push as you go. Keep going until all of it works.

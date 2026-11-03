@@ -1,0 +1,3 @@
+{
+  "agents": { "defaults": { "workspace": "{workspace}", "model": { "primary": "deepseek/deepseek-flash" } } }
+}

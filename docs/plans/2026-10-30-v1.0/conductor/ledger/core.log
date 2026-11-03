@@ -1,0 +1,165 @@
+08:16Z | core fixer PRD-02 | start | fixer worktree up, findings P-1 X-1 X-2 X-4 X-5 N-1
+08:20Z | core fixer PRD-02 | fix | merged origin/v1.0/integration (PRD-05 masker) into v1.0/prd-02-core; X-1 forwarded(carry) before first send, X-2 recorder stdout/stderr /dev/null, X-5 guard window 0:25000, cut 3 handle unit tests
+08:20Z | core fixer PRD-02 | seam | X-4 asks PRD-01 for PartWriter::rotation_due(now); until then writer::sync keeps its counts.jsonl line per sync (reason in the doc comment)
+08:20Z | core fixer PRD-02 | decision | N-1 skipped: Option<StreamMasker> at END (a fresh masker is an Arc clone with empty buffers) and real_for_tests folder leak (no create_dir would turn a leaked folder into a writer exit 74 under a shared-process runner)
+08:35Z | core fixer PRD-02 | fix | box on 65255783 (integration merged, PRD-05 masker): pipeline_mask_panic 6 run, 0 skipped; a_panic_with_bytes_held_leaves_data_and_gap_contiguous PASS, held_bytes_stay_in_their_websocket_message PASS
+08:35Z | core fixer PRD-02 | fix | box: gate fast PASS in 114s; new a_worker_waiting_between_records_still_shows_a_stall PASS, and FAILS with the old per-record forwarded restored
+08:35Z | core fixer PRD-02 | seam | X-3 for the merge request: two record shapes (mask_failed GAP lost 1 with meta tail; empty DATA with fin) already logged to PRD-01 and PRD-08 at 08:50Z
+08:35Z | core fixer PRD-02 | stop | pushed v1.0/prd-02-core at 65255783
+08:38Z | core reviewer-A PRD-02 | decision | re-review of prd-02-core step 2 at 65255783: P-1, X-1, X-2, X-5 fixed; X-4 and N-1 declines accepted; box: stall test pass, mutant fails, 13 guard/mask_panic/rlimit tests pass, 0 skipped
+08:39Z | core breaker PRD-02 | start | breaker re-check of prd-02-core step 2 at 65255783
+08:53Z | core breaker PRD-02 | stop | prd-02-core 65255783: throwaway stress (40/200/80 streams, real masker, ws frames, 1.5 MB bodies, held writer, mask panics under load, stall with control items only) 5/5 pass; slice tests 15/15; release has no GOALCUP_TEST_; no open findings
+08:54Z | core merge-requester PRD-02 | decision | queued 085418-prd-02-core: 12 paths all under pipeline/, watchdog/, tests/pipeline_*, tests/watchdog_*; no Cargo.toml change; members already listed
+10:29Z | core planner PRD-02 | start | planning slice A from path-plan.md and audit A.6; v1.0/prd-02-core merged integration (e931752c) and pushed
+10:29Z | core planner PRD-02 | decision | slice A = 3 parallel tasks: a-boot (boot.rs, run_recorder, control thread), a-seal (seal.rs, seal marker through item/mask_worker/out/writer, pipeline_seal.rs), a-watchdog (StartFacts typed, watchdog::run with restart loop, spawn end_tree and helpers, watchdog_end.rs); size ceiling 6,200 src, 3,400 tests
+10:29Z | core planner PRD-02 | seam | wire lane PRD-03: proxy::serve(std::net::TcpListener, ProxyCtx{recorder,hosts,ca}) -> ProxyHandle with quiet_since() is not on integration; PRD-02 slice A builds against that shape and merges only after serve lands; please land a compiling serve (seam-only merge is fine) as early as possible
+10:29Z | core planner PRD-02 | seam | PRD-10: StartFacts gets typed fields (ConnectorRef, HostList, NativeSources, Vec<MaskRule>, Vec<SecretValue>) plus home: PathBuf in slice A task a-watchdog; PRD-12: the CA key file is <entry>/rec/run-ca.key (0600, removed at the seal), watchdog pid file <entry>/rec/watchdog.pid as '<pid> <start_id>'
+10:31Z | core a-watchdog PRD-02 | start | building watchdog side of slice A on v1.0/prd-02-core-a-watchdog
+10:31Z | core builder PRD-02 | start | a-boot: boot.rs and run_recorder on v1.0/prd-02-core-a-boot
+10:33Z | core a-watchdog PRD-02 | seam | typed StartFacts (ConnectorRef, HostList, NativeSources, Vec<MaskRule>, Vec<SecretValue>, new home) and run/run_with declared, commit a6e74923 on v1.0/prd-02-core-a-watchdog; a-boot merges it
+10:40Z | core a-boot PRD-02 | seam | PRD-01: please add PartWriter::seq() (the seq of the next LINK); until then boot.rs takes next_seq from the recovered R line plus one
+10:40Z | core a-boot PRD-02 | seam | PRD-14 registry: a-boot adds no GOALCUP_TEST_ hook; recorder exits named: 65 no start line, 73 entry locked, 74 write error at boot, 76 run CA import, 78 masker
+10:40Z | core a-boot PRD-02 | decision | prev_boot, boot 0's recorder_down GAP and launch notes go through the item channel (masked, counted) after the start event; proxy records queued before boot::start can precede them in the part file (times stay ordered)
+10:41Z | core a-boot PRD-02 | seam | a-watchdog: StartFacts.home is read by run_recorder as UploadCtx.home, which PRD-06 defines as $GOALCUP_HOME (queue of older entries), not the harness's isolated home; please fill and document it as $GOALCUP_HOME
+10:43Z | core a-watchdog PRD-02 | seam | a-boot: agreed, StartFacts.home is $GOALCUP_HOME (UploadCtx.home), doc fixed on v1.0/prd-02-core-a-watchdog; PRD-10 fills it with cli::home()
+10:46Z | core a-watchdog PRD-02 | seam | PRD-10: watchdog::run(plan, facts) -> ExitCode and run_with(plan, facts, exe) built on v1.0/prd-02-core-a-watchdog (533bec7d); returns the harness's code (128+signal when killed), 3 when the harness was not started (bind, CA, key or no ready in 10 s; key removed), 78 passed through from the recorder; StartFacts.home = $GOALCUP_HOME; fills facts.ca itself
+10:48Z | core a-boot PRD-02 | fix | box on tmp join (a-boot + a-watchdog StartFacts + origin/v1.0/prd-03-proxy-serve real serve + local seal.rs stub, never pushed): fmt clean, clippy -D warnings 0, pipeline tests 34/34 incl. boot torn-tail recount and boot numbering, gate fast PASS 117s; watchdog_end.rs and pipeline_seal.rs not run (a-seal not pushed, watchdog::run still a stub)
+10:48Z | core a-boot PRD-02 | stop | pushed v1.0/prd-02-core-a-boot at 840c2b0d; Recorder::dropped keeps a narrow dead_code allow until a-seal's mask worker calls it; merge waits for serve on integration and a-seal's seal.rs
+10:49Z | core builder PRD-02 | start | task a-seal started on v1.0/prd-02-core-a-seal
+10:57Z | core a-watchdog PRD-02 | stop | v1.0/prd-02-core-a-watchdog at 533bec7d pushed; box: fmt, clippy workspace, nextest workspace (457 pass), doc tests green; watchdog_end stub cases 1-3 and the start-line test pass; real cases 4 and 5 wait for a-seal (seal.rs not pushed), not run on a join
+11:02Z | core builder PRD-02 | decision | a-seal: markers ride the item channel; writer channel carries ToWriter {Rec, Mark}; after_stop hosts masked as the {conns, hosts} tail since mask_meta keeps a top-level host clear; mod.rs gets only the 'mod seal;' line a-boot also adds
+11:10Z | core builder PRD-02 | fix | a-seal pushed v1.0/prd-02-core-a-seal 1f1176a4: gate fast PASS on the integration merge (0b661e6e), pipeline_ 38/38; joined run (a-boot, a-watchdog, serve) in a box
+11:30Z | core builder PRD-02 | fix | a-seal pushed 38c0c3a4 (gate fast PASS on integration 630752f9); seal writes sealed status.json before sealed; joined run: watchdog_end_real_seal_command_seals passes, watchdog_end_real_killed_recorder_restarts times out waiting for boot 1 (restart path, a-boot/a-watchdog files)
+11:32Z | core merger PRD-02 | seam | prd-02 join waits on proxy::serve/ProxyCtx (PRD-03) not on integration
+11:44Z | core merger PRD-02 | stop | pushed v1.0/prd-02-core; green in box only with prd-03-proxy merged on top (pipeline needs proxy::serve)
+12:04Z | core reviewer-breaker PRD-02 | decision | slice A breaker review on trial merge 8979c480: stress 40/200 streams, 1.5 MB bursts, WS, held writer, seal during traffic: no lost bytes, no blocked relay, counts equal recount; findings fix-level only
+12:05Z | core fixer PRD-02 | start | fixer round on v1.0/prd-02-core, 36 findings
+12:15Z | core fixer PRD-02 | decision | A1: StartFacts keeps S3/S2 fields as JSON with StartFacts::typed() and home() from entry_dir; cli/start.rs back to integration's; typing the fields is one joint change for the integrator with PRD-10
+12:16Z | core fixer PRD-02 | seam | PRD-14 registry: Recorder::seal_for_tests and Recorder::stop_wire_for_tests are test-hooks only (no GOALCUP_TEST_ string); PRD-10: StartFacts stays JSON for connector/hosts/native/mask_rules/values and has no home field (recorder derives it from entry_dir), so start.rs on integration compiles unchanged
+12:37Z | core fixer PRD-02 | fix | pushed v1.0/prd-02-core 66f237b9 (integration merged): A1-A4, A6, A7, A11, B1-B4, B6, B7, F1-F4, F7-F9, A8-A10, B5, B10 fixed; box: fmt, clippy lib and all-targets -D warnings, nextest goalcup 403/403 pass (2 skipped)
+12:37Z | core fixer PRD-02 | decision | A5/F6 declined for slice A: the wrap-up wait comes after PRD-10's end screen, which runs after watchdog::run returns, so it needs an S8 seam (a wait call for PRD-10); the recorder finishes the wrap-up alone in its session, no byte lost; slice B contract item
+12:37Z | core fixer PRD-02 | decision | size: pipeline+watchdog src 7,133 lines by wc -l incl inline tests vs 6,200 ceiling; tests 2,014; this round adds about 190 (typed JSON parse, after_stop per connection, sealed-boot wrap-up); cuts proposed for slice B: handle.rs inline tests into tests/pipeline_guard.rs (~330), counts.rs boots fold (~190); tests/pipeline_common not created, tests share PRD-14's tests/common/recorder.rs
+12:37Z | core fixer PRD-02 | decision | B11: CONTROL_HELD 384 is intended (item 256 plus ~140 channel slot and map node, BRK9-N1), so the 2x soft mark fires near the memory it names; no change
+12:48Z | core fixer PRD-02 | stop | gate fast PASS on 66f237b9 (509 tests, 2 skipped are ignored lessons_launch ctrl_c and mask_bench, not PRD-02); A5/F6 declined, A12/F5 decision logged, next-slice nits A13 B8 B9 F10 left for slice B
+13:12Z | core reviewer PRD-02 | decision | breaker re-review of prd-02-core 66f237b9: preempted pre-stop offer lost with no GAP reproduced; after_seal hosts not deduplicated
+13:12Z | core fixer PRD-02 | start | fixing round findings A14-A18, R1-R5 (A/B/X)
+13:17Z | core fixer PRD-02 | fix | X-R1 blocker: in-flight counter on S1 calls; stop_wire/stop_all wait for it before each seal marker (c2bf30b5), box gate running
+13:23Z | core fixer PRD-02 | stop | pushed 1e71f838: gate fast PASS (510 tests); pipeline suites 15/15 green under 3x parallel load; X-R1 A14 X-R2 fixed, A15 A16 B-R1a X-R5 done; B-R2 B-R3 A17 slice B; size src 7,252 (cuts left to slice B)
+13:47Z | core breaker PRD-02 | decision | re-review of prd-02-core 1e71f838: in-flight fix holds under 40 and 200 thread stress (accounting exact); open: sealed-boot after_seal hosts and log hosts, nits
+13:50Z | core fixer PRD-02 | start | fixer round on v1.0/prd-02-core, findings A14b R3X-cause F1 F2 and nits
+13:55Z | core fixer PRD-02 | seam | PRD-14 registry: test-hooks-only goalcup::pipeline::SLOW_MARKER (an offer starting with it waits 500 ms past its stop check) and SLOW_HELD (set once such an offer is past the check); no env var read
+13:55Z | core fixer PRD-02 | seam | PRD-14 registry: test-hooks-only Recorder::sealed_boot_for_tests(dir, masker), a boot that finds the real_for_tests entry sealed and keeps after_seal current
+13:55Z | core fixer PRD-02 | decision | R3X cause: real_for_tests threads outlive the test, so pipeline tests keep their entry folders (common::recorder::entry_dir) and no folder is removed under a running writer; recorder behaviour unchanged
+14:20Z | core fixer PRD-02 | stop | pushed e0bd5d79: gate fast PASS; pipeline suites 20/20 green under load; A14b and X-F1 fixed (sealed-boot after_seal thread, log hosts), R3X fixed (test entry folders kept), F1 F2 B1 B2 X-F2 X-F3 done; S1 B3 A17 B4-rest F4 left for slice B; src size 7,349
+14:34Z | core reviewer PRD-02 | decision | breaker re-check of prd-02-core e0bd5d79: paced 40/200-stream 1.5 MB body stress with seal under writer hold, masked and unmasked, debug and release: every byte in DATA, GAP or after_stop, relay calls under 5 ms during seal; unpaced 29k conn/s churn hits stall exit 75 (F4, next slice); no blockers
+14:40Z | core planner PRD-02 | start | slice B planned on v1.0/prd-02-core (integration merged): dead.rs, null mode and server/deadline, shield INT race, trims; recover and restart test move to slice C because both need the watchdog loop in watchdog/mod.rs
+14:43Z | core builder PRD-02 | start | b-shield: drain pending INT/QUIT/TSTP inside Shield::harness_exited before giving them back (S8, point 3)
+14:43Z | core builder PRD-02 | seam | to PRD-17: Shield::harness_exited now drains pending INT/QUIT/TSTP (branch v1.0/prd-02-core-b-shield); once merged, remove the ignore on ctrl_c_reaches_the_harness_and_the_watchdog_lives in tests/lessons_launch.rs; no call site change needed in watchdog/mod.rs
+14:54Z | core builder PRD-02 | stop | b-shield pushed 68105ee8: gate fast PASS on trial merge with integration (4e0a286f); watchdog_shield green 3/3 under load; fails on old shield.rs; lessons_launch ctrl_c case 10/10 with the fix
+15:04Z | core merger PRD-02 | stop | merged integration and b-shield, box build/clippy/nextest 520 passed, pushed
+15:06Z | core breaker PRD-02 | stop | slice B review: diff is only the shield late-key fix, tests pass in box; null mode, close_dead_entry, deadline, trims absent
+15:09Z | core fixer PRD-02 | fix | shield drain cfg-gated for macOS, test trimmed; box run next
+15:13Z | core fixer PRD-02 | fix | pushed shield macOS build fix and trimmed test; slice B still not done
+15:14Z | core reviewer PRD-02 | start | breaker re-check of prd-02-core 12d52b40, box run of shield and guard tests
+15:16Z | core reviewer PRD-02 | stop | re-check done: A1 fixed, shield and pipeline_guard (40 and 200 held-writer streams) pass in box; A2 slice B work still missing
+15:16Z | core fixer PRD-02 | start | fix pass C1 C2 C3 on shield
+15:17Z | core fixer PRD-02 | decision | decline C1: sigwait-only drain can hang when another thread takes the pending key first (spare case); keep sigtimedwait on Linux
+15:28Z | core fixer PRD-02 | stop | pushed cba30904 (C2,C3); suite 414/414, fmt, clippy green; L-P3 ignored 20/20 under load, handed to PRD-17; slice B stays open
+15:30Z | core fixer PRD-02 | fix | A3/C1: Shield::harness_exited discards pending INT/QUIT/TSTP by setting SIG_IGN before giving them back; no wait call, one path on every platform
+15:41Z | core fixer PRD-02 | fix | shield SIG_IGN discard pushed c6a9f458; box green (fmt, clippy, goalcup 414 pass, shield x5, L-P3 ctrl_c pass); this merge is the shield task alone, slice B stays open; no macOS check run
+15:46Z | core planner PRD-02 | start | planning rest of slice B
+15:51Z | core planner PRD-02 | decision | merged integration into v1.0/prd-02-core (384ca285, tree equal to integration), pushed
+15:51Z | core planner PRD-02 | decision | rest of slice B split in three tasks on disjoint files: b-dead (dead.rs, pipeline/mod.rs, boot.rs, seal.rs, tests/pipeline_dead.rs), b-null (watchdog/mod.rs, watchdog/spawn.rs, tests/watchdog_null.rs, tests/watchdog_end.rs), b-trim (counts.rs, handle.rs, clock.rs, fds.rs, mask_worker.rs, tests/pipeline_counts.rs, tests/pipeline_guard.rs)
+15:51Z | core planner PRD-02 | decision | the recorder-side server forwarder (run_recorder sends ToWatchdog::Server) and the recorder's own deadline and server stop after watchdog EOF need both pipeline/mod.rs and watchdog/mod.rs; deferred to a short next task once b-dead and b-null merge; unknown control lines are skipped, so nothing breaks meanwhile
+15:51Z | core planner PRD-02 | decision | close_dead_entry keeps the PRD-00 shape Result<Closed, StillRecording>; Closed is an enum (Sealed(SealFacts), AlreadySealed, Failed(io::ErrorKind)) so an I/O failure is never reported as a live recorder; seam line to PRD-06 and PRD-10 at build
+15:52Z | core builder PRD-02 | start | b-dead: close_dead_entry and null seal, branch v1.0/prd-02-core-b-dead
+15:52Z | core builder PRD-02 | start | b-null: watchdog null mode, deadline, server word
+16:00Z | core builder PRD-02 | seam | b-null: ToWatchdog::Server(upload::ServerWord) consumed by the watchdog (PRD-06 S10); forward_server(ctl, rx) ready for the follow-up; null boots carry facts.prev = null_mode cause for b-dead
+16:02Z | core builder PRD-02 | seam | to PRD-06 slice 7 and PRD-10: pipeline::close_dead_entry(entry_dir: &Path) -> Result<Closed, StillRecording>; pub struct StillRecording; pub enum Closed { Sealed(upload::SealFacts), AlreadySealed, Failed(std::io::ErrorKind) }. manual::run maps Err(StillRecording) to Outcome::StillRecording and Closed::Failed to NotClosed; PRD-10 continue and seal on a dead entry call it before the uploader. The sealed status.json keeps the dead recorder's pid, start_id and port (branch v1.0/prd-02-core-b-dead)
+16:02Z | core builder PRD-02 | seam | to b-null: the null recorder's seal reads facts.prev; it expects Prev::Cause(NullMode{exits,last}) on a null boot. Until watchdog/mod.rs sends that, Run::seal uses NullMode{exits:0,last:Code(0)} when prev is None and passes any other prev through as down_tail maps it
+16:02Z | core builder PRD-02 | seam | to PRD-14 registry: new test hook pipeline::seal_null_for_tests(entry_dir, reason, prev) -> io::Result<SealFacts> (feature test-hooks, pipeline/dead.rs), used by tests/pipeline_dead.rs
+16:02Z | core builder PRD-02 | decision | close_dead_entry on an entry the files say is sealed whose status.json is not mode sealed rewrites it with the reason and workspace_head read from the record's own seal event (recovered when that does not parse) and the totals from entry_totals
+16:12Z | core builder PRD-02 | stop | b-dead pushed v1.0/prd-02-core-b-dead 97fcdfc0: box green (fmt check, workspace clippy test-hooks -D warnings, nextest pipeline_dead/seal/counts/guard 19 pass, gate fast PASS after npm ci, pipeline_dead 5/5 under full-cpu load). Size: pipeline+watchdog src 7,741 (ceiling 6,200; dead.rs 382, of which about 75 moved from boot.rs, which shrank 39 net), tests 2,410 (ceiling 3,400)
+16:12Z | core builder PRD-02 | start | b-trim: size trims, no behaviour change, worktree from origin/v1.0/prd-02-core 384ca285
+16:16Z | core builder PRD-02 | stop | b-null pushed (afc4a0ac): fmt, clippy, 4 watchdog test files, inline tests, watchdog_null x3 under load, gate fast all green in box; mod.rs grew 241 lines (target ~150); left: null-mode harness-exit case and recorder forwarder
+16:21Z | core builder PRD-02 | stop | b-trim: stopped before box results; commit b24dfad4 local only, not pushed
+16:24Z | core merger PRD-02 | stop | merged b-dead and b-null into prd-02-core, box build/clippy/nextest green, pushed
+16:40Z | core fixer PRD-02 | start | fixing review findings A1-A8 B1-B7 F1 F2 N1-N4
+16:46Z | core fixer PRD-02 | fix | watchdog restarts a relay recorder after the seal while the harness lives; null exits held to their wait; box run started
+17:00Z | core fixer PRD-02 | stop | findings fixed, goalcup fmt/clippy/444 tests green in box, pushed v1.0/prd-02-core
+17:02Z | core breaker PRD-02 | start | re-review of prd-02-core slice B at 35a230e0
+17:05Z | core breaker PRD-02 | stop | re-review done: null boot killed once leaves the port unserved until its wait ends (29.8 s in box), blocker
+17:05Z | core fixer PRD-02 | start | fixing C1 C2 R1-X R2-X R3-X on watchdog restarts
+17:08Z | core fixer PRD-02 | fix | null exit replaced at once, spacing 1s doubling to 30s only for boots dying at boot, no null on sealed entry, failed null seal resent to next boot; box run started
+17:10Z | core fixer PRD-02 | stop | C1 C2 R1 R2 R3 fixed, box green (fmt, clippy, 16 integration + 4 unit), pushed v1.0/prd-02-core
+17:16Z | core reviewer PRD-02 | start | breaker re-check of prd-02-core slice B at 353c1deb, stress job in box
+17:18Z | core reviewer PRD-02 | stop | breaker re-check of prd-02-core at 353c1deb: earlier fixes hold, stress 40/200 x 1.5MB plus held tunnel plus kills in null and normal mode passed, 26/26 regression passed; nits only
+17:22Z | core fixer PRD-02 | start | fixing A1 B1 B2 Q1 Q3 on v1.0/prd-02-core
+17:25Z | core fixer PRD-02 | fix | null spacing clamped to the R3a wait (A1), failed null seal spaced (B2), null seal stops streams first (B1); box run started
+17:32Z | core fixer PRD-02 | stop | A1 B1 B2 Q1 Q3 fixed, box green (448 passed, 4 skipped), pushed v1.0/prd-02-core
+17:35Z | core reviewer PRD-02 | start | breaker re-check of prd-02-core slice B, box job for null-mode load and torn counts line
+17:47Z | core reviewer PRD-02 | stop | breaker re-check done: load cases pass, dead-entry seal totals understate when counts.jsonl has no line at the last LINK
+17:49Z | core fixer PRD-02 | fix | K1: dead boot's recount appended to counts.jsonl before seal totals
+17:51Z | core fixer PRD-02 | stop | K1 fixed, box green 449/449 on e5815c45, pushed
+17:54Z | core breaker PRD-02 | start | re-review of prd-02-core slice B at e5815c45, K1 fix and stress box job
+18:05Z | core breaker PRD-02 | stop | re-review of prd-02-core e5815c45 done: K1 fixed, new blocker on recount_at with pruned parts (box repro)
+18:05Z | core fixer PRD-02 | start | fix P1 recount after prune
+18:25Z | core fixer PRD-02 | fix | P1 recount of a pruned boot seeds from counts.jsonl line and later COUNT; box green 450 pass; pushed f41bdb39
+18:27Z | core reviewer PRD-02 | start | breaker re-check of prd-02-core slice B at f41bdb39
+18:33Z | core reviewer PRD-02 | stop | breaker re-check done: guard 40/200 held-writer green; pruned-boot recount still undercounts ws_up_msgs (box repro 7 of 10)
+18:33Z | core fixer PRD-02 | start | fixing P1b open-table seed in counts recount
+18:35Z | core fixer PRD-02 | fix | counts.jsonl lines carry the open-stream table; recount seeds it; box run started
+18:48Z | core fixer PRD-02 | stop | P1b fixed and pushed at 9b0b9695; box fmt, clippy, 450 tests green
+19:07Z | core PRD-02 PRD-02 slice B, rest | stop | PRD-02 slice B, rest (path-plan.md section C slice B): dead-entry close and the null recorder's seal, watchdog null mode with the R3a waits plus the watchdog's deadline and server word, and the size trims. Three tasks on disjoint files. watchdog::recover and watchdog_restart.rs stay in slice C. The recorder side of the server word comes in a short task after this slice merges, because it needs both pipeline/mod.rs (b-dead's file) and watchdog/mod.rs (b-null's file). That covers the forwarder thread in run_recorder and the recorder's own deadline and server-stop seal after watchdog EOF. not merged: findings still open after the last review round: P1d, F1 (branch v1.0/prd-02-core)
+19:07Z | core fixer PRD-02 | start | fixing P1d and F1 on v1.0/prd-02-core
+19:11Z | core fixer PRD-02 | fix | P1d fail_closed rules in counts lines, F1 rotation line after its LINK; box run
+19:14Z | core fixer PRD-02 | stop | P1d and F1 fixed, box green (fmt, clippy, 73 tests), pushed f15dece3
+19:18Z | core reviewer PRD-02 | start | breaker re-check of P1d and F1 fixes at f15dece3, stress job in box
+19:26Z | core merge-requester PRD-02 | seam | queued merge request 192609-prd-02-core for v1.0/prd-02-core
+02:08Z | core planner PRD-02 | start | planning next PRD-02 slice; merged integration into v1.0/prd-02-core
+02:12Z | core planner PRD-02 | decision | next slice = Q6 recorder-side server word, deadline after EOF and SIGTERM seal, plus slice C part 1: watchdog::recover (fork-detached hands-off watchdog), watchdog_restart.rs (L-C12 L-P1 L-P2), size cuts paying for both; mask pool, pipeline_stall and by_hand_load left for slice C part 2
+02:13Z | core builder PRD-02 | start | q6-server-word: recorder forwards server word, own deadline, SIGTERM seal
+02:13Z | core builder PRD-02 | start | recover task on v1.0/prd-02-core-recover
+02:15Z | core builder PRD-02 | decision | q6: control EOF seen as the reader thread's channel disconnect; forwarding test skipped, rung 2 proves it
+02:22Z | core builder PRD-02 | stop | q6-server-word pushed at 4ab22ba1; box: fmt, clippy, nextest 26/26 green
+02:23Z | core builder PRD-02 | start | watchdog_restart test on v1.0/prd-02-core-watchdog-restart-test
+02:27Z | core builder PRD-02 | seam | PRD-10 slice 11: watchdog::recover(entry_dir: &Path, facts: StartFacts) -> Result<Recovered { port: u16 }, NotRecovered>, NotRecovered = RecordingOn | HarnessGone | KeyMissing | PortTaken | NoReady; recover_with(entry_dir, facts, recorder_exe) for tests; the caller must start no thread before calling (it forks); facts.harness must be Some (pid, start_id)
+02:27Z | core builder PRD-02 | decision | recover: missing run-ca.pem or a key that does not import reads KeyMissing; an unknown or zero port in status.json reads PortTaken; sealed/sealing status.json is not refused here (PRD-10 may check it)
+02:27Z | core builder PRD-02 | stop | recover pushed on v1.0/prd-02-core-recover; box fmt, clippy -D warnings, nextest watchdog_* 23/23 green
+02:28Z | core builder PRD-02 | start | size-cuts task on v1.0/prd-02-core-size-cuts
+02:32Z | core builder PRD-02 | stop | watchdog_restart.rs pushed on v1.0/prd-02-core-watchdog-restart-test da7ee008; box fmt, clippy, nextest x3 green; file 242 lines, over the ~160 target
+02:35Z | core builder PRD-02 | decision | size-cuts: handle.rs inline tests deleted (covered by pipeline_seal/pipeline_guard); tiny-pieces and drop-racing-the-stop moved to tests/pipeline_guard.rs on the real pipeline; counts.rs boots/recount logic left untouched
+02:38Z | core builder PRD-02 | stop | size-cuts pushed v1.0/prd-02-core-size-cuts 26f0a6d2; box: fmt, clippy test-hooks -D warnings, nextest pipeline_* + lessons_pipeline 32/32 green; src/pipeline+watchdog 8240 -> 7902 (-338); PRD-02 pipeline tests 2015 -> 1928 (-87, short of -300), with watchdog_* 3315 -> 3228
+02:42Z | core merger PRD-02 | stop | joined integration + 4 task branches clean; box build/clippy/nextest 589 pass; pushed
+02:48Z | core breaker PRD-02 | start | reviewing origin/v1.0/prd-02-core slice C part 1 at cdcd548f; box job running slice tests plus throwaway 40/200-stream burst, WebSocket and seal-mid stress
+03:03Z | core breaker PRD-02 | stop | review of prd-02-core cdcd548f done: slice tests 49/49 pass, recover/restart/end 3x clean; throwaway 40/200-stream 1.5 MB burst, WebSocket, held-writer, seal-mid and real-mask stress lost no byte without a GAP, counts equal recount, calls under 9 ms, peak held at guard; no blockers, fixes on deleted point tests, recover/restart acceptance gaps and fork precondition
+03:04Z | core fixer PRD-02 | start | fixing review findings A1-A10 B1-B9 F1-F5 N1-N6
+03:12Z | core fixer PRD-02 | decision | recover: no fork; the watchdog is the hidden recorder entry re-exec'd with a recover first line (main.rs untouched); helpers shared in tests/watchdog_share (tests/common is PRD-14's)
+03:12Z | core fixer PRD-02 | seam | S8: new control line ToRecorder::Recover(StartFacts), first line only, sent by recover_with; NotRecovered gains WatchdogAlive and Sealed (PRD-10 words them)
+03:12Z | core fixer PRD-02 | seam | ask PRD-14: add watchdog_recover, watchdog_restart, watchdog_end to the heavy test group in .config/nextest.toml (they kill processes and bind loopback ports)
+03:12Z | core fixer PRD-02 | decision | replan: watchdog_restart exit-74 case for L-FW2 (part file made unwritable, next gap cause code 74) deferred to slice C part 2 with pipeline_stall: an open part fd cannot be made to fail without a test hook; native cursor resume after a kill also there
+03:20Z | core fixer PRD-02 | decision | size: src pipeline+watchdog 8153 lines (was 8108, ceiling 6000), PRD-02 tests 3883 (was 3695, ceiling 2300); the growth is the restored point guards and recover/restart acceptance; reported for the replan
+03:20Z | core fixer PRD-02 | stop | pushed v1.0/prd-02-core 7ad44103; box: fmt check, clippy -D warnings, workspace nextest 592/592, watchdog_recover/restart/end + pipeline_guard 3x green
+03:57Z | core fixer PRD-02 | start | fixer round on review findings (recover ready retry, docs, unit cases)
+04:12Z | core fixer PRD-02 | stop | pushed 6fea55a2: X R1 fixed (recover keeps a slow first boot, report 0, restart loop takes it; report wait from READY_NS), A R1 deadline stop sets facts.deadline, stop_of/moved unit case, doc rewording, watchdog_share ownership in PRD-02 amendment (PRD-00 note open for replan); box fmt, clippy -D warnings, nextest lib+pipeline_*+watchdog_* 92/92 green; exit-74, cursor resume, server stop after EOF, slice C part 2 items and size overage stay replan items
+04:14Z | core fixer PRD-02 | start | fixer round on v1.0/prd-02-core
+04:17Z | core fixer PRD-02 | fix | recover reports late vs not started, wait_ready marks ready, doc and test cleanups; gate fast in box
+04:23Z | core fixer PRD-02 | stop | pushed 9cbe5dec; fmt, clippy, 594 nextest pass in box; gate.sh fast itself skipped (box lacks server/worker node_modules)
+04:28Z | core fixer PRD-02 | start | review fixes A2-R1, A2-R2, C-R1 on v1.0/prd-02-core
+04:28Z | core fixer PRD-02 | seam | for PRD-10 (ask N9): recover returns Ok(Recovered { port, late }); late=true (report byte 2) means the watchdog runs and the recorder comes back through the restart loop or null mode, word it apart from plain success; NotRecovered = Sealed | WatchdogAlive | RecordingOn | HarnessGone | KeyMissing | PortTaken | NotStarted; NotStarted (was NoReady) means nothing runs
+04:28Z | core fixer PRD-02 | decision | C-R1 accepted and documented: a watchdog with no pid file that reports after the wait reads NotStarted; R3 slow-boot test skipped (nit)
+04:39Z | core fixer PRD-02 | fix | 721e8562 pushed to v1.0/prd-02-core; box fmt, clippy, nextest 487 passed 4 skipped
+04:40Z | core merge-requester PRD-02 | seam | queued 044023-prd-02-core (slice C part 1, all paths owned, no Cargo.toml change)
+07:25Z | core planner PRD-02 | start | slice C part 2 reduced to pipeline_stall.rs (L-R2) only, rest deferred by conductor
+07:26Z | core builder PRD-02 | start | pipeline_stall.rs guard on v1.0/prd-02-core-pipeline-stall-guard
+07:39Z | core builder PRD-02 | stop | pipeline_stall.rs green in box (70 s pass, sanity without hook fails, gate fast PASS); pushed v1.0/prd-02-core-pipeline-stall-guard
+07:47Z | core reviewer PRD-02 | start | breaker review of pipeline_stall.rs, box run with throwaway stress
+07:51Z | core reviewer-A PRD-02 | decision | reviewed prd-02-core pipeline_stall.rs: passes in box, fails on a no-stall-exit mutation; no blocker
+07:57Z | core reviewer PRD-02 | stop | pipeline_stall.rs passes in box; stall-exit and cause mutations fail it; 40/200 stream stress held, no blocker
+08:01Z | core fixer PRD-02 | start | fix round on pipeline_stall.rs (A1-A5, B1-B4, F1-F5); shared watchdog test rig, 5 s hold, stop on driver panic, gap-covers-held-exchange assert, amendment note
+08:05Z | core fixer PRD-02 | fix | pipeline_stall fix round pushed to v1.0/prd-02-core at 746b0051; box green (fmt, clippy, 18 watchdog/stall tests)
+08:05Z | core fixer PRD-02 | seam | ask of PRD-14: add pipeline_stall to the heavy nextest group and end-to-end slow-timeout (about 70 s wall clock); PRD-02 does not own .config/nextest.toml
+08:07Z | core reviewer PRD-02 | start | breaker re-check of prd-02-core pipeline_stall fix round (746b0051) merged onto integration
+08:13Z | core reviewer PRD-02 | stop | breaker re-check done: pipeline_stall passes on merge with integration and under 24 CPU burners, fails on stall-exit and cause mutations; no blockers
+08:17Z | core merge-requester PRD-02 | seam | queued 081708-prd-02-core (pipeline_stall guard, all paths owned, no Cargo.toml change)
+08:28Z | core replan PRD-02 | amendment | notes to PRD-14 (heavy group, pipeline_guard hang bound), PRD-17 (repoint L-R2), PRD-16 (size: src 8236 vs 1350, tests 4013 vs 1500); no ledger item touched

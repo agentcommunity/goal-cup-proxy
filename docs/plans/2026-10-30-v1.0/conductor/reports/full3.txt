@@ -1,0 +1,127 @@
+goalcup 1.0 full3 test-pad rows for the conductor, integration head 2702551e (origin/v1.0/integration, contains e707e427).
+Fresh worktree /root/gc-wt/full3, detached, rig unmodified, nothing committed or pushed.
+Binaries: build box (box.mjs, keys, GH_TOKEN and DATABASE_URL unset) `cargo build --release --locked -p goalcup -p goalcup-verify`
+  at 2702551e, exit 0 (build.log; goalcup sha256 49cb24bb..., goalcup-verify 38649337...).
+  Housekeeping: my first build launch had wrong --out paths. The pkill I used to stop it also killed its client shell, which
+  left one keyless build box, lime-energetic-unicorn-xqfaP8, running until its 40 min timeout. It expired by itself. I counted
+  it against the 3-box cap: Codex dodger started only when the Claude row's box was gone.
+Each row: one `scripts/pad/pad <settings>` via padrun.sh (GH_TOKEN unset), server staging, where sandbox. Keys only via the pad's
+  put-env. Fetch used the pad's own index box. Copy-outs scrubbed (scrub2.py): 0 fragments. keyscan over pad-out before reading
+  panes and over /root/gc-night/full3 at the end: 0 hits, 11 keys. `sbx list --prefix pad-`: only the stopped pad image box.
+
+SUMMARY
+  Row 1 Hermes rung 3 smoke: the start blocker is fixed. The run opens and records (C1, C2, C4, C5, C6 PASS). Pad result FAIL on C3 only.
+  Row 2 Hermes direct full, payments, kills @8/@10: faults PASS, C1, C2, C4, C5, C6 PASS. Pad result FAIL on C3 only, the same pattern.
+  Row 3 Claude Code dodger full: PASS, C1-C6 PASS.
+  Row 4 Codex dodger full: PASS, C1-C6 PASS.
+  Spend (pad estimates): 0.01 + 0.68 + 2.23 + 1.90 = 4.82 USD.
+  I ran row 2 even though row 1 had a non-PASS. The row 1 C3 FAIL comes from how the pad combines its rules (N1 below), not
+  from a recording fault, and the release blocker this row was testing (the start) is cleared.
+
+ROW 1  hermes-cli 0.22.5, direct, micro, smoke prompt, DeepSeek key (rung 3). pad exit 1 (FAIL)
+  box pad-3c02e7  run r2cf92eef9e11d04d  entry ea20736591f65d3de  5m 02s (13:04:07 to 13:09:10Z)
+  start: "approved, prompt pasted". The run was created, and Hermes ran and committed (081b70c "Add count.txt").
+    full2's 400 "harness_version must be a string" is gone. The 'unknown' wording itself is not in the pane copies:
+    pane-1 shows the approval wait only, and Hermes's TUI clears the launch block before pane-2. The record and the fetched
+    index do not carry harness_version either, so it is not directly shown.
+  C1 PASS  gaps none; wire_keeps_up pass (harness 11, wire_ok 12); history 9 checked, 0 missing; threads_match 2.
+  C2 PASS  subagents_present children 1; thread 20261101_130519_b692 has parent local-35a2bd9b00b1 (main). threads 2.
+  C3 FAIL  why: shape_hits masked_key in ea20736591f65d3de/0.80/deltas (stated-loss, owner question open), then
+           "hits of openai_key / github_token / jwt / private_key: no MASK". known_hits 0, plain_hits 9 (exercise done),
+           masks generic_secret_assignment 6, masked_key 28, url_password 56.
+  C4 PASS  check-server: 2 chunks, whole, db_match true, equals_local true.
+  C5 PASS  deepseek-flash: input 28670, cached 146944, output 2830, reasoning 766; matched 11, wire_only 1, unattributed 0.
+  C6 PASS  status.json model_requests 12 = end screen 12 = verifier 12; off 0.
+  status.json: mode sealed, model_requests 12, seal.reason seal_command.  upload: final sealed; fetched ea20736591f65d3de.
+  End screen: "12 model requests written: api.deepseek.com 12. Nothing was lost."   spend 0.01 USD
+
+ROW 2  hermes-cli 0.22.5, direct, full, payments prompt, kill-recorder@8 and @10 (hermes-cli.toml has no kill_minutes, so the
+       rig default 8 and 10 stays). pad exit 1 (FAIL on C3 only)
+  box pad-4c508f  run rec4fe71fb3e94fbb  entry ef5cf2f48e08998c6  22m 10s (13:11:25 to 13:33:35Z)
+  C1 PASS  gaps only the 2 named recorder_down (killed); boots 3, links 1031; history 249 checked, 0 missing_call,
+           1 missing_text (warn, thread 20261101_131524_474057); wire_keeps_up skip (Hermes is a totals harness, as PRD-12 says).
+  C2 PASS  subagents_present children 5. Threads 6: 5 have parent local-3d1c349d2515 (main), with 53/29/38/35/45 calls; main 74.
+  C3 FAIL  same pattern as row 1: shape_hits generic_secret_assignment in deltas of 0.176/0.221/0.233/0.242/0.395 (stated-loss),
+           then "hits of openai_key/github_token/jwt/private_key: no MASK". known_hits 0, plain_hits 98; masks
+           generic_secret_assignment 1408, masked_key 190, url_password 732. glued_shape openai_key (not a known value, warn).
+           Live alarm "secrets fail" from 13:17:15.
+  C4 PASS  check-server: 10 chunks, whole, db_match true, equals_local true.
+  C5 PASS  deepseek-flash: input 356343, cached 23357695, output 360984, reasoning 141457; matched 274, wire_only 19, unattributed 0.
+  C6 PASS  status.json model_requests 293 = end screen 293 = verifier 293; off_ms 620 = 551 + 69 (status and verifier).
+  faults PASS  quiet null for both kills.
+  kill gaps (watch/faults.jsonl vs check-local inv6):
+    kill 1 13:20:13.567 (recorder 177, 1.6 s after a written request). Gap from 13:20:13.068 to 13:20:13.620: 551 ms, ends 0.05 s
+      after the kill. Live work: WS/stream call sid 659 (t0 13:20:12.683) was open, status unknown. Next call 13:20:13.583.
+      Recorder 9260 back 3.8 s after the kill.
+    kill 2 13:22:14.067 (recorder 9260, 2.1 s after a written request). Gap from 13:22:14.040 to 13:22:14.109: 69 ms, ends 0.04 s
+      after the kill. Live work: sid 97 (t0 13:22:12.909) was open. Next call 13:22:15.103. Recorder 9936 back 3.5 s after.
+    gaps_named recorder_down count 2, lost_bytes 0, lost_unknown 2. No participant action.
+  status.json: mode sealed, model_requests 293, seal.reason seal_command, off 2 spans 620 ms.
+  upload: final sealed; fetched ef5cf2f48e08998c6.   spend 0.68 USD
+  Hermes finished: 5 commits, clean tree; push to the fake remote failed with CONNECT 502, as expected (push not tested).
+  End screen: "Recording was off 2 times, 0 s in total." (see N3).
+
+ROW 3  claude-code-cli 2.1.312, dodger (api.anthropic.com pinned in the hosts copy), full, payments prompt. PASS, pad exit 0
+  box pad-2e9c01  run r25fbfaa360dfb1d7  entry e5f468b1774952856  22m 04s (13:04:27 to 13:26:32Z)
+  C1 PASS  verifier exit 1 (named only), as the dodger expects. gaps_named pinned 30 (lost 4522395 bytes);
+           listed_hosts_decrypted: decrypted 0, listed_conns 30, tunnels_named pinned 30, long_tunnel_unlisted none;
+           status tunnel_hosts api.anthropic.com conns 30, listed "pinned". history skip, wire_keeps_up named, threads_match named.
+  C2 PASS  subagents_present children 5. 6 threads, 5 general-purpose subagents with parent 48630b98-a1ea (main).
+  C3 PASS  0 known, 0 shape, 0 glued; masks for every planted kind (anthropic, openai, github, jwt, private_key, url_password,
+           generic). plain_hits 1.
+  C4 PASS  check-server: 6 chunks, whole, db_match true, equals_local true.
+  C5 PASS  native only: claude-opus-5-5, 27 calls, input 56, cached 458877, cache_write 118854, output 59164; wire 0; unattributed 0.
+  C6 PASS  status.json 0 = verifier 0; off 0.
+  Participant told: launch block "Host list from a file: /home/vercel-sandbox/run/hosts.toml (not verified)." End screen:
+    "Not recorded, passed through unread: api.anthropic.com (the host list pins it; 30 connections, 4.5 MB)." and
+    "4.5 MB was not recorded." meta hosts_sha256 d9d9828e...; the start event itself was not decoded here.
+  status.json: mode sealed, model_requests 0, seal.reason seal_command.  upload: final sealed; fetched.   spend 2.23 USD
+
+ROW 4  codex-cli 0.165.0, dodger (api.openai.com pinned), full, payments prompt. PASS, pad exit 0
+  box pad-7b1f08  run r8b97bff7b5f6f394  entry e4f73dd645022de98  21m 53s (13:27:36 to 13:49:29Z)
+  C1 PASS  verifier exit 1 (named only). gaps_named pinned 25 (lost 12447290 bytes); listed_hosts_decrypted: tunnels_named
+           pinned 25, listed_conns 32, decrypted 7 (to non-model hosts; status hosts {} so none to api.openai.com),
+           long_tunnel_unlisted ab.chatgpt.com (warn, as before); tunnel_hosts api.openai.com conns 25 listed pinned.
+  C2 PASS  subagents_present children 5; 6 threads, 5 with parent 01a1974b-9bd5 (main).
+  C3 PASS  0 known, 0 shape; masks for every planted kind; glued_shape huggingface_token x3 (warn). Pane copies: 1 shape
+           url_password on pane-w2 (screen echo, not read by rule); known values on panes 0.
+  C4 PASS  check-server: 6 chunks, whole, db_match true, equals_local true.
+  C5 PASS  native only: gpt-6.1-sol 135 calls, input 212406, cached 7488647, output 72413, reasoning 7388; wire 0; unattributed 0.
+  C6 PASS  status.json 0 = verifier 0; off 0.
+  Participant told: end screen "Not recorded, passed through unread: api.openai.com (the host list pins it; 25 connections,
+    12 MB)." and "12 MB was not recorded." The launch block is not in the pane copies (Codex's TUI clears it).
+  Live alarm: "fail threads_match, wire_keeps_up" at 13:28:31 etc. These checks read `named` in the final verifier, so the
+    live check names a dodger's expected state as fail (N5).
+  status.json: mode sealed, model_requests 0, seal.reason seal_command.  upload: final sealed; fetched.   spend 1.90 USD
+
+NON-PASS ITEMS, WITH OWNER
+  N1 Hermes C3 FAIL (rows 1 and 2). Not a leak: known_hits 0 in every scan. Two things combine:
+     a) Hermes redacts secrets in tool output before the model sees them, so the raw planted openai/github/jwt/private_key
+        values never reach the wire. The record instead holds Hermes's masked forms: goalcup masked_key masks 28 and 190.
+        Hermes redacts its own logs too (docs/harnesses/hermes-cli.md:28). So those planted kinds can never get a MASK.
+     b) A stated-loss shape in joined streamed deltas (row 1 masked_key in 0.80/deltas; row 2 generic_secret_assignment in 5
+        deltas) makes r.hits("secrets") non-zero. The pad then turns "not exercised" into FAIL.
+     Owners: PRD-12 rig, scripts/pad/check.py:489-493: a stated-loss-only hit should not make a missing planted MASK a FAIL.
+       It also needs a rule for a harness that redacts tool output itself, either exercise kinds by masked_key or record the
+       harness as redacting in scripts/pad/harnesses/hermes-cli.toml.
+     PRD-05 masker, crates/goalcup/src/mask/stream.rs:372-376 (masked_key soft rule) and the deltas join: the open
+       "Model echo" owner question that check.py:230 stated_loss refers to.
+  N2 'unknown' version line not shown in pad evidence. Hermes's TUI clears goalcup's launch block, and the fetched index and
+     usage carry no harness_version. The run start proves the e707e427 path only indirectly. Owner PRD-12 rig
+     (scripts/pad/pad-run pane capture before the harness opens) or PRD-10 (crates/goalcup/src/cli/text.rs:1115-1118: also
+     put the line in goalcup.log or status.json). Same capture gap for Codex's "Host list from a file" line.
+  N3 Wording: "Recording was off 2 times, 0 s in total." for 620 ms (row 2). Owner PRD-10, crates/goalcup/src/cli/text.rs:776-785
+     (off_total via span_words, which rounds under 1 s to 0 s).
+  N4 Dodger usage summary does not say "<host> not recorded on the wire" (PRD-12 plan line 308 and C5 line 651). Usage JSON has
+     wire_calls 0 and native_only 27/135 but no host or wording. Owner PRD-09 usage, crates/goalcup-verify/src/usage/out.rs:116-126.
+     Also the dodger end screen opens with "No model request was written. <name> may not use the recording proxy, or it made
+     no call." That guesses a cause even though the next line names the pin. Owner PRD-10, crates/goalcup/src/cli/text.rs:728.
+  N5 Live check on a dodger: live.jsonl says "fail threads_match, wire_keeps_up", which the final verifier names. Owner PRD-12
+     rig (the live check reading of the dodger's named expectations, scripts/pad/pad-run look/spend check).
+  N6 Warn only: long tunnel to ab.chatgpt.com (Codex), PRD-11 host list, as before. Hermes history warn: missing_text 1 in one
+     subagent thread (row 2), PRD-08 Hermes history reader, to watch.
+
+FILES /root/gc-night/full3/:
+  REPORT.txt, build.log, build/ (goalcup, goalcup-verify), runs/ (r3-hermes, full-hermes, dodger-claude, dodger-codex .toml),
+  jobs/ (build.sh, runbuild.sh), logs/ (pad logs), pad-out/ (scrubbed run folders, spend.jsonl), padrun.sh, scrub2.py,
+  keyscan.py, summ.py, ev2.py.

@@ -1,0 +1,5 @@
+# The end: 20 minutes of the payments prompt; the only rows that give a tier (PRD-12 section 1a).
+harness = "codex-cli"
+key = "openai"
+case = "direct"
+mode = "full"

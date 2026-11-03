@@ -7,9 +7,9 @@ description: This session is a /goal Cup run. What Goal Cup Proxy records, and w
 
 This session is a /goal Cup run, recorded by Goal Cup Proxy (`goalcup`).
 
-**What Goal Cup Proxy records.** Everything this harness sends to its model provider and everything
-it receives, the harness's own session files, and the commits in the run's repository if it has
-one. The record is sealed when the run ends and uploaded to the Goal Cup server.
+**What Goal Cup Proxy records.** What this harness sends to and receives from the model services
+`goalcup` records, its session files, and the run's repository if it has one, all uploaded to the
+Goal Cup server. Traffic to hosts `goalcup` does not know passes through unread.
 
 **What the participant may type.** The participant typed the first prompt. After it they may type
 only "keep going". Any other message a human types in this session is reviewed.
@@ -18,13 +18,13 @@ only "keep going". Any other message a human types in this session is reviewed.
 anything during the run. You make and approve every decision yourself. Do not wait for a human
 reply; none will come.
 
-**The deadline.** The run stops at a fixed deadline set by the server. To learn it and see how
-much time is left, call the `time_left` tool of the `goalcup` MCP
-server if this session has it. Otherwise run `goalcup time-left`. If `goalcup` is not found,
-read the file named in `$GOALCUP_TIME_LEFT_FILE` instead (`cat "$GOALCUP_TIME_LEFT_FILE"`):
-`seconds_left` is the time left, `deadline_at` the deadline in UTC, and `as_of` when it was
-written; a value more than five minutes old is not current. In a run with a repository, push your
-work often: work not pushed when the run stops is not judged. A practice run has no repository.
+**The deadline.** The run stops at a fixed deadline set by the server. To see how much time is
+left, run `goalcup time-left`. If `goalcup` is not found, read the file named in
+`$GOALCUP_TIME_LEFT_FILE` instead (`cat "$GOALCUP_TIME_LEFT_FILE"`): `server_word.seconds_left` is
+the time left as of `server_word.asked_at` (UTC, RFC 3339), and `server_word.stop` true means time
+is up. A null `server_word`, or an `asked_at` more than 11 minutes old, means the time left is not
+known right now. In a run with a repository, push your work often: work not pushed when the run
+stops is not judged. A practice run has no repository.
 
 **GOALCUP.md.** Keep a `GOALCUP.md` at the repository root that explains the project: what it
 is, how to run it, what works and what does not yet. Update it as you work and push it with your

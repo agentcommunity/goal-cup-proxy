@@ -10,7 +10,6 @@ import { type Ctx, makeCtx } from "../../src/context.ts";
 import { LocalDb } from "../../src/db-local.ts";
 import { APPROVAL_KEY, Client } from "./client.ts";
 import { FakeBucket, asR2 } from "./fake-r2.ts";
-import { TEST_SEED } from "./worker.ts";
 
 export interface InProcess {
   api: Client;
@@ -47,7 +46,6 @@ export function inProcess(start: string, vars: Record<string, string> = {}, cf: 
     PRACTICE_RUN_MINUTES: "10",
     DB_BACKEND: "local",
     GITHUB_CHECK: "off",
-    RECEIPT_SIGNING_KEY: TEST_SEED,
     TEST_APPROVAL_KEY: APPROVAL_KEY,
     ...vars,
   } as unknown as Env;

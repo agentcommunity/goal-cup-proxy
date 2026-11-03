@@ -7,11 +7,10 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
-import { after, before, describe, test } from "node:test";
-import { Signer } from "../src/sign.ts";
-import type { Ack, StartReceipt } from "../src/sign.ts";
-import { APPROVAL_KEY, Client, GENESIS, credentialFor, makeChunk, openBody, sha256, verifyAck, verifyReceipt } from "./helpers/client.ts";
-import { TEST_SEED, startWorker, type RunningWorker } from "./helpers/worker.ts";
+import { after, before, describe, mock, test } from "node:test";
+import { APPROVAL_KEY, Client, GENESIS, credentialFor, makeChunk, openBody, sha256 } from "./helpers/client.ts";
+import { lifecycle } from "./helpers/rig.ts";
+import { startWorker, type RunningWorker } from "./helpers/worker.ts";
 
 // Run credentials, minted through the device flow in each describe's `before`.
 let ALICE = "";
@@ -21,8 +20,6 @@ let DAVE = "";
 const ID_RUN = /^r[0-9a-f]{16}$/;
 const ID_ENTRY = /^e[0-9a-f]{16}$/;
 const TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-
-const publicKey = (await Signer.fromSeedHex(TEST_SEED)).publicKeyHex;
 
 /**
  * What miniflare has persisted in R2: key and sha256 of each committed object. (Reads the
@@ -65,7 +62,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
   before(async () => {
     worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY });
     api = new Client(worker.url);
-    [ALICE, BOB, CAROL] = [await credentialFor(api, "alice"), await credentialFor(api, "bob"), await credentialFor(api, "carol")];
+    [ALICE, BOB] = [await credentialFor(api, "alice"), await credentialFor(api, "bob")];
   });
   after(async () => {
     await worker?.stop();
@@ -74,7 +71,6 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
   // State carried from test to test (alice's run).
   let runId = "";
   let entryId = "";
-  let receipt: StartReceipt;
 
   describe("authentication and routing", () => {
     test("no token and wrong token are 401", async () => {
@@ -95,7 +91,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
     test("rejects bad bodies with 400", async () => {
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: openBody({ repo_url: "https://gitlab.com/a/b" }) }), 400, "malformed");
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: openBody({ repo_url: "https://github.com/a/b/" }) }), 400, "malformed");
-      assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: openBody({ manifest_sha256: "ABC" }) }), 400, "malformed");
+      assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: openBody({ connector_sha256: "ABC" }) }), 400, "malformed");
       const { workspace: _w, ...missing } = openBody();
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, json: missing }), 400, "malformed");
       assertError(await api.call("POST", "/v1/runs", { token: ALICE, body: new TextEncoder().encode("{not json") }), 400, "malformed");
@@ -140,62 +136,27 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(r.status, 201);
       assert.notEqual(r.body.run_id, runId);
       assertError(await api.call("GET", `/v1/runs/${runId}`, { token: BOB }), 404, "not_found");
-      assertError(await api.call("POST", `/v1/runs/${runId}/abandon`, { token: BOB, json: { reason: "x" } }), 404, "not_found");
       assertError(await api.call("PUT", `/v1/runs/${runId}/chunks/0`, { token: BOB, body: new Uint8Array([1]), headers: makeChunk(entryId, 0, 1, GENESIS, "x").headers }), 404, "not_found");
     });
   });
 
-  describe("start receipt", () => {
-    test("200 with a signed receipt in the verifier's format", async () => {
-      const r = await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: entryId, chain_head: "b".repeat(64) } });
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(Object.keys(r.body), ["start_receipt"]);
-      receipt = r.body.start_receipt;
-      assert.deepEqual(Object.keys(receipt), ["claims", "public_key", "signature"]);
-      assert.deepEqual(Object.keys(receipt.claims), [
-        "entry_id", "connector_id", "workspace", "session_id", "started_at", "deadline_at",
-        "manifest_sha256", "chain_head", "connector_dir_sha256",
-      ]);
-      const pos = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
-      assert.equal(receipt.claims.entry_id, entryId);
-      assert.equal(receipt.claims.started_at, pos.body.official_start);
-      assert.equal(receipt.claims.deadline_at, pos.body.deadline_at);
-      assert.equal(receipt.claims.chain_head, "b".repeat(64));
-      assert.equal(receipt.claims.workspace, openBody().workspace);
-      assert.equal(receipt.claims.session_id, openBody().session_id);
-      assert.equal(receipt.claims.connector_dir_sha256, "c".repeat(64));
-      assert.equal(receipt.public_key, publicKey);
-      assert.equal(await verifyReceipt(receipt, publicKey), true);
-    });
-
-    test("a repeat with the same chain_head returns the stored receipt; another chain_head is 409", async () => {
-      const again = await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: entryId, chain_head: "b".repeat(64) } });
-      assert.equal(again.status, 200);
-      assert.deepEqual(again.body.start_receipt, receipt);
-      assertError(await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: entryId, chain_head: "d".repeat(64) } }), 409, "conflict");
-    });
-
-    test("wrong entry is 404, malformed fields are 400", async () => {
-      assertError(await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: "e" + "1".repeat(16), chain_head: "b".repeat(64) } }), 404, "not_found");
-      assertError(await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: entryId, chain_head: "xyz" } }), 400, "malformed");
-      assertError(await api.call("POST", `/v1/runs/${runId}/receipt`, { token: ALICE, json: { entry_id: "nope", chain_head: "b".repeat(64) } }), 400, "malformed");
-    });
-
-    test("once a receipt exists, repeating the open call is still 200 with the same run", async () => {
-      const r = await api.call("POST", "/v1/runs", { token: ALICE, json: openBody() });
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.equal(r.body.run_id, runId);
+  describe("routes gone since 0.7", () => {
+    test("receipt and abandon are 404", async () => {
+      for (const route of ["receipt", "abandon"]) {
+        const r = await api.call("POST", `/v1/runs/${runId}/${route}`, { token: ALICE, json: { entry_id: entryId, chain_head: "b".repeat(64), reason: "x" } });
+        assertError(r, 404, "not_found");
+      }
     });
   });
 
   describe("position", () => {
-    test("a fresh run: offset 0, next_seq 0, genesis head, no ack", async () => {
+    test("a fresh run: offset 0, next_seq 0, genesis head, not sealed", async () => {
       const r = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
       assert.equal(r.status, 200);
       assert.deepEqual(r.body, {
         run_id: runId, entry_id: entryId, segment: 0, status: "open",
         official_start: r.body.official_start, deadline_at: r.body.deadline_at, ends_at: r.body.deadline_at,
-        offset: 0, next_seq: 0, head: GENESIS, last_ack: null, stop: false, final: null,
+        offset: 0, next_seq: 0, head: GENESIS, stop: false, final: null, sealed: false,
       });
     });
   });
@@ -212,7 +173,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(r.status, 200, JSON.stringify(r.body));
       const pos = await api.call("GET", `/v1/runs/${runId}`, { token: ALICE });
       const { seconds_left, ...rest } = r.body;
-      assert.deepEqual(rest, { stop: false, deadline_at: pos.body.deadline_at, reason: null });
+      assert.deepEqual(rest, { stop: false, deadline_at: pos.body.deadline_at, reason: null, sealed: false });
       assert.ok(seconds_left > 168 * 3600 - 300 && seconds_left <= 168 * 3600, JSON.stringify(r.body));
     });
 
@@ -230,7 +191,8 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
   describe("chunks", () => {
     const chunk1 = () => makeChunk(entryId, 0, 5, GENESIS, "one");
     let c1: ReturnType<typeof chunk1>;
-    let ack1: Ack;
+    // The first chunk's answer, which every later retry of that chunk must repeat.
+    let answer1: Record<string, unknown>;
 
     const put = (c: { body: Uint8Array; headers: Record<string, string> }, offset: number, token = ALICE) =>
       api.call("PUT", `/v1/runs/${runId}/chunks/${offset}`, { token, body: c.body, headers: c.headers });
@@ -267,18 +229,14 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.deepEqual((await position()).offset, 0);
     });
 
-    test("first chunk: 200 with a signed ack and the new position", async () => {
+    test("first chunk: 200 with the new position and sealed, and no ack", async () => {
       c1 = chunk1();
       const r = await put(c1, 0);
       assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(Object.keys(r.body), ["ack", "offset", "next_seq", "head"]);
-      ack1 = r.body.ack;
-      assert.deepEqual(Object.keys(ack1), ["entry_id", "seq", "hash", "acked_at", "server_signature"]);
-      assert.equal(ack1.entry_id, entryId);
-      assert.equal(ack1.seq, c1.lastSeq);
-      assert.equal(ack1.hash, c1.head);
-      assert.match(ack1.acked_at, TIME);
-      assert.equal(await verifyAck(ack1, publicKey), true);
+      assert.deepEqual(Object.keys(r.body).sort(), ["head", "next_seq", "offset", "received_at", "sealed"]);
+      answer1 = r.body;
+      assert.equal(r.body.sealed, false);
+      assert.match(r.body.received_at, TIME);
       assert.equal(r.body.offset, c1.length);
       assert.equal(r.body.next_seq, c1.lastSeq + 1);
       assert.equal(r.body.head, c1.head);
@@ -286,17 +244,17 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(p.offset, c1.length);
       assert.equal(p.next_seq, 5);
       assert.equal(p.head, c1.head);
-      assert.deepEqual(p.last_ack, ack1);
+      assert.equal(p.sealed, false);
     });
 
-    test("a retry of the same chunk is 200 with the very same stored ack", async () => {
-      await new Promise((r) => setTimeout(r, 1100)); // a re-signed ack would carry a later acked_at
-      const r = await put(c1, 0);
+    test("a retry of the same chunk is 200 with the very same stored answer, body unread", async () => {
+      await new Promise((r) => setTimeout(r, 1100)); // a fresh answer would carry a later received_at
+      // Other bytes under the same headers: had the body been read, its hash would not match (422).
+      const other = Buffer.from(c1.body);
+      other[other.length - 1] = other[other.length - 1]! ^ 0xff;
+      const r = await put({ body: other, headers: c1.headers }, 0);
       assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(r.body.ack, ack1);
-      assert.equal(r.body.offset, c1.length);
-      assert.equal(r.body.next_seq, 5);
-      assert.equal(r.body.head, c1.head);
+      assert.deepEqual(r.body, answer1);
       assert.equal((await position()).offset, c1.length);
     });
 
@@ -332,7 +290,6 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(p.offset, c1.length);
       assert.equal(p.next_seq, 5);
       assert.equal(p.head, c1.head);
-      assert.deepEqual(p.last_ack, ack1);
       // A shorter body than Content-Length cannot happen over HTTP, but a *different* body of a
       // different size with the old hash is a mismatch too.
       assertError(await put({ body: Buffer.concat([good.body, Buffer.from([0])]), headers: good.headers }, c1.length), 422, "digest_mismatch");
@@ -343,19 +300,18 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
       assert.equal(ok.body.next_seq, 8);
       p = await position();
       assert.equal(p.head, good.head);
-      assert.equal(await verifyAck(ok.body.ack, publicKey), true);
       // The stored object is exactly the verified body, once.
       const goodKey = `traces/practice/${runId}/${entryId}/${String(c1.length).padStart(16, "0")}-${good.headers["goalcup-sha256"]}.zst`;
       assert.deepEqual(traceKeys().filter((o) => o.key === goodKey).map((o) => o.sha256), [good.headers["goalcup-sha256"]]);
     });
 
-    test("two identical uploads at once: both 200 with one ack, and the run advanced once", async () => {
+    test("two identical uploads at once: both 200 with one answer, and the run advanced once", async () => {
       const before = await position();
       const next = makeChunk(entryId, before.next_seq, 4, before.head, "three");
       const [a, b] = await Promise.all([put(next, before.offset), put(next, before.offset)]);
       assert.equal(a.status, 200, JSON.stringify(a.body));
       assert.equal(b.status, 200, JSON.stringify(b.body));
-      assert.deepEqual(a.body.ack, b.body.ack);
+      assert.deepEqual(a.body, b.body);
       const p = await position();
       assert.equal(p.offset, before.offset + next.length);
       assert.equal(p.next_seq, before.next_seq + 4);
@@ -364,12 +320,7 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
     test("an old chunk can still be retried after the run moved on", async () => {
       const r = await put(c1, 0);
       assert.equal(r.status, 200);
-      assert.deepEqual(r.body.ack, ack1);
-    });
-
-    test("abandon is refused once a chunk is stored", async () => {
-      assertError(await api.call("POST", `/v1/runs/${runId}/abandon`, { token: ALICE, json: { reason: "too late" } }), 409, "conflict");
-      assert.equal((await position()).status, "open");
+      assert.deepEqual(r.body, answer1);
     });
   });
 
@@ -399,110 +350,63 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
     });
   });
 
-  describe("abandon", () => {
-    test("before any chunk: 200, repeatable, then the run is closed and the account is free again", async () => {
-      const open = await api.call("POST", "/v1/runs", { token: CAROL, json: openBody({ session_id: "carols-session" }) });
-      assert.equal(open.status, 201);
-      const id = open.body.run_id;
-      assertError(await api.call("POST", `/v1/runs/${id}/abandon`, { token: CAROL, json: { reason: "x".repeat(501) } }), 400, "malformed");
-      assertError(await api.call("POST", `/v1/runs/${id}/abandon`, { token: CAROL, json: {} }), 400, "malformed");
-      const r = await api.call("POST", `/v1/runs/${id}/abandon`, { token: CAROL, json: { reason: "the daemon refused to start" } });
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      assert.deepEqual(r.body, { status: "abandoned" });
-      assert.equal((await api.call("POST", `/v1/runs/${id}/abandon`, { token: CAROL, json: { reason: "again" } })).status, 200);
-      assert.equal((await api.call("GET", `/v1/runs/${id}`, { token: CAROL })).body.status, "abandoned");
+  describe("the server seals when it holds the whole chain", () => {
+    const fresh = async (member: string) => {
+      const token = await credentialFor(api, member);
+      const run = (await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: `${member}-session` }) })).body as { run_id: string; entry_id: string };
+      const put = (c: { body: Uint8Array; headers: Record<string, string> }, offset: number) =>
+        api.call("PUT", `/v1/runs/${run.run_id}/chunks/${offset}`, { token, body: c.body, headers: c.headers });
+      const final = (seq: number, head: string) =>
+        api.call("POST", `/v1/runs/${run.run_id}/heartbeat`, { token, json: { entry_id: run.entry_id, seq, head, offset_local: 1, final: true, repo_head: null } });
+      const position = async () => (await api.call("GET", `/v1/runs/${run.run_id}`, { token })).body;
+      return { token, run, put, final, position };
+    };
 
-      const c = makeChunk(open.body.entry_id, 1, 2, GENESIS, "late");
-      assertError(await api.call("PUT", `/v1/runs/${id}/chunks/0`, { token: CAROL, body: c.body, headers: c.headers }), 410, "closed");
-      assertError(await api.call("POST", `/v1/runs/${id}/receipt`, { token: CAROL, json: { entry_id: open.body.entry_id, chain_head: "b".repeat(64) } }), 410, "closed");
-
-      // The credential stays with the run it opened; a new approval opens the next one.
-      const next = await api.call("POST", "/v1/runs", { token: await credentialFor(api, "carol"), json: openBody({ session_id: "carols-session" }) });
-      assert.equal(next.status, 201, JSON.stringify(next.body));
-      assert.notEqual(next.body.run_id, id);
-    });
-  });
-
-  describe("seal", () => {
-    const docs = { seal_json: '{"sealed":true,"n":1}', baseline_json: '{"baseline":"ünï"}' };
-
-    test("malformed bodies are 400; the wrong entry is 404", async () => {
-      assertError(await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, seal_json: "", baseline_json: "{}" } }), 400, "malformed");
-      assertError(await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, seal_json: 5, baseline_json: "{}" } }), 400, "malformed");
-      assertError(await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: "bad", ...docs } }), 400, "malformed");
-      assertError(await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: "e" + "3".repeat(16), ...docs } }), 404, "not_found");
+    test("chunks, then a final heartbeat: the final heartbeat seals the entry", async () => {
+      const d = await fresh("dora");
+      const c = makeChunk(d.run.entry_id, 0, 3, GENESIS, "dora");
+      const put = await d.put(c, 0);
+      assert.equal(put.status, 200, JSON.stringify(put.body));
+      assert.equal(put.body.sealed, false); // no end committed yet
+      const f = await d.final(c.lastSeq, c.head);
+      assert.equal(f.status, 200, JSON.stringify(f.body));
+      assert.equal(f.body.sealed, true);
+      const p = await d.position();
+      assert.equal(p.sealed, true);
+      assert.equal(p.status, "open"); // before the run's end, a sealed entry leaves the run open
+      // The sealed entry takes no more chain.
+      const late = makeChunk(d.run.entry_id, p.next_seq, 1, p.head, "after");
+      assertError(await d.put(late, p.offset), 410, "closed");
     });
 
-    test("a seal needs the final heartbeat first, and the chain held up to it", async () => {
-      const p = (await api.call("GET", `/v1/runs/${runId}`, { token: ALICE })).body;
-      const noFinal = await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, ...docs } });
-      assertError(noFinal, 409, "conflict");
-      assert.match(noFinal.body.message, /final heartbeat/);
-      // An end the server does not hold the chain up to yet.
-      const beat = (seq: number, head: string) =>
-        api.call("POST", `/v1/runs/${runId}/heartbeat`, { token: ALICE, json: { entry_id: entryId, seq, head, offset_local: 1, final: true, repo_head: null } });
-      assert.equal((await beat(p.next_seq + 3, "d".repeat(64))).status, 200);
-      assertError(await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, ...docs } }), 409, "conflict");
+    test("a final heartbeat first, then chunks: the last chunk's answer says sealed, with no repeat", async () => {
+      const e = await fresh("erin");
+      const first = makeChunk(e.run.entry_id, 0, 3, GENESIS, "erin-1");
+      const last = makeChunk(e.run.entry_id, 3, 2, first.head, "erin-2");
+      const f = await e.final(last.lastSeq, last.head);
+      assert.equal(f.status, 200, JSON.stringify(f.body));
+      assert.equal(f.body.sealed, false); // the server holds none of the chain yet
+      const one = await e.put(first, 0);
+      assert.equal(one.status, 200, JSON.stringify(one.body));
+      assert.equal(one.body.sealed, false);
+      const two = await e.put(last, first.length);
+      assert.equal(two.status, 200, JSON.stringify(two.body));
+      assert.equal(two.body.sealed, true);
+      assert.equal((await e.position()).sealed, true);
+      // A resent chunk is answered from the stored row, with the entry's seal.
+      const again = await e.put(last, first.length);
+      assert.equal(again.status, 200, JSON.stringify(again.body));
+      assert.equal(again.body.sealed, true);
+
+      // A repeat of the final heartbeat says sealed (that it adds no row is guarded in local-db.test.ts).
+      const repeat = await e.final(last.lastSeq, last.head);
+      assert.equal(repeat.status, 200, JSON.stringify(repeat.body));
+      assert.equal(repeat.body.sealed, true);
     });
 
-    test("200, a repeat with the same documents is 200, different documents are 409", async () => {
-      // A fresh run whose end is committed where the server holds the chain.
-      const token = await credentialFor(api, "dora");
-      const run = (await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "doras-session" }) })).body;
-      const c = makeChunk(run.entry_id, 0, 3, GENESIS, "dora");
-      assert.equal((await api.call("PUT", `/v1/runs/${run.run_id}/chunks/0`, { token, body: c.body, headers: c.headers })).status, 200);
-      const final = await api.call("POST", `/v1/runs/${run.run_id}/heartbeat`, { token, json: { entry_id: run.entry_id, seq: c.lastSeq, head: c.head, offset_local: 1, final: true, repo_head: null } });
-      assert.equal(final.status, 200, JSON.stringify(final.body));
-      const seal = (body: Record<string, unknown>) => api.call("POST", `/v1/runs/${run.run_id}/seal`, { token, json: { entry_id: run.entry_id, ...body } });
-
-      const r = await seal(docs);
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      // Before the run's end, a sealed entry leaves the run open.
-      assert.deepEqual(r.body, { status: "sealed", run_status: "open" });
-      const again = await seal(docs);
-      assert.equal(again.status, 200);
-      assert.deepEqual(again.body, { status: "sealed", run_status: "open" });
-      assertError(await seal({ seal_json: '{"sealed":false}', baseline_json: docs.baseline_json }), 409, "conflict");
-      assertError(await seal({ seal_json: docs.seal_json, baseline_json: "{}" }), 409, "conflict");
-
-      // The sealed entry takes no more, and the run (open until its end) is still readable.
-      const p = await api.call("GET", `/v1/runs/${run.run_id}`, { token });
-      assert.equal(p.body.status, "open");
-      const late = makeChunk(run.entry_id, p.body.next_seq, 1, p.body.head, "after");
-      assertError(await api.call("PUT", `/v1/runs/${run.run_id}/chunks/${p.body.offset}`, { token, body: late.body, headers: late.headers }), 410, "closed");
-      assertError(await api.call("POST", `/v1/runs/${run.run_id}/abandon`, { token, json: { reason: "x" } }), 409, "conflict"); // it holds chunks
-    });
-
-    test("a seal may carry the tunnel list; it never changes the conflict rule", async () => {
-      const token = await credentialFor(api, "erin");
-      const run = (await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "erins-session" }) })).body;
-      const c = makeChunk(run.entry_id, 0, 3, GENESIS, "erin");
-      assert.equal((await api.call("PUT", `/v1/runs/${run.run_id}/chunks/0`, { token, body: c.body, headers: c.headers })).status, 200);
-      const final = await api.call("POST", `/v1/runs/${run.run_id}/heartbeat`, { token, json: { entry_id: run.entry_id, seq: c.lastSeq, head: c.head, offset_local: 1, final: true, repo_head: null } });
-      assert.equal(final.status, 200, JSON.stringify(final.body));
-      const seal = (body: Record<string, unknown>) => api.call("POST", `/v1/runs/${run.run_id}/seal`, { token, json: { entry_id: run.entry_id, ...body } });
-
-      assertError(await seal({ ...docs, tunnels_jsonl: 5 }), 400, "malformed");
-      const list = `{"format":"goalcup-tunnels-v1","entry_id":"${run.entry_id}"}\n`;
-      // The first line must be this entry's format line: a list without the entry, or for another
-      // entry, is refused before the seal is looked at.
-      const other = `{"format":"goalcup-tunnels-v1","entry_id":"e${"2".repeat(16)}"}\n`;
-      assertError(await seal({ ...docs, tunnels_jsonl: '{"format":"goalcup-tunnels-v1"}\n' }), 400, "malformed");
-      assertError(await seal({ ...docs, tunnels_jsonl: other }), 400, "malformed");
-      assertError(await seal({ ...docs, tunnels_jsonl: "not json\n" }), 400, "malformed");
-      const r = await seal({ ...docs, tunnels_jsonl: list });
-      assert.equal(r.status, 200, JSON.stringify(r.body));
-      const kept = () => r2Objects(worker.stateDir).filter((o) => o.key.startsWith("traces/") && o.key.includes(`/${run.entry_id}/tunnels`));
-      assert.deepEqual(kept().map((o) => [o.key.split("/").pop(), o.sha256]), [["tunnels.jsonl", sha256(list)]]);
-      // A repeat without the list, or with another one, is still a repeat: only the seal and the
-      // baseline decide it. The first list kept stays the entry's one. A repeat's list is checked
-      // too, so a bad one is refused even on the repeat path.
-      assert.equal((await seal(docs)).status, 200);
-      assertError(await seal({ ...docs, tunnels_jsonl: other }), 400, "malformed");
-      assert.equal((await seal({ ...docs, tunnels_jsonl: `${list}{"dropped":0}\n` })).status, 200);
-      assert.deepEqual(kept().map((o) => [o.key.split("/").pop(), o.sha256]), [["tunnels.jsonl", sha256(list)]]);
-      assertError(await seal({ ...docs, tunnels_jsonl: "x".repeat(8 * 1024 * 1024 + 1) }), 413, "too_large");
-      assertError(await seal({ seal_json: '{"sealed":false}', baseline_json: docs.baseline_json, tunnels_jsonl: list }), 409, "conflict");
+    test("the seal route is gone: 404", async () => {
+      const r = await api.call("POST", `/v1/runs/${runId}/seal`, { token: ALICE, json: { entry_id: entryId, seal_json: "{}", baseline_json: "{}" } });
+      assertError(r, 404, "not_found");
     });
 
     test("a later start by the same account is a new run", async () => {
@@ -526,13 +430,13 @@ describe("maintenance switch", () => {
     const api = new Client(worker.url);
     const c = makeChunk("e" + "1".repeat(16), 1, 1, GENESIS, "m");
     const calls = [
-      api.call("POST", "/v1/device", { json: { purpose: "run", mode: "practice", connector_id: "x", tracer_version: "1" } }),
+      api.call("POST", "/v1/device", { json: { purpose: "run", mode: "practice", connector_id: "x", proxy_version: "1" } }),
       api.call("POST", "/v1/device/token", { json: { device_code: "a".repeat(64) } }),
       api.call("POST", "/v1/runs", { token: ALICE, json: openBody() }),
       api.call("POST", "/v1/runs", { json: openBody() }),
       api.call("GET", "/v1/runs/r0123456789abcdef", { token: ALICE }),
       api.call("PUT", "/v1/runs/r0123456789abcdef/chunks/0", { token: ALICE, body: c.body, headers: c.headers }),
-      api.call("POST", "/v1/runs/r0123456789abcdef/seal", { token: ALICE, json: {} }),
+      api.call("POST", "/v1/runs/r0123456789abcdef/heartbeat", { token: ALICE, json: {} }),
     ];
     for (const r of await Promise.all(calls)) {
       assertError(r, 503, "maintenance");
@@ -567,8 +471,6 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
   const beat = (r: R, token: string, seq: number, head: string, final: boolean, repo_head: string | null = null) =>
     api.call("POST", `/v1/runs/${r.id}/heartbeat`, { token, json: { entry_id: r.entry, seq, head, offset_local: 1, final, repo_head } });
   const get = (r: R, token: string) => api.call("GET", `/v1/runs/${r.id}`, { token });
-  const seal = (r: R, token: string) =>
-    api.call("POST", `/v1/runs/${r.id}/seal`, { token, json: { entry_id: r.entry, seal_json: '{"s":1}', baseline_json: '{"b":1}' } });
 
   // alice's chain: 0..4, then 5..7, then 8..9 (the committed end), plus two chunks that must be refused.
   let a1: ReturnType<typeof makeChunk>, a2: typeof a1, a3: typeof a1, aOver: typeof a1, aWrongHead: typeof a1;
@@ -597,7 +499,7 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     const r = await beat(alice, ALICE, a1.lastSeq, a1.head, false);
     assert.equal(r.status, 200);
     const { seconds_left, ...rest } = r.body;
-    assert.deepEqual(rest, { stop: false, deadline_at: alice.deadline, reason: null });
+    assert.deepEqual(rest, { stop: false, deadline_at: alice.deadline, reason: null, sealed: false });
     // The 6-second run has between 1 and 6 seconds left, on the server's clock.
     assert.ok(seconds_left >= 1 && seconds_left <= 6, JSON.stringify(r.body));
     const g = await get(alice, ALICE);
@@ -614,9 +516,11 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     // Still before the deadline, but past the committed end: closed.
     const more = makeChunk(carol.entry, 5, 2, carolC.head, "c2");
     assertError(await put(carol, CAROL, more, carolC.length), 410, "closed");
-    // The seal before the deadline needs nothing more; a repeated final heartbeat is fine, also after the seal.
-    assert.equal((await seal(carol, CAROL)).status, 200);
-    assert.equal((await beat(carol, CAROL, 4, carolC.head, true)).status, 200);
+    // The server held the chain up to that end, so the final heartbeat sealed it; a repeat is fine.
+    assert.equal(f.body.sealed, true);
+    const again = await beat(carol, CAROL, 4, carolC.head, true);
+    assert.equal(again.status, 200, JSON.stringify(again.body));
+    assert.equal(again.body.sealed, true);
   });
 
   test("dave uploads a chain the server will hold at the deadline", async () => {
@@ -630,7 +534,7 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     await sleepUntil(new Date(Math.max(...[alice, bob, dave].map((r) => Date.parse(r.deadline)))).toISOString());
     const r = await beat(alice, ALICE, a1.lastSeq, a1.head, false);
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { stop: true, deadline_at: alice.deadline, seconds_left: 0, reason: "deadline" });
+    assert.deepEqual(r.body, { stop: true, deadline_at: alice.deadline, seconds_left: 0, reason: "deadline", sealed: false });
     assert.equal((await get(alice, ALICE)).body.stop, true);
     assert.equal((await get(alice, ALICE)).body.status, "open");
   });
@@ -642,16 +546,10 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     assert.equal((await get(alice, ALICE)).body.offset, a1.length);
   });
 
-  test("the seal past the deadline with no final heartbeat is 503 with Retry-After", async () => {
-    const r = await seal(bob, BOB);
-    assertError(r, 503, "awaiting_final");
-    assert.equal(r.headers.get("retry-after"), "60");
-  });
-
   test("the final heartbeat commits the end; a repeat is 200, a different end is 409", async () => {
     const f = await beat(alice, ALICE, a3.lastSeq, a3.head, true, "a".repeat(40));
     assert.equal(f.status, 200, JSON.stringify(f.body));
-    assert.deepEqual(f.body, { stop: true, deadline_at: alice.deadline, seconds_left: 0, reason: "deadline" });
+    assert.deepEqual(f.body, { stop: true, deadline_at: alice.deadline, seconds_left: 0, reason: "deadline", sealed: false });
     assert.deepEqual((await get(alice, ALICE)).body.final, { seq: 9, head: a3.head });
 
     assert.equal((await beat(alice, ALICE, 9, a3.head, true, "a".repeat(40))).status, 200); // same
@@ -669,23 +567,27 @@ describe("the deadline: stop, final heartbeat, no late window", { concurrency: f
     assert.equal((await get(alice, ALICE)).body.next_seq, 8);
   });
 
-  test("the seal past the deadline needs the stored chain to have reached the committed head", async () => {
-    assertError(await seal(alice, ALICE), 409, "conflict"); // the server holds 0..7, the end is 9
+  test("past the deadline, the chunk that reaches the committed head seals the entry and the run", async () => {
+    assert.equal((await get(alice, ALICE)).body.sealed, false); // the server holds 0..7, the end is 9
     const last = await put(alice, ALICE, a3, a1.length + a2.length);
     assert.equal(last.status, 200, JSON.stringify(last.body));
     assert.equal(last.body.head, a3.head);
-    const s = await seal(alice, ALICE);
-    assert.equal(s.status, 200, JSON.stringify(s.body));
-    assert.equal((await seal(alice, ALICE)).status, 200); // repeat
-    assert.equal((await get(alice, ALICE)).body.status, "sealed");
+    assert.equal(last.body.sealed, true);
+    const g = (await get(alice, ALICE)).body;
+    assert.deepEqual([g.status, g.sealed], ["sealed", true]);
+    // A repeat of the final heartbeat says so too.
+    assert.equal((await beat(alice, ALICE, 9, a3.head, true)).body.sealed, true);
   });
 
-  test("a run with no chunks can commit a final and seal after the deadline once the chain arrives", async () => {
-    assert.equal((await beat(bob, BOB, 2, makeChunk(bob.entry, 0, 3, GENESIS, "b1").head, true)).status, 200);
-    assertError(await seal(bob, BOB), 409, "conflict"); // nothing stored yet
+  test("a run with no chunks can commit a final after the deadline and is sealed once the chain arrives", async () => {
     const b1 = makeChunk(bob.entry, 0, 3, GENESIS, "b1");
-    assert.equal((await put(bob, BOB, b1, 0)).status, 200);
-    assert.equal((await seal(bob, BOB)).status, 200);
+    const f = await beat(bob, BOB, 2, b1.head, true);
+    assert.equal(f.status, 200, JSON.stringify(f.body));
+    assert.equal(f.body.sealed, false); // nothing stored yet
+    const put1 = await put(bob, BOB, b1, 0);
+    assert.equal(put1.status, 200, JSON.stringify(put1.body));
+    assert.equal(put1.body.sealed, true);
+    assert.equal((await get(bob, BOB)).body.status, "sealed");
   });
 
   test("a final heartbeat that contradicts the chain the server already holds is 409", async () => {
@@ -727,14 +629,12 @@ describe("a run still unsealed 24 hours after it ends is closed as incomplete", 
     // carol commits her end and seals in time; a sealed run is never closed as incomplete.
     const cc = makeChunk(carol.entry_id, 0, 2, GENESIS, "carol");
     assert.equal((await api.call("PUT", `/v1/runs/${carol.run_id}/chunks/0`, { token: CAROL, body: cc.body, headers: cc.headers })).status, 200);
-    assert.equal(
-      (await api.call("POST", `/v1/runs/${carol.run_id}/heartbeat`, { token: CAROL, json: { entry_id: carol.entry_id, seq: cc.lastSeq, head: cc.head, offset_local: 1, final: true, repo_head: null } })).status,
-      200,
-    );
-    assert.equal(
-      (await api.call("POST", `/v1/runs/${carol.run_id}/seal`, { token: CAROL, json: { entry_id: carol.entry_id, seal_json: "{}", baseline_json: "{}" } })).status,
-      200,
-    );
+    const sealedNow = await api.call("POST", `/v1/runs/${carol.run_id}/heartbeat`, {
+      token: CAROL,
+      json: { entry_id: carol.entry_id, seq: cc.lastSeq, head: cc.head, offset_local: 1, final: true, repo_head: null },
+    });
+    assert.equal(sealedNow.status, 200, JSON.stringify(sealedNow.body));
+    assert.equal(sealedNow.body.sealed, true);
 
     // Still open between the deadline and deadline + 2 s.
     await sleepUntil(alice.deadline_at);
@@ -755,7 +655,6 @@ describe("a run still unsealed 24 hours after it ends is closed as incomplete", 
       410,
       "closed",
     );
-    assertError(await api.call("POST", `/v1/runs/${alice.run_id}/seal`, { token: ALICE, json: { entry_id: alice.entry_id, seal_json: "{}", baseline_json: "{}" } }), 410, "closed");
     // bob never looked at his old run: it is incomplete the first time he does.
     assert.equal((await api.call("GET", `/v1/runs/${bob.run_id}`, { token: BOB })).body.status, "incomplete");
     // carol's sealed run stayed sealed.
@@ -777,38 +676,55 @@ describe("test-only clocks are refused outside the local backend", () => {
   });
 });
 
-describe("the per-run size limit against wrangler dev", { concurrency: false }, () => {
-  // Chunk bodies do not depend on the entry id, so the limit can be set before the run exists:
-  // the first chunk fits, the second would pass it by one byte.
-  const size1 = makeChunk("e0000000000000000", 0, 5, GENESIS, "q1").body.length;
-  const size2 = makeChunk("e0000000000000000", 5, 5, GENESIS, "q2").body.length;
-  let worker: RunningWorker;
-  let api: Client;
-  let token = "";
-  let runId = "";
-  let entryId = "";
-  before(async () => {
-    worker = await startWorker({ EVENT_ID: "practice", TEST_APPROVAL_KEY: APPROVAL_KEY, RUN_MAX_COMPRESSED_BYTES: String(size1 + size2 - 1) });
-    api = new Client(worker.url);
-    token = await credentialFor(api, "erin");
-    const r = await api.call("POST", "/v1/runs", { token, json: openBody({ session_id: "erin-1" }) });
-    assert.equal(r.status, 201, JSON.stringify(r.body));
-    ({ run_id: runId, entry_id: entryId } = r.body);
-  });
-  after(async () => {
-    await worker?.stop();
+// ---- the heartbeat's counts (in this process: the stored state is read back directly) -------
+
+describe("heartbeat counts", () => {
+  /** The stored run, as the local database keeps it: the run's latest vitals and each entry's last heartbeat. */
+  type Stored = {
+    last_vitals?: unknown;
+    flag_reason?: string | null;
+    entries: { last_heartbeat: { recording: string | null; vitals?: unknown } | null }[];
+  };
+  const counts = { v: 1, boot: 2, mode: null, off_ms: 2300, off_spans: 1, off_since: "2026-11-06T09:00:30Z", gaps: 3, lost_bytes: 1500000, lost_unknown: 0, waiting_bytes: 1048576 };
+  const utf8 = (v: unknown) => Buffer.byteLength(JSON.stringify(v), "utf8");
+
+  lifecycle("a heartbeat with recording failed and counts stores both, the counts nested on the row and the run", async (r) => {
+    const token = await r.cred("alice");
+    const run = await r.start(token, "s1");
+    const res = await r.beat(token, run.run_id, run.entry_id, { recording: "failed", model_requests: 12, counts });
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.sealed, false);
+    const s = r.storedRun(run.run_id) as unknown as Stored;
+    assert.equal(s.entries[0]!.last_heartbeat!.recording, "failed");
+    assert.deepEqual(s.entries[0]!.last_heartbeat!.vitals, { counts });
+    assert.deepEqual(s.last_vitals, { counts });
+    assert.equal(s.flag_reason, "failed");
   });
 
-  test("the chunk that would pass the limit is 413 quota_exceeded and nothing of it reaches R2", async () => {
-    const c1 = makeChunk(entryId, 0, 5, GENESIS, "q1");
-    const c2 = makeChunk(entryId, 5, 5, c1.head, "q2");
-    const put = (c: typeof c1, offset: number) => api.call("PUT", `/v1/runs/${runId}/chunks/${offset}`, { token, body: c.body, headers: c.headers });
-    assert.equal((await put(c1, 0)).status, 200);
-    assertError(await put(c2, c1.length), 413, "quota_exceeded");
-    const keys = r2Objects(worker.stateDir).filter((o) => o.key.startsWith("traces/"));
-    assert.deepEqual(keys.map((o) => o.sha256), [sha256(c1.body)]);
-    const p = (await api.call("GET", `/v1/runs/${runId}`, { token })).body;
-    assert.equal(p.offset, c1.length);
-    assert.equal(p.next_seq, 5);
+  lifecycle("counts over 2 KiB or not flat cost nothing: 200, the row says counts_dropped, and one log line", async (r) => {
+    const token = await r.cred("alice");
+    const run = await r.start(token, "s1");
+    const big: Record<string, string> = {};
+    for (let i = 0; i < 40; i++) big[`k${i}`] = "x".repeat(64);
+    assert.ok(utf8(big) > 2048);
+    const logged: string[] = [];
+    const log = mock.method(console, "warn", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+    try {
+      for (const bad of [big, { nested: { a: 1 } }, { list: [1] }, [1, 2], "counts", 5, { s: "y".repeat(65) }, { n: 1.5 }, { n: -1 }]) {
+        logged.length = 0;
+        const res = await r.beat(token, run.run_id, run.entry_id, { recording: "gaps", counts: bad });
+        assert.equal(res.status, 200, JSON.stringify(res.body));
+        const s = r.storedRun(run.run_id) as unknown as Stored;
+        assert.deepEqual(s.entries[0]!.last_heartbeat!.vitals, { counts_dropped: utf8(bad) }, JSON.stringify(bad).slice(0, 80));
+        assert.deepEqual(s.last_vitals, { counts_dropped: utf8(bad) });
+        assert.equal(s.entries[0]!.last_heartbeat!.recording, "gaps"); // the rest of the heartbeat is kept
+        // One visible line per drop, and no counts value in it.
+        assert.equal(logged.length, 1);
+        assert.match(logged[0]!, /^counts-dropped /);
+        if (typeof bad !== "number") assert.ok(!logged[0]!.includes(JSON.stringify(bad)), logged[0]);
+      }
+    } finally {
+      log.mock.restore();
+    }
   });
 });

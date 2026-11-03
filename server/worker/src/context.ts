@@ -1,15 +1,11 @@
-// Per-request context: parsed configuration, the database, the signer.
+// Per-request context: parsed configuration and the database.
 
 import { CLOSE_AFTER_SECONDS, type Db } from "./db.ts";
 import { LocalDb } from "./db-local.ts";
 import { SupabaseDb } from "./db-supabase.ts";
 import type { Env } from "./env.ts";
 import { ApiError } from "./errors.ts";
-import { Signer } from "./sign.ts";
-import { isTime, parseSafeUint, versionTriple } from "./util.ts";
-
-/** The default per-run size limit: 64 GiB of compressed chunks. */
-export const DEFAULT_RUN_MAX_COMPRESSED_BYTES = 68_719_476_736;
+import { isTime, versionTriple } from "./util.ts";
 
 export interface Config {
   /** The event of competition runs, and of practice runs. */
@@ -23,8 +19,6 @@ export interface Config {
   practiceRunSeconds: number;
   /** A run is closed this long after it ends. 24 h, or CLOSE_AFTER_SECONDS (local backend only). */
   closeAfterSeconds: number;
-  /** The most compressed bytes one run may hold in R2 (RUN_MAX_COMPRESSED_BYTES). */
-  runMaxCompressedBytes: number;
   /** The competition start window (local backend only); undefined: the database's, or always open. */
   startWindow: { opens: string | null; closes: string | null } | undefined;
   githubCheck: boolean;
@@ -44,7 +38,6 @@ function minVersion(raw: string | undefined): MinVersion {
 export interface Ctx {
   env: Env;
   db: Db;
-  signer: Signer;
   cfg: Config;
   now: () => Date;
 }
@@ -55,14 +48,6 @@ function positiveNumber(name: string, raw: string | undefined, fallback: number,
   if (raw === undefined || raw === "") return fallback;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0 || n > max) throw misconfigured(`${name} must be a positive number of ${unit}.`);
-  return n;
-}
-
-/** RUN_MAX_COMPRESSED_BYTES: a positive whole number of bytes, or the default when unset. */
-function byteLimit(raw: string | undefined): number {
-  if (raw === undefined || raw === "") return DEFAULT_RUN_MAX_COMPRESSED_BYTES;
-  const n = parseSafeUint(raw);
-  if (n === null || n === 0) throw misconfigured("RUN_MAX_COMPRESSED_BYTES must be a positive whole number of bytes.");
   return n;
 }
 
@@ -123,25 +108,10 @@ export function readConfig(env: Env): Config {
     runSeconds: testOnlySeconds(env, "RUN_SECONDS") ?? positiveNumber("RUN_HOURS", env.RUN_HOURS, 168, "hours", 24 * 365) * 3600,
     practiceRunSeconds: positiveNumber("PRACTICE_RUN_MINUTES", env.PRACTICE_RUN_MINUTES, 10, "minutes", 24 * 60) * 60,
     closeAfterSeconds: testOnlySeconds(env, "CLOSE_AFTER_SECONDS") ?? CLOSE_AFTER_SECONDS,
-    runMaxCompressedBytes: byteLimit(env.RUN_MAX_COMPRESSED_BYTES),
     startWindow: opens === null && closes === null ? undefined : { opens, closes },
     githubCheck: env.GITHUB_CHECK === "on",
     minCompetitionVersion: minVersion(env.MIN_COMPETITION_VERSION),
   };
-}
-
-let cachedSigner: { seed: string; signer: Signer } | undefined;
-
-async function getSigner(env: Env): Promise<Signer> {
-  if (typeof env.RECEIPT_SIGNING_KEY !== "string") throw misconfigured("RECEIPT_SIGNING_KEY is not set.");
-  if (cachedSigner?.seed === env.RECEIPT_SIGNING_KEY) return cachedSigner.signer;
-  try {
-    const signer = await Signer.fromSeedHex(env.RECEIPT_SIGNING_KEY);
-    cachedSigner = { seed: env.RECEIPT_SIGNING_KEY, signer };
-    return signer;
-  } catch {
-    throw misconfigured("RECEIPT_SIGNING_KEY is not a 64-hex-character Ed25519 seed.");
-  }
 }
 
 export async function getDb(env: Env): Promise<Db> {
@@ -165,7 +135,6 @@ export async function getDb(env: Env): Promise<Db> {
 
 export async function makeCtx(env: Env): Promise<Ctx> {
   const cfg = readConfig(env);
-  const signer = await getSigner(env);
   const db = await getDb(env);
-  return { env, db, signer, cfg, now: () => new Date(Math.floor(Date.now() / 1000) * 1000) };
+  return { env, db, cfg, now: () => new Date(Math.floor(Date.now() / 1000) * 1000) };
 }

@@ -1,0 +1,6 @@
+# core-claude-code.toml: the core tier rows for claude-code-cli (fault-free full run for direct, gateway and dodger), PRD-12 release check
+harness = "claude-code-cli"
+key = "claude"
+case = "all"
+mode = "full"
+box_extra_minutes = 10

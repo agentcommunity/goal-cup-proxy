@@ -1,0 +1,16 @@
+# Hermes with its native DeepSeek provider (ledger T2); the key is DEEPSEEK_API_KEY in {home}/.env.
+model:
+  provider: deepseek
+  default: deepseek-flash
+# The "Help improve Hermes?" answer, preset to "No thanks" (shared_metrics_consent.py at v0.22.5; measured in sweep 2 to remove the screen).
+telemetry:
+  shared_metrics:
+    enabled: false
+    send: false
+    offer_version: 2
+# Hermes 0.22.6 drops SSL_CERT_FILE for provider clients (NousResearch/hermes-agent#148241): give this route the run CA
+# bundle explicitly. Remove this block when the pad leaves 0.22.6.
+providers:
+  goalcup-ca:
+    base_url: https://api.deepseek.com/v1
+    ssl_ca_cert: ${env:SSL_CERT_FILE}

@@ -48,7 +48,7 @@ semantic-boundary leakage and over-redaction cases. Measure actual effects befor
 Short macOS/Linux Codex and Hermes practices are recorded in [WP0](../TODO.md#wp0-measure).
 Long-run measurements, several platform combinations, and cleaned research delivery remain
 unfinished. Historical measurements are not fresh reproductions. See [architecture](ARCHITECTURE.md),
-[accepted limitations](CHEAT-CHECKLIST.md), and [research report semantics](research/m2-report-format.md).
+[accepted limitations](archive/CHEAT-CHECKLIST.md), and [research report semantics](research/m2-report-format.md).
 
 ## 1. Establish one reliable end-to-end path
 
