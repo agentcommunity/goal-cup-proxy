@@ -13,7 +13,7 @@ names secrets only.
 
 | | Production | Staging | Local |
 |---|---|---|---|
-| Worker | `goalcup-ingest` at `https://ingest.agentcommunity.org` (custom domain, no workers.dev) | `goalcup-ingest-staging` at `https://goalcup-ingest-staging.b-9a5.workers.dev` | `npm run dev` at `http://localhost:8787` |
+| Worker | `goalcup-ingest` at `https://ingest.agentcommunity.org` (custom domain, no workers.dev) | `goalcup-ingest-staging` at `https://<staging host>` | `npm run dev` at `http://localhost:8787` |
 | Trace bucket | `goalcup-traces` (lock on `traces/goalcup-cup-2026/` only) | `goalcup-traces-staging` (no lock) | simulated on disk |
 | Usage bucket | `goalcup-usage` (the owner creates it with the production deploy) | `goalcup-usage-staging` | none |
 | Competition event | `EVENT_ID` in `wrangler.toml`: now `goalcup-dryrun-2026`, then `goalcup-cup-2026` | `goalcup-dryrun-staging` | any |
@@ -45,15 +45,15 @@ All times UTC.
 
 | Date | What |
 |---|---|
-| 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
-| 6 Nov | Release 1.0.0 ([Releasing](#releasing)), then the owner deploys production ([Deploy](#deploy)), then the `EVENT_ID` switch, any time from 00:00 on 6 Nov to 00:00 on 7 Nov ([EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026)). Releases may continue during the cup. |
+| From 23 Oct until the day before the start window opens | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
+| The day before the start window opens | Release 1.0.0 ([Releasing](#releasing)), then the owner deploys production ([Deploy](#deploy)), then the `EVENT_ID` switch, any time on that day ([EVENT_ID switch](../server/worker/README.md#event_id-switch)). The start window itself: [RULES](RULES.md#timeline). Releases may continue during the cup. |
 | Start window | Date and length: [RULES](RULES.md#timeline). |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
 
 Before the window opens:
 
 1. The `goalcup-cup-2026` row in the website's `events` table has `start_window_opens` =
-   `2026-11-07T00:00:00Z` and `start_window_closes` = `2026-11-08T00:00:00Z`.
+   the start window's opening and closing times from [RULES](RULES.md#timeline) (UTC).
 2. Production carries the 1.0 Worker ([Deploy](#deploy)) with `MIN_COMPETITION_VERSION` at `1.0.0`.
 3. The `EVENT_ID` switch is done. Staging keeps its own event ids.
 4. The pad's release rows hold ([Releasing](#releasing)).

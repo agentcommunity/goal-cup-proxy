@@ -19,7 +19,7 @@ Gone since 0.7, and not coming back: the receipt, abandon and seal calls (`/rece
 ## Common rules
 
 - Base URL: the client's `GOALCUP_SERVER` (unset: `https://ingest.agentcommunity.org`, the
-  production server; staging is `https://goalcup-ingest-staging.b-9a5.workers.dev`). Every path
+  production server; staging is `https://<staging host>`). Every path
   below is under it. `GET /v1/health` answers `200 {"status":"ok"}` and touches nothing.
 - Every call except the three under "Sign in" carries `Authorization: Bearer gcr_<64 hex>`, the run
   credential. A missing, unknown or expired credential is `401`. A credential sees one run, the

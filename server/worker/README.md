@@ -224,7 +224,7 @@ Short steps for the people who run the event. Run the wrangler commands in `serv
 where `CLOUDFLARE_ACCOUNT_ID` is set to the Agent Community account id (`export CLOUDFLARE_ACCOUNT_ID=<id>`).
 Sign in with `npx wrangler login`, or set `CLOUDFLARE_API_TOKEN`. Production is the Worker `goalcup-ingest`
 at `https://ingest.agentcommunity.org`. Staging is `goalcup-ingest-staging` at
-`https://goalcup-ingest-staging.b-9a5.workers.dev`: add `--env staging` to each wrangler command, and use
+`https://<staging host>`: add `--env staging` to each wrangler command, and use
 the staging address in each `curl`. Do not put a secret in this file, in a commit or in a chat message.
 
 Run `npm ci` in `server/worker` before any `npx wrangler` step, and again after you switch to another
@@ -234,7 +234,7 @@ commit. It installs the pinned wrangler. Check that `npx wrangler --version` pri
 [Deploy checks](#deploy-checks) · [Maintenance](#maintenance-on-and-off) · [Rollback](#rollback) ·
 [Logs](#logs) · [Change a start window](#change-a-start-window) · [Add a test operator](#add-a-test-operator) ·
 [Clean up test runs](#clean-up-test-runs) · [Minimum competition version](#set-the-minimum-competition-version) ·
-[EVENT_ID switch](#event_id-switch-6-nov-2026) · [Deploying 1.0](#deploying-10) ·
+[EVENT_ID switch](#event_id-switch) · [Deploying 1.0](#deploying-10) ·
 [Deploying a pending migration](#deploying-a-pending-migration)
 
 ### Deploy checks
@@ -361,7 +361,7 @@ cannot find a good version, switch maintenance on and ask the owner.
 
 A start window is a row of `goal_cup_tracer.events` in the website's database. The Worker reads it on each
 open. A window change needs no Worker deploy. (A change of `EVENT_ID` does: see the
-[EVENT_ID switch](#event_id-switch-6-nov-2026).) Steps 1 to 6 run in the website
+[EVENT_ID switch](#event_id-switch).) Steps 1 to 6 run in the website
 checkout (`agentCommunity_PAGE`), not in `server/worker`.
 
 1. Add a migration in `supabase/migrations/` with `goal_cup_tracer` in its file name. It holds an
@@ -423,8 +423,8 @@ More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 `MIN_COMPETITION_VERSION` refuses a device request and an open from an older goalcup, in every mode,
 with `403` and an install line (D70; `continue` is never refused). `wrangler.toml` sets `1.0.0` in
 both blocks: a 0.7 goalcup cannot work with the 1.0 Worker. Raise it when a later release must be the
-least any participant runs, for example the cup's minimum. It must be live before 7 Nov 00:00 UTC
-if the cup needs it.
+least any participant runs, for example the cup's minimum. It must be live before the start window
+opens ([RULES](../../docs/RULES.md#timeline)) if the cup needs it.
 
 **Only after that release is published and GitHub's latest release serves it.** The refusal's install
 line installs `releases/latest`. Set the minimum before that and it installs an older goalcup, which
@@ -451,22 +451,23 @@ is refused again. Below, `<minimum>` is that release's number and `<older>` is t
    `<older>` answers `403`, `<minimum>` answers `200` (a device request nobody approves; it expires by
    itself).
 
-The EVENT_ID switch may carry the same change in its PR, if step 1 already passes on 6 Nov.
+The EVENT_ID switch may carry the same change in its PR, if step 1 already passes on the switch day.
 
-## EVENT_ID switch: 6 Nov 2026
+## EVENT_ID switch
 
-Do the switch between 6 Nov 00:00 and 7 Nov 00:00 UTC. It does not wait for a release: releases
+Do the switch on the day before the start window opens (the start is stated once, in
+[RULES](../../docs/RULES.md#timeline)), any time on that UTC day. It does not wait for a release: releases
 continue during the cup (D70). Production `EVENT_ID` stays `goalcup-dryrun-2026` until then. The start windows are database rows
 (website migration `20261016120000_goal_cup_tracer_event_windows.sql`): the dry run closes
-6 Nov 00:00 UTC and the cup opens 7 Nov 00:00 UTC, so any time on 6 Nov is safe. If the switch is
-missed, every cup start on 7 Nov is refused ("after the start window ..."): competition starts read
-the dry-run row, which closed 6 Nov 00:00 UTC.
+at 00:00 UTC on the switch day and the cup opens when the start window opens, so any time on the switch
+day is safe. If the switch is missed, every cup start is refused ("after the start window ..."):
+competition starts read the dry-run row, which has closed.
 
 1. On a branch, set `EVENT_ID = "goalcup-cup-2026"` in `wrangler.toml` `[vars]` (not
    `[env.staging.vars]`). If `MIN_COMPETITION_VERSION` is not the cup's minimum yet and that release is
    the latest release, set it in the same PR ([Minimum competition version](#set-the-minimum-competition-version),
    step 1 first). If that release is not out yet, leave it and do that section on its own once it is,
-   before 7 Nov 00:00 UTC. Open a PR and merge it to main.
+   before the start window opens. Open a PR and merge it to main.
 2. On main at that merge commit: `npm test` (in `server/worker`).
 3. From main only, at that merge commit: run `npm ci`, then the maintenance state check. Run
    `npx wrangler deployments list` (before). Run `SHA=$(git rev-parse --short HEAD)`, then
@@ -474,16 +475,17 @@ the dry-run row, which closed 6 Nov 00:00 UTC.
    is on, add `--var MAINTENANCE:on`, or the deploy ends it. Run `npx wrangler deployments list` (after).
    Check that `ingest.agentcommunity.org` still routes to `goalcup-ingest`
    ([Deploy checks](#deploy-checks), rule 3). Every later production deploy is from main, so it keeps the cup
-   (a 7 Nov hotfix too).
+   (a hotfix during the cup too).
 4. Check the live Worker: `npx wrangler deployments status` names the live version, and
    `npx wrangler versions view <version-id>` shows `EVENT_ID` = `goalcup-cup-2026` (or the dashboard:
    goalcup-ingest, Settings, Variables), and `MIN_COMPETITION_VERSION` = the cup's minimum once it is set.
 5. Open one practice run and one organizer test run against production; both start. Then
    `sh scripts/delete-test-runs.sh --yes` ([Clean up test runs](#clean-up-test-runs)).
 6. A competition start now answers "The start window has not opened yet." (before the switch it
-   answered "after the start window ..."). After 7 Nov 00:00 UTC, `select distinct event_id from
-   goal_cup_tracer.runs where mode = 'competition' and official_start >= '2026-11-07'` shows only
+   answered "after the start window ..."). After the start window opens, `select distinct event_id from
+   goal_cup_tracer.runs where mode = 'competition' and official_start >= '<START_DATE>'` shows only
    `goalcup-cup-2026`, and the R2 prefix `traces/goalcup-cup-2026/` holds its chunks.
+   (`<START_DATE>` is the date the start window opens, from RULES.md; fill it in when you run the query.)
 
 ## Deploying 1.0
 
@@ -504,7 +506,7 @@ Once, in this order. The 1.0 Worker and a 0.7 goalcup do not work together, so t
    never before). Create the `goalcup-usage` bucket.
 6. Smoke (owner): one practice run with the 1.0 goalcup on production, sealed, fetched with
    `scripts/fetch-run.sh` and checked.
-7. The [EVENT_ID switch](#event_id-switch-6-nov-2026) stays a manual deploy on 6 Nov; it can be the
+7. The [EVENT_ID switch](#event_id-switch) stays a manual deploy on the switch day; it can be the
    same deploy as step 5 if the timing fits.
 
 There is no rollback to 0.7 after step 5. A bad 1.0 Worker is held with
