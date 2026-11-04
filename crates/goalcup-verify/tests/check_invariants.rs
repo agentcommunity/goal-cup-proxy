@@ -205,6 +205,20 @@ fn m_torn_tail(name: &str) -> PathBuf {
     d
 }
 
+/// The same cut record in an entry that is not sealed: the recorder closes a frame only at a
+/// LINK, so a closed frame never ends inside a record, sealed or not.
+fn m_torn_tail_unsealed(name: &str) -> PathBuf {
+    let d = mutate(&clean(name), None, |r| {
+        let ev = |j: &[u8]| serde_json::from_slice::<Value>(j).unwrap()["ev"].clone();
+        r.truncate(find(
+            r,
+            |x| matches!(x, Record::Event { json, .. } if ev(json) == "seal"),
+        ));
+    });
+    append_raw(&d, &[0x07, 0x20, 0x00]);
+    d
+}
+
 fn m_native_path_gen_twice(name: &str) -> PathBuf {
     let mut e = standard(name);
     e.native("fake:sessions/s1.jsonl", 0, 22);
@@ -260,6 +274,7 @@ const FAILS: &[(&str, Build)] = &[
     ("counts_match_seal", m_seal_totals_wrong),
     ("counts_match_seal", m_seal_totals_key_missing),
     ("torn_tail", m_torn_tail),
+    ("torn_tail", m_torn_tail_unsealed),
     ("native_path_gen", m_native_path_gen_twice),
     ("record_json", m_event_not_json),
     ("record_json", m_end_tail_not_json),
