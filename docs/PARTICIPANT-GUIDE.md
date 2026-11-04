@@ -165,8 +165,8 @@ no model request was written, fix the setup now.
 ## 6. Your run
 
 Start inside the 24-hour start window (the date is on the event site; [RULES](RULES.md); OWNER-Q date).
-Steps 1 to 4 can be done before it opens. A real run needs its own new repository and token. Do the steps in this order:
-a token for one repository needs the repository to exist first.
+Steps 1 to 4 can be done before it opens. A real run needs its own new repository and token. Do the
+steps in this order: a token for one repository needs the repository to exist first.
 
 1. **Create the repository.** On [github.com/new](https://github.com/new): public, and empty. Add no
    README, no `.gitignore`, no licence. A repository with any commit is refused, and the server
