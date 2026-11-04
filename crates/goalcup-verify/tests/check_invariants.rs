@@ -1,7 +1,8 @@
 //! `goalcup-verify check` on PRD-01's 14 invariants (PRD-08 section 3, "Integrity"): a clean
 //! entry passes, as part files and as a fetched copy; one mutation per invariant, plus wrong or
-//! missing COUNT and seal keys, a broken PART chain, a torn tail and a repeated native `path` and `gen`, fails its own
-//! check with exit 2 (PRD-17 VR3: never 3); an unknown record kind and GAP reason 8 only warn.
+//! missing COUNT and seal keys, a broken PART chain, a torn tail and a repeated native `path`
+//! and `gen`, fails its own check with exit 2 (PRD-17 VR3: never 3); an unknown record kind and
+//! GAP reason 8 only warn.
 
 mod common;
 

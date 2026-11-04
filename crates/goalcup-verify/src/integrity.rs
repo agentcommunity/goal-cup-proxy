@@ -258,8 +258,8 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         let why = format!("the record stops decoding: {why}");
         p.fail("record_decode", &why, at);
     } else if let Some(o) = tail.truncated {
-        // The recorder closes a frame only after a LINK; a cut record is a crash's only in an
-        // open frame.
+        // The recorder closes a frame only after a LINK, so only an open frame can end inside a
+        // record after a crash.
         if p.seal.is_some() || !tail.open_frame {
             let why = match p.seal {
                 Some(_) => "a sealed entry ends inside a record",

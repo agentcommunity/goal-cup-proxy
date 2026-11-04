@@ -213,8 +213,8 @@ the seal's LINK.
   gives every record up to the last flush and reports the open end; use it for a live entry. The
   `zstd` command line tool may stop short of the last flush on such a file, or on an entry not yet
   recovered after a crash, so counts made through it are then a lower bound.
-- Part and index files are created mode 0600, and the `rec` folder 0700 when the writer creates
-  it (an existing folder keeps its mode).
+- Part and index files are created mode 0600, and any folder the writer creates (`rec` and any
+  parent it makes) 0700; an existing folder keeps its mode.
 - **Recovery** after a crash: drop index lines past the part file's length (and, after a reboot,
   past `cursors.json`); set aside a part file with no index line left: it and its index are renamed
   `rec-<n>.gcr.zst.orphan` and `rec-<n>.idx.orphan` (`.orphan.1` and up when an earlier crash left
@@ -388,7 +388,7 @@ the exit alone. For a run folder, the worst entry decides. Readers ignore keys t
 | `provider_errors` | `{wire, native}`: for each leg, a count per error code the provider gave (else `http_<status>`, else `error`), one per failed call |
 | `threads` | One item per thread the legs checks compared, else an empty list: `thread` (null for the whole entry), `parent`, `harness` and `wire_ok` (calls), `wire_err`, `result`, and `history`, that thread's verdict from `history_complete` (`pass`, `warn`, `named`, `fail` or `skip`; null when the check named no such thread) |
 | `history` | The facts object of `history_complete`, below (null when the check is not in the list) |
-| `timeline` | Rows for each 10-minute bucket from the entry's first PART that holds anything: `bucket`, `start`, `harness_calls`, `wire_calls`, `wire_errors`, `native_bytes`, `gaps`, `off_ms`. At most 100 000 buckets: a later time counts in the last one, and recording-off spans share a budget of 100 000 bucket steps, past which a span's `off_ms` goes whole to the last bucket, so a forged wall time cannot make the report huge |
+| `timeline` | Rows for each 10-minute bucket from the entry's first PART that holds anything: `bucket`, `start`, `harness_calls`, `wire_calls`, `wire_errors`, `native_bytes`, `gaps`, `off_ms`. Off spans are clamped to the PART and LINK wall range, at most 100 000 buckets past the first PART, and share a budget of 100 000 bucket steps, past which a span's `off_ms` goes whole to the last bucket; other rows are one per bucket a call, DATA or GAP falls in, so a forged wall time cannot make the report larger than the record |
 
 **Check ids.** `inv1` to `inv9` and `inv14` check the invariant of that number; `streams_closed`,
 `seen_matches_written`, `gap_has_end` and `recorder_alive` check invariants 10 to 13. With `inv`
