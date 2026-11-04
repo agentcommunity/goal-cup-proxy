@@ -2,7 +2,8 @@
 //! plaintext the END tail claims against what its streams account for. A request lost on a
 //! reused connection with no `conn` GAP is a `fail` (exit 2), even beside a small GAP on another
 //! stream; a `conn` GAP covers it (`named`, exit 1); 10% and 1 MiB unaccounted is `named` (exit
-//! 1): bytes are missing even when no GAP says so; no plain tails is a `skip`; a sized WebSocket stream GAP names its bytes.
+//! 1): bytes are missing even when no GAP says so; no plain tails is a `skip`; a sized WebSocket
+//! stream GAP names its bytes.
 
 mod common;
 

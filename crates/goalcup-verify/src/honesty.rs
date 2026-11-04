@@ -395,7 +395,7 @@ impl Honesty {
             check.raise(Res::Named, "", Some(at));
         }
         if c.after_trust && !c.quiet {
-            check.raise(Res::Named, "", Some(at));
+            check.raise(Res::Warn, "", Some(at));
             let fp = c.fp.clone().unwrap_or_default();
             self.refused.insert((c.host.clone(), fp));
         }
