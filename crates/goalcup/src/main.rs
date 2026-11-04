@@ -35,7 +35,7 @@ enum Command {
     /// Step 1. Get this computer ready: pick your agent and sign in to it once.
     Setup {
         /// Your agent (the harness). Without it, the one you chose before, or it asks.
-        #[arg(long, value_name = "ID")]
+        #[arg(long, value_name = "ID", long_help = harness_help("the one you chose before, or it asks"))]
         harness: Option<String>,
         /// Ask nothing and open nothing: write the settings and print the agent's home.
         #[arg(long)]
@@ -47,7 +47,7 @@ enum Command {
     /// Step 2. Start a run: open your agent here and record what it does.
     Start {
         /// Your agent (the harness). Without it, the one setup saved.
-        #[arg(long, value_name = "ID")]
+        #[arg(long, value_name = "ID", long_help = harness_help("the one setup saved"))]
         harness: Option<String>,
         /// A practice run: kept apart from the competition, no GitHub repository.
         #[arg(long, conflicts_with_all = ["test", "repo"])]
@@ -119,6 +119,19 @@ enum Command {
         #[arg(long = NULL_FLAG.trim_start_matches('-'))]
         null: bool,
     },
+}
+
+/// The long help of `--harness`: the short help, then every built-in id.
+fn harness_help(without: &str) -> String {
+    let ids: Vec<&str> = goalcup::connector::builtin::CONNECTORS
+        .iter()
+        .map(|(id, _)| *id)
+        .collect();
+    format!(
+        "Your agent (the harness). Without it, {without}.\n\
+         An id, or the program's name when only one id runs it. The ids: {}.",
+        ids.join(", ")
+    )
 }
 
 fn main() -> ExitCode {

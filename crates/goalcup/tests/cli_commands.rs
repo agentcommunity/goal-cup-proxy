@@ -70,6 +70,18 @@ fn help_lists_exactly_the_eight_commands() {
 }
 
 #[test]
+fn harness_help_names_the_built_in_ids() {
+    let homes = Homes::new();
+    for cmd in ["setup", "start"] {
+        let out = homes.run(&[cmd, "--help"]);
+        let help = String::from_utf8(out.stdout).unwrap();
+        for (id, _) in goalcup::connector::builtin::CONNECTORS {
+            assert!(help.contains(id), "{cmd} --help lacks {id}: {help}");
+        }
+    }
+}
+
+#[test]
 fn cut_commands_and_unknown_flags_exit_1_never_2() {
     let homes = Homes::new();
     let cases: [&[&str]; 9] = [

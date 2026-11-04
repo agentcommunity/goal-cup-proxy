@@ -153,8 +153,8 @@ impl LaunchPlan {
 /// Why a connector or a host list cannot load. Names the file and the key, never a value.
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectorError {
-    #[error("no built-in connector `{id}`")]
-    UnknownId { id: String },
+    #[error("no built-in connector `{id}`. Choose one of: {valid}")]
+    UnknownId { id: String, valid: String },
     #[error("{file}: cannot read it ({kind})")]
     Read {
         file: String,
@@ -183,6 +183,34 @@ fn read(path: &Path) -> Result<Vec<u8>, ConnectorError> {
     })
 }
 
+/// The built-in id `arg` names: the id itself, else the one id that is `arg` plus `-cli` or whose
+/// program is `arg`. None or several is `UnknownId`, listing the matches, else every id.
+pub fn resolve_id(arg: &str) -> Result<&'static str, ConnectorError> {
+    let ids = || builtin::CONNECTORS.iter().map(|(id, _)| *id);
+    if let Some(id) = ids().find(|id| *id == arg) {
+        return Ok(id);
+    }
+    let program = |text: &str| schema::parse(text.as_bytes(), "").map(|c| c.program);
+    let matches: Vec<&str> = builtin::CONNECTORS
+        .iter()
+        .filter(|(id, text)| {
+            id.strip_suffix("-cli") == Some(arg) || program(text).is_ok_and(|p| p == arg)
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    match matches[..] {
+        [id] => Ok(id),
+        [] => Err(ConnectorError::UnknownId {
+            id: arg.to_string(),
+            valid: ids().collect::<Vec<_>>().join(", "),
+        }),
+        _ => Err(ConnectorError::UnknownId {
+            id: arg.to_string(),
+            valid: matches.join(", "),
+        }),
+    }
+}
+
 /// A built-in connector by id, or a connector file (seam S16) when the argument holds a `/` or
 /// ends `.toml`. The hosts come from `hosts_file`, else the built-in list.
 pub fn load(id_or_path: &str, hosts_file: Option<&Path>) -> Result<Connector, ConnectorError> {
@@ -196,12 +224,8 @@ pub fn load(id_or_path: &str, hosts_file: Option<&Path>) -> Result<Connector, Co
         c.source = ConnectorSource::File;
         c
     } else {
-        let (id, text) = builtin::CONNECTORS
-            .iter()
-            .find(|(id, _)| *id == id_or_path)
-            .ok_or_else(|| ConnectorError::UnknownId {
-                id: id_or_path.to_string(),
-            })?;
+        let id = resolve_id(id_or_path)?;
+        let (_, text) = builtin::CONNECTORS.iter().find(|(i, _)| *i == id).unwrap();
         schema::parse(text.as_bytes(), &format!("connectors/{id}.toml"))?
     };
     connector.hosts = hosts;
