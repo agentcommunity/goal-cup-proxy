@@ -143,7 +143,7 @@ flow are [ARCHITECTURE](docs/ARCHITECTURE.md).
 | macOS arm64 | Tested on the owner's Mac (macOS 26.6). |
 | Linux x86_64 | Tested in sandboxes. |
 | macOS Intel (x86_64) | OWNER-Q platforms: supported, tested or untested? Built: yes (release.yml, `x86_64-apple-darwin`). |
-| Linux arm64 | Built, not yet tested. OWNER-Q platforms: confirm the status. Built: yes (release.yml, `aarch64-unknown-linux-gnu`). |
+| Linux arm64 | Built (release.yml, `aarch64-unknown-linux-gnu`), not yet tested. OWNER-Q platforms: confirm the status. |
 | Windows | Use WSL2 (below). |
 
 Known issues: [TODO](TODO.md#known-issues). On a machine with no browser, set `GOALCUP_NO_BROWSER=1`:
