@@ -69,8 +69,7 @@ fn setup(home: &TempHome, path: &str, args: &[&str]) -> (Output, String) {
     (out, all)
 }
 
-/// `setup` with `envs` set over a clean proxy environment (both cases of the four proxy
-/// variables and `GOALCUP_TIME_LEFT_FILE` removed first).
+/// `setup` with `envs` set (over the clean proxy environment `apply` leaves).
 fn setup_env(
     home: &TempHome,
     path: &str,
@@ -81,15 +80,6 @@ fn setup_env(
     home.apply(&mut cmd)
         .env("GOALCUP_SERVER", "off")
         .env("PATH", path);
-    for var in [
-        "HTTPS_PROXY",
-        "https_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-        "GOALCUP_TIME_LEFT_FILE",
-    ] {
-        cmd.env_remove(var);
-    }
     cmd.envs(envs.iter().copied());
     let out = cmd.arg("setup").args(args).current_dir(home.home());
     let out = out.stdin(Stdio::null()).output().expect("goalcup runs");

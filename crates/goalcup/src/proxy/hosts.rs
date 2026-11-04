@@ -35,7 +35,8 @@ pub struct Hosts {
 #[derive(Default)]
 struct Tables {
     trusted: HashSet<Pair>,
-    /// When each pair was last learned (`None`: for the boot) and how many times.
+    /// When each pair was last learned (`None`: for the boot) and how many times. An expired
+    /// entry stays to count its strikes; the table is bounded by the boot's (host, client) pairs.
     refused: HashMap<Pair, (Option<Mono>, u32)>,
     /// Closes without an alert since the pair was last learned or trusted.
     silent: HashMap<Pair, u32>,

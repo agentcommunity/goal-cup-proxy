@@ -190,10 +190,7 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
         .env("GOALCUP_HOME", fix.gc())
         .env("HOME", fix.t.home())
         .env("XDG_CONFIG_HOME", fix.t.home())
-        .env_remove("https_proxy") // a build box's proxy would refuse every start
-        .env_remove("HTTPS_PROXY")
-        .env_remove("all_proxy")
-        .env_remove("ALL_PROXY")
+        .envs(common::home::OFF_RUN.map(|k| (k, ""))) // empty: no proxy, not inside a run
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -383,7 +380,7 @@ fn a_proxy_network_is_refused_before_anything_starts() {
             .env("GOALCUP_SERVER", "off")
             .env("GOALCUP_HOME", fix.gc())
             .env("HOME", fix.t.home());
-        for var in ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"] {
+        for var in common::home::OFF_RUN {
             cmd.env_remove(var);
         }
         let out = cmd.envs(envs.iter().copied()).output().unwrap();

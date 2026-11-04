@@ -9,6 +9,16 @@ use std::process::Command;
 const HOME_VARS: &str = "CLAUDE_CONFIG_DIR CODEX_HOME HERMES_HOME \
     XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME";
 
+/// A build box's proxy, or a harness goalcup launched, would change what setup and start do
+/// (`proxy::proxy_network`); a test that spawns them removes these first.
+pub const OFF_RUN: [&str; 5] = [
+    "https_proxy",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "GOALCUP_TIME_LEFT_FILE",
+];
+
 /// A temporary `HOME`, with `GOALCUP_HOME` inside it. Removed when dropped.
 pub struct TempHome {
     dir: tempfile::TempDir,

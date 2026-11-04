@@ -1,4 +1,10 @@
 # Lane B: Egress: upstream proxy and trust roots, proxy hardening
+
+> **Owner descope (4 Nov 2026), overrides this file:** no egress layer. B.1-B.4 and B.9 are dropped
+> (participants rarely sit behind company proxies). B.8 is instead a refusal: `goalcup setup` and
+> `goalcup start` stop with one plain line when `HTTPS_PROXY`/`https_proxy`/`ALL_PROXY`/`all_proxy`
+> is set (`proxy::proxy_network`). B.5, B.6 and B.7 stand as written. Review focus 1-3 and 5 and
+> the `crate::net` contract below no longer apply.
 **Wave:** 1   **Depends on:** none   **Branch:** fix/net
 **Covers findings:** arch-x2, cr-proxy-1, cr-proxy-2, cr-upload-server-3, cr-upload-server-9, cr-proxy-3, cr-proxy-4, cr-proxy-5, cr-proxy-x1 (dropped)
 **Owns files:** Create `crates/goalcup/src/net.rs`, `crates/goalcup/tests/net_egress.rs`, `crates/goalcup/tests/proxy_upstream.rs`. Modify `crates/goalcup/src/proxy/{ca,connect,hosts,mod,tls}.rs`, `crates/goalcup/src/upload/client.rs`, `crates/goalcup/tests/proxy_tls.rs`, `crates/goalcup/tests/lessons_tls.rs`.

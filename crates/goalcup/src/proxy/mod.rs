@@ -239,8 +239,12 @@ const PROXY_VARS: [&str; 4] = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_p
 /// `goalcup setup` and `goalcup start` refuse a proxy network: goalcup does not chain through a
 /// participant's proxy (owner, Nov 2026). The text names the variable, never its value, which can
 /// hold a password. Inside a harness goalcup launched, `HTTPS_PROXY` is goalcup's own recorder.
+/// `goalcup continue` does not check: refusing mid-run would only cost the participant time.
 pub fn proxy_network(vars: &std::collections::BTreeMap<String, String>) -> Option<String> {
-    if vars.contains_key(crate::cli::time_left::FILE_ENV) {
+    if vars
+        .get(crate::cli::time_left::FILE_ENV)
+        .is_some_and(|v| !v.is_empty())
+    {
         return None;
     }
     let var = PROXY_VARS
