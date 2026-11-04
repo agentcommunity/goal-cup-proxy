@@ -9,15 +9,7 @@ it later. Linux and macOS (arm64, tested on the owner's Mac); Windows through WS
 
 ## The seven points
 
-What we build toward, from [VISION.md](VISION.md). Every change is judged against these.
-
-1. **Record every model call** the harness makes, to any provider, for the whole run.
-2. **Record every subagent,** however many and however long.
-3. **Never block or slow the harness.** If something cannot be recorded, note a gap and keep going.
-4. **Never record secrets.**
-5. **Upload everything,** so the server can rebuild the full story by ID and time.
-6. **Tell the participant plainly** what was recorded.
-7. **Work with the harnesses people actually use,** run the way they use them.
+The seven points are in [VISION.md](VISION.md#the-seven-points). Every change is judged against them.
 
 Less code is better. Cut before you add. Ready one week before the start window opens.
 

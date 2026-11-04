@@ -7,15 +7,7 @@ what the words mean. The vision is in [VISION.md](../VISION.md), the rules for c
 ## 1. What it is for
 
 goalcup sits next to a coding harness for the length of a run and keeps a complete record of what
-the harness did. Seven points decide every change:
-
-1. Record every model call the harness makes, to any provider, for the whole run.
-2. Record every subagent, however many and however long.
-3. Never block or slow the harness. If something cannot be recorded, note a gap and keep going.
-4. Never record secrets.
-5. Upload everything, so the server can rebuild the full story by ID and time.
-6. Tell the participant plainly what was recorded.
-7. Work with the harnesses people actually use, run the way they use them.
+the harness did. The seven points are in [VISION.md](../VISION.md#the-seven-points).
 
 ## 2. The crates
 

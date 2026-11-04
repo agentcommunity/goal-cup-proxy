@@ -259,8 +259,8 @@ disclosure and no-side-channel rules.
   login is passed to the agent: not your SSH agent, your `gh` configuration or your credential
   helper. Your agent runs as you, so it can still read what any program of yours can read (next
   bullets), including an SSH key in `~/.ssh` (see Keys).
-- **Platforms.** macOS (Apple silicon and Intel) and Linux (x86_64 and arm64). On Windows, use WSL2
-  for the event. Native Windows comes later.
+- **Platforms.** See the [README table](../README.md#platforms). On Windows, use WSL2 for the event.
+  Native Windows comes later.
 - **Desktop apps are not supported.** The Codex desktop app and Claude Desktop cannot be launched with
   a private environment, so the only way to record one would be a system-wide proxy that captures
   every application on the machine. We do not do that. Use the CLI.

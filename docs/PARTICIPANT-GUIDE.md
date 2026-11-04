@@ -19,7 +19,7 @@ It has eight commands: `setup`, `start`, `continue`, `recover`, `status`, `seal`
 
 ## 1. What you need
 
-- A Mac or a Linux machine. On Windows use WSL2 (Ubuntu inside Windows) and do everything inside it.
+- A Mac or a Linux machine ([platforms](../README.md#platforms)). On Windows use WSL2 (Ubuntu inside Windows) and do everything inside it.
   WSL1 is refused, and so is a project folder on a Windows drive.
 - `git`, and a GitHub account for the real run.
 - A harness from [the harness list](harnesses/README.md), and the account or API key it uses.
