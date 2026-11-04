@@ -1268,6 +1268,15 @@ class PinnedModel(unittest.TestCase):
                          "verify/check-local.json": {"exit": 1, "entries": [{"entry": "e1", "counts": {"model_requests": 5}, "checks": []}]},
                          "verify/usage/e1.json": use})
 
+    def test_listed_warn_does_not_fail_a_gateway_row(self):  # another model-hosts list: a Warn, never a C1 FAIL
+        def why(result):
+            e = {"entry": "e1", "counts": {"model_requests": 5}, "checks": [{"id": "listed_hosts_decrypted", "result": result}]}
+            return " ".join(evaluate({"meta.json": {"connector": "claude-code-cli", "case": "gateway", "server": "off", "keep": True,
+                                                    "entry": "e1", "commits_since_start": 1, "started": "2026-10-30T10:00:00+00:00"},
+                                      "verify/check-local.json": {"exit": 0, "entries": [e]}})["why"])
+        self.assertNotIn("listed_hosts_decrypted", why("warn"))
+        self.assertIn("listed_hosts_decrypted fail", why("fail"))
+
     def test_c5_follows_the_pin(self):
         bad = self.row("claude-haiku-5-5", ["claude-opus-5-5"])
         self.assertEqual(bad["checks"]["C5"], "PASS")  # a warning line, never a verdict by itself
