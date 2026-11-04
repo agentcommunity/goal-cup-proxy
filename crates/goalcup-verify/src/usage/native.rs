@@ -171,6 +171,10 @@ impl Native {
                         return;
                     };
                     for (boot, line) in f.data(ctx.boot, *off, bytes) {
+                        // A blank line is not an unread one.
+                        if line.trim_ascii().is_empty() {
+                            continue;
+                        }
                         let first = std::mem::take(&mut f.head);
                         let Ok(v) = serde_json::from_slice::<Value>(&line) else {
                             self.lines_unread += 1;

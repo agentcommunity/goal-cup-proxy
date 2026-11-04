@@ -210,6 +210,8 @@ Some `note` kinds (`what`):
 
 - `version_read`: `line`, `version`, `before`: the harness build changed since the last part
   (written at `continue`) or while the harness ran (read after it exits, written at the seal).
+  `before: null` means the earlier read failed. An update during a part can show at that part's
+  seal and again at the next `continue`; readers dedupe on `version`.
 - `harness_changed`: `program`, `before`, `after` (`size`, `mtime_ns`, `ino`, or null when gone):
   the harness program on disk changed, looked at every 300 s, links followed; nothing else is done.
 - `native_missing`: `row`, `redirect`: a session-file row found nothing; `redirect` is the `home`
@@ -564,11 +566,12 @@ true and a line on standard error; a torn tail is no error.
 | Summary key | Holds |
 |---|---|
 | `v`, `reader`, `run`, `entry`, `connector`, `harness_version`, `sealed` | The summary version (1); the verifier's version; from the `start` event (`harness_version` is the first line of `<harness> --version`, or null); the last PART's entry id; whether a `seal` event was read |
+| `harness_semver`, `version_row`, `native_checked_on` | From the `start` event, the parsed build (or null) and the `match` of the `[[versions]]` row applied (null for the base); from the connector, the build its native reader was last checked on (its `checked` key), or null |
 | `readable`, `reason` | True when the native leg was read; else `reason` is `no_reader`, `snapshot_unreadable` (no database copy opened, even after the WAL repair) or `no_native` (no native call found while the wire had calls, or native streams were read, or a model host was tunnelled), else null |
 | `read_error` | True when decoding stopped early |
 | `native_until`, `db_set`, `harness_exited` | For a database copy the native leg was read from (Hermes), else null: the copy's time (native calls after it are not known), its set as `<boot>.<n>`, and whether the harness had exited |
 | `not_on_wire` | Listed hosts the harness reached through a tunnel, so their calls are not on the wire: items `{host, reason, conns}` |
-| `coverage` | `wire_calls`, `native_calls`, then the calls counted once each by join: `matched` (a wire and a native record of the same call), `native_only` (no `ok` wire copy), `wire_only` (no harness entry), `unattributed` (an `ok` wire call of a harness whose wire requests name a thread, with none named); and `joined_by_time`, `repeats_skipped`, `copied_skipped` (native lines skipped as repeats or as a child file's copied parent records) |
+| `coverage` | `wire_calls`, `native_calls`, then the calls counted once each by join: `matched` (a wire and a native record of the same call), `native_only` (no `ok` wire copy), `wire_only` (no harness entry), `unattributed` (an `ok` wire call of a harness whose wire requests name a thread, with none named); and `joined_by_time`, `repeats_skipped`, `copied_skipped` (native lines skipped as repeats or as a child file's copied parent records), `lines_unread` (session-file lines that are not JSON; blank lines are not counted) |
 | `status` | Wire calls by `ok`, `rate_limited`, `error`, `cancelled`, `unknown` (all five always present), and `not_whole` (a request, reply or message that was cut or has a GAP) |
 | `models` | One item per model name (null when none was said): `model`, `requested` (names asked for, sorted), `calls`, `threads` (a count), `tokens` |
 | `threads` | One item per thread: `id`, `parent`, `depth`, `label`, `wire_calls`, `native_calls`, `native_only`, `native_total` (the harness's own call total, where it keeps one), `native_until`, `native_tokens` (its own per-session token totals, Hermes), `resumed` (the session began before this entry), `matched`, `status` (as above), `tokens`, `models` (name to calls), `effort` (sorted), `first`, `last`, `readable`, `reason` |

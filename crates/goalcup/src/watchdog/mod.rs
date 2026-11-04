@@ -554,11 +554,20 @@ fn watch(
                     plan.env.clone(),
                     dir.clone(),
                 );
+                // The read runs as the start probe did: without the proxy and CA variables that
+                // `finish_env` added (`build_env` leaves `NO_PROXY` set).
+                let mut probe_env = env.clone();
+                let added = launch::REMOVED
+                    .iter()
+                    .filter(|n| !n.eq_ignore_ascii_case("no_proxy"));
+                for name in added.copied().chain(plan.ca_env.iter().map(String::as_str)) {
+                    probe_env.remove(name);
+                }
                 let parsed = |l: &str| version::parse(l).map(|v| v.text);
                 let was = plan.harness_version.as_deref().and_then(parsed);
                 after = Some(thread::spawn(move || {
                     spawn::helpers(&program, &entries, &env, spawn::BUDGET_NS, &dir, "after");
-                    let line = launch::harness_version(&program, &env)?;
+                    let line = launch::harness_version(&program, &probe_env)?;
                     (parsed(&line) != was).then_some(line)
                 }));
             }

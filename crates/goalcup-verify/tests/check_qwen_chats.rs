@@ -159,7 +159,7 @@ fn the_check_sees_a_thread_with_a_parent() {
 
 #[test]
 fn a_qwen_record_names_build_rules_and_unread_lines() {
-    let t = call_table(&entry_with("qc-v", "not json\n", |v| {
+    let t = call_table(&entry_with("qc-v", "not json\n\n  \n", |v| {
         v["harness_semver"] = "0.27.0".into();
         v["version_row"] = Value::Null;
     }));

@@ -17,7 +17,10 @@ pub(crate) struct HarnessWatch {
 /// Size, mtime in ns and inode of what `program` names, links followed; null when it is gone.
 fn stat(program: &Path) -> Value {
     std::fs::metadata(program).map_or(Value::Null, |m| {
-        let mtime_ns = m.mtime().saturating_mul(1_000_000_000) + m.mtime_nsec();
+        let mtime_ns = m
+            .mtime()
+            .saturating_mul(1_000_000_000)
+            .saturating_add(m.mtime_nsec());
         json!({"size": m.len(), "mtime_ns": mtime_ns, "ino": m.ino()})
     })
 }
