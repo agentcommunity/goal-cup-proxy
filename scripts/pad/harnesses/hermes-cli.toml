@@ -7,6 +7,7 @@
 # direct/hermes-config.yaml removes the telemetry screen in the direct case only (measured in sweep 2: no "Help improve Hermes?" screen, the chat banner
 # "Type your message or /help" shows and the paste lands), so no key press is needed before the prompt. The gateway
 # preset (gateway/hermes-config.yaml) has been run since (gateway smoke gw3, 1 Nov 2026): no telemetry screen, ready text seen, paste landed.
+# No CA setting: goalcup's own ca_settings rows (connectors/hermes-cli.toml) give Hermes the run bundle.
 version = "0.22.5"
 version_cmd = "hermes --version"
 # The versions --release-check needs verified on darwin-arm64 (owner, 4 Nov 2026: 0.22.6 too, not only the pin).
