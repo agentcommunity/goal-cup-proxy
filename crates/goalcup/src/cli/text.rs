@@ -166,6 +166,12 @@ pub fn not_installed(name: &str) -> String {
     format!("{name} is not installed. Install it, then run the command again.")
 }
 
+pub fn setup_needs_terminal(name: &str) -> String {
+    format!(
+        "Nothing was written and sign-in was not checked. Run goalcup setup in a terminal to sign in to {name}, or goalcup setup --yes to write its settings only."
+    )
+}
+
 pub fn no_harness(installed: &[&str]) -> String {
     let found = installed.join(", ");
     let found = if found.is_empty() { "none" } else { &found };
