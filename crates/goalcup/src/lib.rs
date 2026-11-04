@@ -17,6 +17,7 @@ pub mod cli;
 pub mod connector;
 pub mod mask;
 pub mod native;
+pub mod net;
 pub mod pipeline;
 pub mod proxy;
 pub mod upload;
