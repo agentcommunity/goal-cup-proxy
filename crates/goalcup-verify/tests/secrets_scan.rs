@@ -253,8 +253,10 @@ fn one_big_sse_line_scans_in_linear_time() {
     let mut pieces = vec![b"data: ".to_vec()];
     pieces.extend((0..512).map(|_| vec![b'x'; 64 << 10]));
     let (code, v) = scan_within_10s("big-line", &pieces);
-    // The line is over 1 MiB: not parsed, and named, not failed.
-    assert_eq!((code, &v["result"]), (1, &json!("named")), "{v}");
+    // The line is over 1 MiB: its bytes are scanned raw, its deltas not joined, and that is a
+    // fact, not a loss.
+    assert_eq!((code, &v["result"]), (0, &json!("pass")), "{v}");
+    assert_eq!(v["lines_not_parsed"], 1, "{v}");
 }
 
 #[test]
@@ -263,6 +265,17 @@ fn a_million_tiny_lines_finish() {
     let pieces: Vec<Vec<u8>> = all.chunks(64 << 10).map(<[u8]>::to_vec).collect();
     let (code, v) = scan_within_10s("tiny-lines", &pieces);
     assert_eq!((code, &v["result"]), (0, &json!("pass")), "{v}");
+}
+
+#[test]
+fn a_data_off_near_u64_max_does_not_panic() {
+    let mut e = Entry::new("data-max");
+    e.standard();
+    let s = e.open(HttpReq, 0, 0, json!({}));
+    e.data(s, u64::MAX - 1, 0, b"clean");
+    e.end(s, EndReason::Complete, 5, Value::Null);
+    let (code, _) = run(&["check", e.seal().to_str().unwrap(), "--json"]);
+    assert_ne!(code, 3);
 }
 
 #[test]

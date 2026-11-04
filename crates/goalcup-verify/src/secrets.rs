@@ -276,7 +276,7 @@ impl Scan {
     /// Adds `piece` to a tail; scans once `BATCH` new bytes wait.
     fn feed(&mut self, r: &Rules, t: &mut Tail, piece: &[u8]) {
         t.buf.extend_from_slice(piece);
-        t.end += piece.len() as u64;
+        t.end = t.end.saturating_add(piece.len() as u64);
         if t.buf.len() - t.seen >= BATCH {
             self.scan(r, t);
         }
@@ -511,17 +511,18 @@ impl Scan {
         };
         let mut why =
             format!("hits: {k} known, {s} shape, {g} glued_shape; {b} MASK spans over 16 KiB");
-        // Its bytes are still scanned raw; only its deltas are not joined.
-        let res = match self.long {
-            0 => res,
-            n => {
-                why += &format!("; {n} SSE lines or WebSocket messages over 1 MiB not parsed");
-                res.max(Res::Named)
-            }
-        };
+        // A fact, not a loss: its bytes are still scanned raw, only its deltas are not joined
+        // (a Responses `response.completed` line repeats the whole output).
+        if self.long > 0 {
+            why += &format!(
+                "; {} SSE lines or WebSocket messages over 1 MiB not parsed",
+                self.long
+            );
+        }
         let [k, s, g] = lists;
         let v = json!({"known_hits": k, "shape_hits": s, "glued_shape": g, "masks": self.masks,
-            "mask_bytes": {"fail_closed": self.fail_closed}, "big_masks": self.big});
+            "mask_bytes": {"fail_closed": self.fail_closed}, "big_masks": self.big,
+            "lines_not_parsed": self.long});
         (res, v.as_object().cloned().unwrap_or_default(), why)
     }
 }
@@ -534,7 +535,7 @@ pub fn check(r: &Rules, e: &Entry) -> Check {
     let (res, facts, why) = s.result();
     let mut c = Check::new("secrets", None, res, &why);
     if r.values == 0 {
-        c.why += " (shapes only; no --known values)";
+        c.why += " (shapes only; no known values given)";
     }
     if !whole {
         c.why += "; the record was read only in part";
@@ -544,8 +545,8 @@ pub fn check(r: &Rules, e: &Entry) -> Check {
 }
 
 /// `secrets`: the JSON report on stdout and one line on stderr. Exit 2 on a fail, else 1 when an
-/// input was read only in part or a line was not parsed, else 0. The error (exit 3, no report): a
-/// path given, or the known file, cannot be read.
+/// input was read only in part, else 0. The error (exit 3, no report): a path given, or the
+/// known file, cannot be read.
 pub fn run(a: &Args) -> Result<ExitCode, String> {
     let r = a
         .known
@@ -562,7 +563,7 @@ pub fn run(a: &Args) -> Result<ExitCode, String> {
     }
     let (res, mut v, why) = s.result();
     let partial = inputs.iter().any(|i| i["read"] == "partial");
-    let exit = u8::from(partial || res == Res::Named).max(2 * u8::from(res == Res::Fail));
+    let exit = u8::from(partial).max(2 * u8::from(res == Res::Fail));
     let head = json!({"verifier": env!("CARGO_PKG_VERSION"), "result": res.name(), "exit": exit,
         "known_values": r.values, "inputs": inputs});
     v.extend(head.as_object().cloned().unwrap_or_default());
