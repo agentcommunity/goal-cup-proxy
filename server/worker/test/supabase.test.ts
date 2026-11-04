@@ -293,17 +293,17 @@ test("recordHeartbeat sends p_vitals, counts nested, only when the heartbeat car
   assert.equal(Object.keys(calls[0]!.args).length, Object.keys(calls[2]!.args).length + 1);
 });
 
-test("a tick run's disk_notice_at comes through, is checked, and must be there", async () => {
-  const owed = { ...tickRun, disk_notice_at: "2026-11-06T10:00:00Z" };
-  stub([owed, tickRun]);
-  assert.deepEqual(await db().runsForTick(T), [owed, tickRun]);
+test("a tick run needs no disk_notice_at", async () => {
+  stub([{ ...tickRun }]);
+  assert.deepEqual(await db().runsForTick(T), [tickRun]);
+});
+
+test("credential row with a wrong mode is a 502", async () => {
+  stub({ member_id: "m", run_id: null, mode: "banana", expires_at: "2026-11-06T10:00:00Z" });
   const quiet = console.error;
   console.error = () => {};
   try {
-    for (const bad of ["yesterday", 5, true, undefined]) {
-      stub([{ ...tickRun, disk_notice_at: bad }]);
-      await assert.rejects(db().runsForTick(T), (e) => e instanceof ApiError && e.status === 502, JSON.stringify(bad));
-    }
+    await assert.rejects(db().credential(H("a"), T), (e) => e instanceof ApiError && e.status === 502);
   } finally {
     console.error = quiet;
   }
@@ -317,7 +317,6 @@ test("a claimed disk_full notice is a notice the Worker knows", async () => {
 
 const tickRun: TickRun = {
   ...run, last_heartbeat_at: "2026-11-06T09:05:00Z", last_model_request_at: T, flagged_at: null, flag_reason: null, final_commit: null,
-  disk_notice_at: null,
 };
 
 test("runsForTick -> upload_runs_for_tick(p_at), each row checked", async () => {

@@ -341,11 +341,6 @@ export interface TickRun extends RunRow {
   flag_reason: "gaps" | "failed" | null;
   /** The judged GitHub commit (see `FinalCommitDetail`): 40 hex, `none` for a repository GitHub does not have, null until decided. */
   final_commit: string | null;
-  /**
-   * The start of the latest disk pause that is owed a disk_full email (see `HeartbeatResult`); null
-   * until a heartbeat reports one.
-   */
-  disk_notice_at: string | null;
 }
 
 /**

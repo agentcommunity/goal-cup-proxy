@@ -639,7 +639,6 @@ function toTick(r: StoredRun): TickRun {
     flagged_at: r.flagged_at ?? null,
     flag_reason: r.flag_reason ?? null,
     final_commit: r.final_commit ?? null,
-    disk_notice_at: null,
   };
 }
 
