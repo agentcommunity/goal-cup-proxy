@@ -70,26 +70,6 @@ pub fn lid_note() -> Option<&'static str> {
     cfg!(target_os = "macos").then_some(super::text::LID_NOTE)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn lid_note_is_said_on_a_mac_only() {
-        assert_eq!(lid_note().is_some(), cfg!(target_os = "macos"));
-    }
-
-    /// Owner's Mac checklist: does not run on Linux.
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn a_held_lock_on_a_mac_still_warns_about_the_lid() {
-        let vars = BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
-        let (lock, warning) = take(&vars);
-        assert!(lock.is_some());
-        assert!(warning.is_some_and(|w| w.contains("lid")));
-    }
-}
-
 /// Hold the machine awake until the lock is dropped. On Linux an `Ok` means `systemd-inhibit` has
 /// run its command (it takes the lock first); worst case a hanging D-Bus call bounds this at about
 /// 25 seconds. On macOS `caffeinate -w <pid>` must merely stay alive for a moment.
@@ -198,4 +178,24 @@ fn settle(child: &mut std::process::Child, proof: bool) -> Result<(), String> {
         std::thread::sleep(Duration::from_millis(10));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lid_note_is_said_on_a_mac_only() {
+        assert_eq!(lid_note().is_some(), cfg!(target_os = "macos"));
+    }
+
+    /// Owner's Mac checklist: does not run on Linux.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_held_lock_on_a_mac_still_warns_about_the_lid() {
+        let vars = BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+        let (lock, warning) = take(&vars);
+        assert!(lock.is_some());
+        assert!(warning.is_some_and(|w| w.contains("lid")));
+    }
 }
