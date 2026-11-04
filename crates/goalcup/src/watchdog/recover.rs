@@ -97,9 +97,14 @@ pub fn recover_with(
         cert: fs::read_to_string(entry_dir.join(RUN_CA_FILE)).unwrap_or_default(),
         key: fs::read_to_string(rec.join(KEY_FILE)).unwrap_or_default(),
     };
-    if pem.key.is_empty() || RunCa::import(&pem).is_err() {
-        return Err(NotRecovered::KeyMissing);
-    }
+    let ca = RunCa::import(&pem).ok().filter(|_| !pem.key.is_empty());
+    let ca = ca.ok_or(NotRecovered::KeyMissing)?;
+    // Only the run CA goes on the control line: run-ca.pem also carries the participant's
+    // CA files, which can be larger than one line (MAX_LINE).
+    let pem = CaPem {
+        cert: ca.export().cert,
+        ..pem
+    };
     let port = status.and_then(|s| u16::try_from(s.get("port")?.as_u64()?).ok());
     let port = port.filter(|p| *p != 0).ok_or(NotRecovered::PortTaken)?;
     let listener = spawn::bind_exact(port).map_err(|_| NotRecovered::PortTaken)?;
