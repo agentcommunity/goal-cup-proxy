@@ -12,7 +12,7 @@ use serde_json::Value;
 /// `wire:**/agents/<name>/wire.jsonl` agent files (one per agent), and the session database copies
 /// of Crush (`db:crush.db*`) and Goose (`sessions:sessions.db*`), read for ids and parent ids
 /// only, as [`thread_db`] says.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Reader {
     CodexRollout,
     ClaudeTranscript,
@@ -190,4 +190,134 @@ pub(super) fn id(s: &str) -> Option<String> {
         && s.bytes().all(|b| b.is_ascii_graphic())
         && !s.bytes().all(|b| b == b'*');
     ok.then(|| s.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KNOWN: [&str; 16] = [
+        "amp-cli",
+        "claude-code-cli",
+        "cline-cli",
+        "codex-cli",
+        "copilot-cli",
+        "crush-cli",
+        "droid-cli",
+        "gemini-cli",
+        "goose-cli",
+        "hermes-cli",
+        "kilo-cli",
+        "kimi-code-cli",
+        "openclaw-cli",
+        "opencode-cli",
+        "opencode2-cli",
+        "qwen-cli",
+    ];
+
+    #[test]
+    fn the_connector_arms_as_of_1_0() {
+        use Reader::*;
+        let r = |c: &str, p: &str| reader(Some(c), p);
+        assert_eq!(
+            r("codex-cli", "sessions:2026/rollout-1.jsonl"),
+            Some(CodexRollout)
+        );
+        assert_eq!(r("codex-cli", "sessions:2026/x.jsonl"), None);
+        assert_eq!(
+            r("claude-code-cli", "transcripts:p/s.jsonl"),
+            Some(ClaudeTranscript)
+        );
+        assert_eq!(r("claude-code-cli", "meta:p/a.meta.json"), Some(ClaudeMeta));
+        assert_eq!(r("hermes-cli", "state:state.db-wal"), Some(HermesDb));
+        assert_eq!(r("hermes-cli", "delegation:d/task-3.log"), Some(HermesTask));
+        assert_eq!(
+            r("hermes-cli", "delegation-manifest:d/manifest.json"),
+            Some(HermesManifest)
+        );
+        assert_eq!(r("gemini-cli", "chats:h/chats/s.jsonl"), Some(GeminiChat));
+        assert_eq!(r("qwen-cli", "chats:p/c.jsonl"), Some(QwenChat));
+        assert_eq!(r("qwen-cli", "meta:p/a.meta.json"), None);
+        assert_eq!(
+            r("kimi-code-cli", "wire:s/agents/main/wire.jsonl"),
+            Some(KimiWire)
+        );
+        assert_eq!(r("crush-cli", "db:crush.db"), Some(ThreadDb));
+        assert_eq!(r("goose-cli", "sessions:sessions.db-shm"), Some(ThreadDb));
+        assert_eq!(reader(None, "chats:a.jsonl"), None);
+        let j = |c: &str| join_of(Some(c));
+        assert_eq!(j("claude-code-cli"), Some((false, true)));
+        for c in [
+            "hermes-cli",
+            "gemini-cli",
+            "qwen-cli",
+            "kimi-code-cli",
+            "amp-cli",
+        ] {
+            assert_eq!(j(c), Some((false, false)), "{c}");
+        }
+        for c in [
+            "codex-cli",
+            "opencode-cli",
+            "opencode2-cli",
+            "kilo-cli",
+            "goose-cli",
+            "crush-cli",
+        ] {
+            assert_eq!(j(c), Some((true, false)), "{c}");
+        }
+        for c in [
+            "cline-cli",
+            "copilot-cli",
+            "droid-cli",
+            "openclaw-cli",
+            "nope-cli",
+        ] {
+            assert_eq!(j(c), None, "{c}");
+        }
+        let native: Vec<_> = KNOWN
+            .into_iter()
+            .filter(|c| reads_native(Some(c)))
+            .collect();
+        assert_eq!(
+            native,
+            [
+                "claude-code-cli",
+                "codex-cli",
+                "gemini-cli",
+                "hermes-cli",
+                "kimi-code-cli",
+                "qwen-cli"
+            ]
+        );
+        assert!(thread_rpc(Some("amp-cli")) && !thread_rpc(Some("codex-cli")));
+        let db = |c| thread_db(Some(c)).map(|d| (d.table, d.id, d.parent, d.hash));
+        assert_eq!(
+            db("crush-cli"),
+            Some(("sessions", "id", "parent_session_id", true))
+        );
+        assert_eq!(
+            db("goose-cli"),
+            Some(("sessions", "id", "parent_session_id", false))
+        );
+        assert_eq!(db("hermes-cli").map(|_| ()), None);
+        let h = serde_json::json!([["X-Opencode-Session-Id", "k"], ["x-parent-session-id", "m"]]);
+        assert_eq!(
+            wire_ids(Some("opencode2-cli"), Some(&h), None),
+            (Some("k".into()), Some("m".into()))
+        );
+        let b = serde_json::json!({"client_metadata": {"thread_id": "t", "x-codex-parent-thread-id": "p"}});
+        assert_eq!(
+            wire_ids(Some("codex-cli"), None, Some(&b)),
+            (Some("t".into()), Some("p".into()))
+        );
+        assert_eq!(
+            wire_ids(
+                Some("goose-cli"),
+                Some(&serde_json::json!([["agent-session-id", "g"]])),
+                None
+            ),
+            (Some("g".into()), None)
+        );
+    }
 }
