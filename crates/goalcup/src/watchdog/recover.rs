@@ -63,9 +63,14 @@ const FAILED: u8 = 0;
 
 /// [`recover_with`] with this binary, pinned in `rec/` ([`super::spawn::pin_exe`]), as the
 /// recorder. The caller has found no watchdog alive (cli/recover.rs), so no live pin is replaced.
+/// A refusal removes the pin unless a watchdog lives (one that reported late runs from it).
 pub fn recover(entry_dir: &Path, facts: StartFacts) -> Result<Recovered, NotRecovered> {
     let exe = std::env::current_exe().map_err(|_| NotRecovered::NotStarted)?;
-    recover_with(entry_dir, facts, &pin(entry_dir, &exe))
+    let done = recover_with(entry_dir, facts, &pin(entry_dir, &exe));
+    if done.is_err() && !cli::watchdog_alive(entry_dir) {
+        let _ = fs::remove_file(entry_dir.join("rec").join(EXE_FILE));
+    }
+    done
 }
 
 /// Section 8.1: the checks and the bind here, then `recorder_exe` started as a new process in its

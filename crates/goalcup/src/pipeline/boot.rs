@@ -246,7 +246,7 @@ pub(super) fn start_event(
     let wall = |ms: Option<u64>| ms.map(|ms| goalcup_format::dump::wall(ms * 1_000_000));
     json!({
         "ev": "start", "run": f.run, "entry": f.entry, "segment": f.segment,
-        "goalcup": env!("CARGO_PKG_VERSION"), "build": f.build,
+        "goalcup": env!("CARGO_PKG_VERSION"),
         "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
         "connector": t.connector.id, "connector_source": t.connector.source,
         "connector_sha256": t.connector.sha256, "harness_version": f.harness_version,
@@ -255,8 +255,6 @@ pub(super) fn start_event(
         "hosts": t.hosts.lists(), "hosts_sha256": f.hosts_sha256,
         "mask_rules": mask_rules, "mask_values": masker.value_counts(),
         "fd_limit": fd_limit, "keep": f.keep, "deadline": wall(f.deadline),
-        "server_time": wall(f.server_time),
-        "local_wall_at_server_time": wall(f.server_time.map(|_| f.local_wall)),
         "workspace_head": null, "resume": resume,
     })
 }

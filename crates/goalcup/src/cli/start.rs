@@ -397,7 +397,6 @@ pub(super) fn start_facts(
         segment: part.segment,
         entry_dir: part.entry_dir,
         deadline: part.deadline,
-        server_time: None,
         local_wall: part.local_wall,
         workspace: project.to_path_buf(),
         // Each of these five becomes the typed field of the same name (S17) with one edit.
@@ -405,7 +404,6 @@ pub(super) fn start_facts(
         harness_version: plan.harness_version.clone(),
         version_row: plan.version_row.clone(),
         keep: vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
-        build: None,
         hosts: to_value(&plan.hosts).unwrap_or_default(),
         hosts_sha256: plan.hosts.sha256().to_owned(),
         native: to_value(&plan.native).unwrap_or_default(),

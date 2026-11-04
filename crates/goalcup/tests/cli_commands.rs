@@ -37,6 +37,10 @@ impl Homes {
             .env("GOALCUP_HOME", self.goalcup.path())
             .env("HOME", self.user.path())
             .env("XDG_CONFIG_HOME", self.user.path())
+            .env_remove("https_proxy") // a build box's proxy refuses every start
+            .env_remove("HTTPS_PROXY")
+            .env_remove("all_proxy")
+            .env_remove("ALL_PROXY")
             .output()
             .unwrap()
     }

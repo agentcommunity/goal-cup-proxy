@@ -141,8 +141,7 @@ pub struct StartFacts {
     pub entry_dir: PathBuf,
     /// Unix ms. Null with `GOALCUP_SERVER=off`.
     pub deadline: Option<u64>,
-    /// The server's time and the local wall time it was read at, unix ms.
-    pub server_time: Option<u64>,
+    /// The local wall time the deadline was read against, unix ms.
     pub local_wall: u64,
     pub workspace: PathBuf,
     /// `LaunchPlan.connector` (S3 `connector::ConnectorRef`: id, name, sha256, source), for the
@@ -155,9 +154,6 @@ pub struct StartFacts {
     pub version_row: Option<String>,
     /// `GOALCUP_KEEP_PARTS=1`.
     pub keep: bool,
-    /// The 40-hex commit the binary was built from, or null. The version is the binary's own
-    /// `CARGO_PKG_VERSION`.
-    pub build: Option<String>,
     pub hosts: serde_json::Value,
     /// SHA-256 of the host list file as read (the embedded list or a `--hosts` file), 64 hex.
     pub hosts_sha256: String,
@@ -1204,14 +1200,12 @@ mod tests {
                 segment: 2,
                 entry_dir: dir.path().join("runs/r/e"),
                 deadline: Some(u64::MAX),
-                server_time: Some(u64::MAX),
                 local_wall: u64::MAX,
                 workspace: env.workspace.clone(),
                 connector: to_value(&plan.connector).unwrap(),
                 harness_version: Some("1.2.3 (fake)".into()),
                 version_row: None,
                 keep: true,
-                build: Some("f".repeat(40)),
                 hosts: to_value(&plan.hosts).unwrap(),
                 hosts_sha256: "0".repeat(64),
                 native: to_value(&plan.native).unwrap(),
