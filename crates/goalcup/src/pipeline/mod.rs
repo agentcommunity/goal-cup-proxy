@@ -78,6 +78,11 @@ pub type Sid = u64;
 /// The exit code when a pipeline thread is gone (PRD-02 section 2 rule 1).
 pub(crate) const EXIT_PIPELINE_GONE: i32 = 70;
 
+/// A null recorder told to `restart` exits once no byte moved this long.
+const QUIET_NS: u64 = 1_000_000_000;
+/// It waits for that at most this long, under the watchdog's 10 s kill after the `restart` line.
+const NULL_DRAIN_NS: u64 = 8_000_000_000;
+
 /// The recorder handle (seam S1). Cheap to clone.
 #[derive(Clone)]
 pub struct Recorder {
@@ -991,8 +996,12 @@ impl Run {
                 Ok(Some(ToRecorder::Seal { reason, outlived })) => {
                     return self.seal(reason, outlived, dir, workspace);
                 }
-                // A null recorder exits without sealing; the watchdog starts a normal one.
-                Ok(Some(ToRecorder::Restart)) if self.null => return ExitCode::SUCCESS,
+                // A null recorder exits without sealing, at a quiet moment; the watchdog starts
+                // a normal one.
+                Ok(Some(ToRecorder::Restart)) if self.null => {
+                    self.drain_quiet();
+                    return ExitCode::SUCCESS;
+                }
                 Err(mpsc::RecvTimeoutError::Disconnected) if !eof => eof = true,
                 Err(mpsc::RecvTimeoutError::Disconnected) => std::thread::sleep(tick),
                 _ => {}
@@ -1025,6 +1034,18 @@ impl Run {
                 None => continue,
             };
             return self.seal(reason, None, dir, workspace);
+        }
+    }
+
+    /// Returns once no relay moved a byte for `QUIET_NS`, or after `NULL_DRAIN_NS`, polling every
+    /// 100 ms; a connection still open then is cut by the exit.
+    fn drain_quiet(&self) {
+        let Some(proxy) = &self.proxy else { return };
+        let start = self.rec.now();
+        while self.rec.now().ns() - start.ns() < NULL_DRAIN_NS
+            && self.rec.now().ns().saturating_sub(proxy.quiet_since().ns()) < QUIET_NS
+        {
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
 
