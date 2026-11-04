@@ -216,6 +216,46 @@ fn a_changed_connector_or_host_file_is_refused_before_any_server_call() {
     assert_eq!(w.folders(), 1);
 }
 
+#[test]
+fn a_different_folder_is_refused_and_a_part_with_no_recorded_folder_is_not() {
+    let mut w = World::new(Some(DEAD_SERVER.into()));
+    w.part(1, false, Some(World::sealed(json!({"model_requests": 1}))));
+    let elsewhere = w.t.home().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    w.parts[0]["workspace"] = json!(elsewhere.to_string_lossy());
+    w.save();
+    let (before, folders) = (w.server_json(), w.folders());
+    let stop = w.prepare().err().expect("refused");
+    assert_eq!(stop.code, 1);
+    assert!(
+        stop.text.contains(&*elsewhere.to_string_lossy()),
+        "{}",
+        stop.text
+    );
+    assert_eq!((w.server_json(), w.folders()), (before, folders));
+    // A recorded folder that is gone is still not this one: refused, naming it.
+    w.parts[0]["workspace"] = json!(w.t.home().join("gone").to_string_lossy());
+    w.save();
+    assert_eq!(w.prepare().err().expect("refused").code, 1);
+}
+
+#[test]
+fn the_same_folder_or_no_recorded_folder_is_continued() {
+    // None: an old server.json has no workspace, so there is nothing to compare. Some: the
+    // same folder spelled with a dot is the same folder.
+    for dotted in [false, true] {
+        let worker = FakeWorker::start();
+        next_part(&worker);
+        let mut w = World::new(Some(worker.url()));
+        w.part(1, false, Some(World::sealed(json!({"model_requests": 1}))));
+        if dotted {
+            w.parts[0]["workspace"] = json!(w.project.join(".").to_string_lossy());
+            w.save();
+        }
+        w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
+    }
+}
+
 /// The fake Worker's answer to the continue call: part 2, 3600 s left.
 fn next_part(w: &FakeWorker) {
     let answer = json!({"run_id": RUN_ID, "entry_id": e(2), "segment": 1,

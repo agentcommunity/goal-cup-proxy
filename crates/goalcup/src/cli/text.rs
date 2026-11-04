@@ -1304,6 +1304,10 @@ pub fn file_changed(what: &str, first: &str) -> String {
     )
 }
 
+pub fn wrong_folder(run: &str, folder: &str) -> String {
+    format!("Run {run} was started in \"{folder}\". Run goalcup continue there.")
+}
+
 pub fn updated(name: &str, from: &str, to: &str) -> String {
     format!("{name} was updated from {from} to {to} since the last part.")
 }

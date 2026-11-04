@@ -122,6 +122,17 @@ pub fn prepare(
     let (Some(sj), Some(last)) = (found.server.clone(), found.entries.last().cloned()) else {
         return Err(refuse(text::NOT_STARTED_HERE));
     };
+    // An old file has no recorded folder: then there is nothing to compare. A recorded folder
+    // that no longer exists cannot be this one, so it is refused too, by its recorded path.
+    if let Some(ws) = sj.entries.last().and_then(|e| e.workspace.as_ref()) {
+        let same = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+        if same(ws) != same(project) {
+            return Err(refuse(text::wrong_folder(
+                &found.run,
+                &ws.to_string_lossy(),
+            )));
+        }
+    }
     let base = sj.server.clone();
     let secret = match &base {
         Some(_) => match std::fs::read_to_string(credential(&found.run_dir)) {
