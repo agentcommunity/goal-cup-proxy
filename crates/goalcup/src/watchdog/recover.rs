@@ -3,8 +3,8 @@
 //! same run CA, and the harness is never touched.
 
 use super::{
-    Boot, CaPem, Cause, KEY_FILE, Prev, StartFacts, ToRecorder, catch_seal, no_core, not_dumpable,
-    send_line, spawn, watch, write_pid,
+    Boot, CaPem, Cause, EXE_FILE, KEY_FILE, Prev, StartFacts, ToRecorder, catch_seal, no_core,
+    not_dumpable, pin, send_line, spawn, watch, write_pid,
 };
 use crate::cli::log::{Fact, line};
 use crate::cli::{self, read_json, status_json};
@@ -60,10 +60,18 @@ const LATE: u8 = 2;
 /// The report byte: the recorder could not be started, and the watchdog ends.
 const FAILED: u8 = 0;
 
-/// [`recover_with`] with this binary as the recorder.
+/// [`recover_with`] with this binary, pinned in `rec/` ([`super::spawn::pin_exe`]), as the
+/// recorder. A live watchdog's pin is never replaced; a pin no watchdog was started on is removed.
 pub fn recover(entry_dir: &Path, facts: StartFacts) -> Result<Recovered, NotRecovered> {
     let exe = std::env::current_exe().map_err(|_| NotRecovered::NotStarted)?;
-    recover_with(entry_dir, facts, &exe)
+    if cli::watchdog_alive(entry_dir) {
+        return Err(NotRecovered::WatchdogAlive);
+    }
+    let got = recover_with(entry_dir, facts, &pin(entry_dir, &exe));
+    if matches!(got, Err(e) if e != NotRecovered::NotStarted && e != NotRecovered::WatchdogAlive) {
+        let _ = fs::remove_file(entry_dir.join("rec").join(EXE_FILE));
+    }
+    got
 }
 
 /// Section 8.1: the checks and the bind here, then `recorder_exe` started as a new process in its
@@ -172,5 +180,6 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     line(&dir, "watchdog_recovered", &facts_line);
     let pid = facts.harness.as_ref().map(|h| h.pid);
     let _ = watch(boot, facts, None, (&exe, &listener, &recorder_pid), pid);
+    let _ = fs::remove_file(dir.join("rec").join(EXE_FILE));
     ExitCode::SUCCESS
 }

@@ -211,6 +211,10 @@ pub const KEY_FILE: &str = "run-ca.key";
 /// `rec/watchdog.pid`: `<pid> <start_id>`, read by `cli::watchdog_pid`.
 pub const PID_FILE: &str = "watchdog.pid";
 
+/// `rec/goalcup`: the binary every boot of the entry starts ([`spawn::pin_exe`]), there while a
+/// watchdog of the entry lives. Never a part file.
+pub const EXE_FILE: &str = "goalcup";
+
 /// The first boot gave no `ready`, or the watchdog could not bind, write its files or mint the
 /// CA: the harness was not started, and PRD-10 says so (its "could not do its job" code).
 pub const NOT_STARTED: u8 = 3;
@@ -266,10 +270,25 @@ extern "C" fn ask_seal(_: libc::c_int) {
 /// recorder at once, and seals when the harness exits or `goalcup seal` asks. Returns the
 /// harness's exit code, [`NOT_STARTED`], or [`MASK_REFUSED`].
 pub fn run(plan: LaunchPlan, facts: StartFacts) -> ExitCode {
-    match std::env::current_exe() {
-        Ok(exe) => run_with(plan, facts, &exe),
-        Err(_) => ExitCode::from(NOT_STARTED),
-    }
+    let Ok(exe) = std::env::current_exe() else {
+        return ExitCode::from(NOT_STARTED);
+    };
+    let dir = facts.entry_dir.clone();
+    let code = run_with(plan, facts, &pin(&dir, &exe));
+    let _ = fs::remove_file(dir.join("rec").join(EXE_FILE));
+    code
+}
+
+/// [`spawn::pin_exe`] into `entry_dir/rec`, else `exe` itself and `exe_pin_failed` logged: a pin
+/// that fails never stops the run.
+fn pin(entry_dir: &Path, exe: &Path) -> PathBuf {
+    let rec = entry_dir.join("rec");
+    make_rec(&rec)
+        .and_then(|()| spawn::pin_exe(exe, &rec))
+        .unwrap_or_else(|_| {
+            line(entry_dir, "exe_pin_failed", &[]);
+            exe.to_path_buf()
+        })
 }
 
 /// [`run`] with the recorder started from `recorder_exe`. Every wait runs on boot time
