@@ -58,6 +58,9 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
         Err(e) => return fail(e),
     };
     let vars = super::env_vars();
+    if let Some(t) = crate::proxy::proxy_network(&vars) {
+        return fail(&t);
+    }
     let saved = super::saved_harness(&home);
     let ask = !yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let id = match harness {

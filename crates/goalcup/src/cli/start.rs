@@ -78,6 +78,9 @@ pub fn run(a: &Args) -> ExitCode {
         vars: super::env_vars(),
         server,
     };
+    if let Some(t) = crate::proxy::proxy_network(&ctx.vars) {
+        return fail(&t);
+    }
     match prepare(a, &ctx, &mut std::io::stdout()) {
         Err(stop) => {
             say(&stop.text);

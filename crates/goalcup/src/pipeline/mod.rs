@@ -847,6 +847,7 @@ pub fn run_recorder(null: bool) -> ExitCode {
             recorder: rec.clone(),
             hosts: typed.hosts.clone(),
             ca,
+            null,
         },
     );
     let board = status::Board::default();

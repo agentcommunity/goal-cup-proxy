@@ -213,6 +213,7 @@ fn spawn_start_to(fix: &Fix, server: &str, stdout: std::process::Stdio) -> std::
         .env("GOALCUP_HOME", fix.gc())
         .env("HOME", fix.t.home())
         .env("XDG_CONFIG_HOME", fix.t.home())
+        .envs(common::home::OFF_RUN.map(|k| (k, ""))) // empty: no proxy, not inside a run
         .stdin(Stdio::null())
         .stdout(stdout)
         .stderr(Stdio::piped())
@@ -400,4 +401,41 @@ fn another_version_gets_no_note() {
         assert!(!shown.contains("loses calls"), "{shown}");
         assert_eq!(recorded, 0);
     }
+}
+
+/// `goalcup start` on a proxy network stops at once with one plain line, before anything is
+/// created; inside a harness goalcup launched (`GOALCUP_TIME_LEFT_FILE`) `HTTPS_PROXY` is
+/// goalcup's own recorder, so that is no refusal.
+#[test]
+fn a_proxy_network_is_refused_before_anything_starts() {
+    use std::process::Command;
+    let fix = Fix::new("{home}/skills", "");
+    let start = |envs: &[(&str, &str)]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup"));
+        cmd.args(["start", "--practice", "--connector"])
+            .arg(&fix.connector)
+            .current_dir(&fix.project)
+            .env("GOALCUP_SERVER", "off")
+            .env("GOALCUP_HOME", fix.gc())
+            .env("HOME", fix.t.home());
+        for var in common::home::OFF_RUN {
+            cmd.env_remove(var);
+        }
+        let out = cmd.envs(envs.iter().copied()).output().unwrap();
+        let all = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        (out.status.code(), all)
+    };
+    let (code, all) = start(&[("https_proxy", "http://u:s3cret@p:3128")]);
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("(https_proxy is set). goalcup does not support proxy networks yet."),
+        "{all}"
+    );
+    assert!(!all.contains("s3cret") && !fix.gc().exists(), "{all}");
+    let (_, inside) = start(&[
+        ("HTTPS_PROXY", "http://127.0.0.1:1"),
+        ("GOALCUP_TIME_LEFT_FILE", "/x"),
+    ]);
+    assert!(!inside.contains("proxy networks"), "{inside}");
 }
