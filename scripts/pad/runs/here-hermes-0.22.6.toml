@@ -1,9 +1,9 @@
 # here-hermes-0.22.6.toml: one Hermes build installed on this Mac, run here (index ruling 2). One file per version:
-# copy it, change the name, versions and here_path; here_path goes first on PATH for this run only.
+# copy it, change the name, versions and here_path (an absolute folder on your Mac); here_path goes first on PATH for this run only.
 harness = "hermes-cli"
 key = "deepseek"
 case = "direct"
 mode = "micro"
 where = "here"
 versions = ["0.22.6"]
-here_path = ["/Users/team/dev/harness-installs/hermes-cli-0.22.6/bin"]
+here_path = ["/Users/you/harness-installs/hermes-cli-0.22.6/bin"]

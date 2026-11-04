@@ -82,6 +82,9 @@ if command -v initdb >/dev/null 2>&1 || ls /usr/lib/postgresql/*/bin/initdb >/de
 # joins only if it guards one of the seven points, the format, masking or the never-stop rules (B10).
 step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py
 step "$py311" -m unittest discover -s scripts/pad -p 'test_*.py'
+step python3 scripts/check-links.py
+# No personal path in tracked files: only the stand-in user names listed below are allowed.
+step sh -c "! git grep -n -E '/(Users|home)/[A-Za-z0-9_.-]+' | grep -v -E '/(Users|home)/(Shared|placeholder|user|p|you|h|u|x|runs|participant|secret-root|hermes|opencode|openclaw|claude|codex)([^A-Za-z0-9_.-]|\$)'"
 
 if [ "$tier" = full ]; then
     # Fails until the first #[ignore] test (e2e_run.rs or upload_worker.rs) merges in phase 2; phase 1

@@ -74,12 +74,12 @@ class AcceptanceRuns(unittest.TestCase):
         self.assertEqual((s["versions"], s["mode"]), (["0.22.5", "0.22.6"], "micro"))
         self.assertEqual(len(pad.case_list(s, harness(s))[0]), 6)
 
-    def test_here_hermes_example_loads(self):  # its here_path exists only on the owner's Mac: stand in a temp dir
+    def test_here_hermes_example_loads(self):  # its here_path is an example path: stand in a temp dir
         raw = pad.read_toml(os.path.join(HERE, "runs", "here-hermes-0.22.6.toml"))
         with tempfile.TemporaryDirectory() as d:
             s = pad.load_settings(dict(raw, here_path=[d]), PADCFG)
         self.assertEqual([v for _, v in pad.case_list(s, harness(s))[0]], ["0.22.6"])
-        self.assertTrue(all(p.startswith("/Users/team/dev/harness-installs/") for p in raw["here_path"]))
+        self.assertTrue(all(p.endswith("/harness-installs/hermes-cli-0.22.6/bin") for p in raw["here_path"]))
 
     def test_codex_kill_fallback_uses_harness_minutes(self):
         self.assertEqual(kills(plan("kill-codex.toml")), [3, 5])
