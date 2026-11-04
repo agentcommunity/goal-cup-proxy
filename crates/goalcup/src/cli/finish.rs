@@ -240,8 +240,8 @@ pub fn closing(
         );
     }
     format!(
-        "Goal Cup could not start recording, so {name} was not started. Run the command again. \
-         If it fails again, write to {support} and name run {run}.\n{log}\n"
+        "goalcup could not start recording, so {name} was not started. To go on, run: goalcup \
+         continue {run}. If it fails again, write to {support} and name run {run}.\n{log}\n"
     )
 }
 

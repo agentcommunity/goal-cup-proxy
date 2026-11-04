@@ -38,8 +38,8 @@ Exit codes: 0 done; 1 refused, and you can fix it; 3 the command could not do it
     )
 }
 
-pub const FILE_FLAGS_COMPETE: &str = "--connector and --hosts are for practice and test runs. \
-A competition run uses the connectors built into goalcup.";
+pub const FILE_FLAGS_COMPETE: &str = "--connector, --hosts and a connector file given to --harness \
+are for practice and test runs. A competition run uses the connectors built into goalcup.";
 
 pub const BAD_SERVER: &str = "GOALCUP_SERVER must be off, an https:// address, or an http:// \
 address on this computer (127.0.0.1, ::1 or localhost).";
@@ -1057,6 +1057,10 @@ this computer, so there is no time left to show.";
 pub const PUSH_FRAME: &str = "Your first message must start with these lines. Without them your \
 agent cannot push, and you may not send them later.";
 
+/// After the push lines on `continue` when `start` never wrote the first message.
+pub const PROMPT_AFTER_PUSH: &str =
+    "If you gave goalcup start a --prompt, put it after these lines, in the same first message.";
+
 pub fn first_message(file: &Path, copied: bool) -> String {
     let clip = if copied { "on your clipboard and " } else { "" };
     format!(
@@ -1165,7 +1169,17 @@ pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harn
 
 /// The end screen's first line when the harness never started; `kind` is the logged io error.
 pub fn harness_not_started(name: &str, kind: Option<&str>, run: &str) -> String {
-    match kind {
+    // `PermissionDenied` reads "permission denied".
+    let words = |k: &str| {
+        k.chars().enumerate().fold(String::new(), |mut s, (i, ch)| {
+            if ch.is_uppercase() && i > 0 {
+                s.push(' ');
+            }
+            s.extend(ch.to_lowercase());
+            s
+        })
+    };
+    match kind.map(words) {
         Some(kind) => format!(
             "{name} did not start ({kind}). Check that it runs on its own, then run goalcup \
              continue {run}."

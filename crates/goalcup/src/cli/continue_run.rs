@@ -123,15 +123,15 @@ pub fn prepare(
         return Err(refuse(text::NOT_STARTED_HERE));
     };
     // An old file has no recorded folder: then there is nothing to compare. A recorded folder
-    // that no longer exists cannot be this one, so it is refused too, by its recorded path.
-    if let Some(ws) = sj.entries.last().and_then(|e| e.workspace.as_ref()) {
-        let same = |p: &Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-        if same(ws) != same(project) {
-            return Err(refuse(text::wrong_folder(
-                &found.run,
-                &ws.to_string_lossy(),
-            )));
-        }
+    // that no longer exists (moved or renamed) cannot be gone back to, so it does not refuse.
+    if let Some(ws) = sj.entries.last().and_then(|e| e.workspace.as_ref())
+        && let Ok(recorded) = std::fs::canonicalize(ws)
+        && std::fs::canonicalize(project).ok() != Some(recorded)
+    {
+        return Err(refuse(text::wrong_folder(
+            &found.run,
+            &ws.to_string_lossy(),
+        )));
     }
     let base = sj.server.clone();
     let secret = match &base {
@@ -356,7 +356,11 @@ fn first_message(
             push::clipboard::copy(&message, vars),
         )],
         Err(_) => repo
-            .map(|r| start::push_only(r, project, vars))
+            .map(|r| {
+                let mut lines = start::push_only(r, project, vars);
+                lines.push(text::PROMPT_AFTER_PUSH.to_owned());
+                lines
+            })
             .unwrap_or_default(),
     }
 }

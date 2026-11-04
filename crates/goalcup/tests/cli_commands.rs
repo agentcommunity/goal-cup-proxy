@@ -152,6 +152,25 @@ fn file_flags_in_a_competition_run_are_refused_before_anything_is_written() {
 }
 
 #[test]
+fn a_connector_file_given_to_harness_is_refused_in_a_competition_run() {
+    let homes = Homes::new();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("mine.toml");
+    std::fs::write(&file, "").unwrap();
+    let args = [
+        "start",
+        "--harness",
+        file.to_str().unwrap(),
+        "--repo",
+        "someone/somewhere",
+    ];
+    let out = homes.run(&args);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--harness"));
+    assert!(is_empty(homes.goalcup.path()));
+}
+
+#[test]
 fn no_command_prints_the_help_and_exits_1() {
     let out = Homes::new().run(&[]);
     assert_eq!(out.status.code(), Some(1));

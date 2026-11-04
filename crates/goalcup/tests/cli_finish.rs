@@ -329,7 +329,7 @@ fn closing_names_why_the_harness_did_not_start() {
     )
     .unwrap();
     let shown = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, false);
-    assert!(shown.contains("PermissionDenied") && shown.contains(text::PART_RECORDED));
+    assert!(shown.contains("permission denied") && shown.contains(text::PART_RECORDED));
     assert!(shown.contains(&format!("goalcup continue {RUN}")));
 }
 

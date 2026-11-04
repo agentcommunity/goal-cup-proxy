@@ -175,6 +175,13 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
         (_, _, Some(_)) => RunMode::Competition,
         _ => return Err(stop(text::NEEDS_REPO.to_owned())),
     };
+    // `load` reads a file for a `/` or `.toml`: in a competition run only built-ins count.
+    if mode == RunMode::Competition
+        && a.harness
+            .is_some_and(|h| h.contains('/') || h.ends_with(".toml"))
+    {
+        return Err(stop(text::FILE_FLAGS_COMPETE.to_owned()));
+    }
     // Step 1: load the connector. `load` only reads, so a refused start has still created nothing.
     let saved = super::saved_harness(&c.home);
     let id = match (a.connector, a.harness.map(str::to_owned).or(saved)) {

@@ -233,23 +233,25 @@ fn a_different_folder_is_refused_and_a_part_with_no_recorded_folder_is_not() {
         stop.text
     );
     assert_eq!((w.server_json(), w.folders()), (before, folders));
-    // A recorded folder that is gone is still not this one: refused, naming it.
-    w.parts[0]["workspace"] = json!(w.t.home().join("gone").to_string_lossy());
-    w.save();
-    assert_eq!(w.prepare().err().expect("refused").code, 1);
 }
 
 #[test]
 fn the_same_folder_or_no_recorded_folder_is_continued() {
-    // None: an old server.json has no workspace, so there is nothing to compare. Some: the
-    // same folder spelled with a dot is the same folder.
-    for dotted in [false, true] {
+    // None: an old server.json has no workspace, so there is nothing to compare. "dot": the
+    // same folder spelled with a dot is the same folder. "gone": a moved or renamed folder
+    // cannot be gone back to, so the run goes on here.
+    for case in ["none", "dot", "gone"] {
         let worker = FakeWorker::start();
         next_part(&worker);
         let mut w = World::new(Some(worker.url()));
         w.part(1, false, Some(World::sealed(json!({"model_requests": 1}))));
-        if dotted {
-            w.parts[0]["workspace"] = json!(w.project.join(".").to_string_lossy());
+        let recorded = match case {
+            "dot" => Some(w.project.join(".")),
+            "gone" => Some(w.t.home().join("gone")),
+            _ => None,
+        };
+        if let Some(r) = recorded {
+            w.parts[0]["workspace"] = json!(r.to_string_lossy());
             w.save();
         }
         w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
@@ -356,6 +358,7 @@ fn shown(mode: &str, repo: Option<&str>, written: Option<Value>) -> String {
 fn the_push_lines_come_back_after_a_ctrl_c_after_the_open() {
     let said = shown("competition", Some("a/b"), None);
     assert!(said.contains(text::PUSH_FRAME), "{said}");
+    assert!(said.contains(text::PROMPT_AFTER_PUSH), "{said}");
     assert!(said.contains("https://github.com/a/b"), "{said}");
     let said = shown("practice", None, None);
     assert!(!said.contains(text::PUSH_FRAME), "{said}");
