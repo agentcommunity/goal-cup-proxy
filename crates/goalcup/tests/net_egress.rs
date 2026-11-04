@@ -2,13 +2,40 @@
 
 use goalcup::net::{Egress, INSIDE_RUN, admin_trusted};
 use goalcup::proxy::ca::RunCa;
+use goalcup::upload::client::{ServerClient, ServerError, Token, put_budget};
+use serde_json::json;
 use std::collections::{BTreeMap, HashSet};
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 fn vars(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
     pairs
         .iter()
         .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
         .collect()
+}
+
+/// A request head, read up to its blank line.
+fn read_to_blank_line(s: &mut TcpStream) -> String {
+    let (mut seen, mut byte) = (Vec::new(), [0u8; 1]);
+    while !seen.ends_with(b"\r\n\r\n") && s.read(&mut byte).unwrap_or(0) == 1 {
+        seen.push(byte[0]);
+    }
+    String::from_utf8_lossy(&seen).into_owned()
+}
+
+/// A server that reads one request head and writes `answer`.
+fn answer_once(answer: &'static [u8]) -> (JoinHandle<()>, SocketAddr) {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = l.local_addr().unwrap();
+    let server = std::thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        read_to_blank_line(&mut s);
+        s.write_all(answer).unwrap();
+    });
+    (server, addr)
 }
 
 #[test]
@@ -171,4 +198,69 @@ fn odd_proxy_urls_and_trust_lists_never_panic_or_leak() {
             .starts_with("goalcup cannot use the proxy in HTTPS_PROXY")
     );
     assert!(admin_trusted("<key>trustList</key></dict><dict>").is_empty());
+}
+
+#[test]
+fn the_token_reaches_a_proxy_only_inside_connect() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    let fake = l.local_addr().unwrap();
+    let seen = std::thread::spawn(move || {
+        let (mut s, _) = l.accept().unwrap();
+        let head = read_to_blank_line(&mut s);
+        s.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        head
+    });
+    let e = Egress::from_vars(
+        &vars(&[("HTTPS_PROXY", &format!("http://u:s3cret@{fake}"))]),
+        vec![],
+    );
+    let c = ServerClient::with_egress("https://ingest.example", Some(Token::new("gcr_secret")), &e);
+    let err = c
+        .json::<serde_json::Value, ()>("GET", "/v1/health", None)
+        .unwrap_err();
+    let head = seen.join().unwrap();
+    assert!(
+        head.starts_with("CONNECT ingest.example:443 HTTP/1.1\r\n"),
+        "{head}"
+    );
+    // ureq 2 writes the scheme in lower case.
+    assert!(
+        head.contains("Proxy-Authorization: basic dTpzM2NyZXQ="),
+        "{head}"
+    );
+    assert!(!head.contains("gcr_secret") && !head.contains("Bearer"));
+    assert!(
+        matches!(&err, ServerError::Transport(t) if !t.contains("s3cret")),
+        "{err}"
+    );
+    assert!(!format!("{err:?}{c:?}").contains("s3cret"));
+}
+
+#[test]
+fn an_http_server_is_never_proxied() {
+    let (server, addr) = answer_once(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+    );
+    let e = Egress::from_vars(
+        &vars(&[
+            ("HTTPS_PROXY", "http://127.0.0.1:1"),
+            ("HTTP_PROXY", "http://127.0.0.1:1"),
+        ]),
+        vec![],
+    );
+    let c = ServerClient::with_egress(&format!("http://{addr}"), None, &e);
+    assert_eq!(
+        c.json::<serde_json::Value, ()>("GET", "/v1/health", None)
+            .unwrap(),
+        json!({})
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn a_chunk_gets_time_for_a_slow_uplink() {
+    assert_eq!(put_budget(0), Duration::from_secs(600));
+    assert_eq!(put_budget(1 << 20), Duration::from_secs(600));
+    assert_eq!(put_budget(32 << 20), Duration::from_secs(4096));
 }
