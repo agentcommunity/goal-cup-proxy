@@ -205,6 +205,9 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
     let Some(connector) = loaded else {
         return Err(stop(text::NO_HARNESS_SAVED.to_owned()));
     };
+    if !connector::launch::resolve_program(&connector.program, &c.vars).is_absolute() {
+        return Err(stop(text::not_installed(&connector.name)));
+    }
     let env = Env {
         vars: c.vars.clone(),
         workspace: c.project.clone(),

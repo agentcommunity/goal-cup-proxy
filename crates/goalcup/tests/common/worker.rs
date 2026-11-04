@@ -72,6 +72,8 @@ struct State {
     /// Each entry's position answer, without `status`, `sealed` and `stop`.
     entries: Vec<Value>,
     stop: bool,
+    /// Every request received, answered or not.
+    calls: usize,
     /// A handle on every accepted connection, shut down when the fake is dropped.
     conns: Vec<TcpStream>,
 }
@@ -153,6 +155,10 @@ impl FakeWorker {
     }
     pub fn heartbeats(&self) -> Vec<Value> {
         lock(&self.state).heartbeats.clone()
+    }
+    /// How many requests of any kind the fake has received.
+    pub fn calls(&self) -> usize {
+        lock(&self.state).calls
     }
     /// The run is over from now (`stop: true`, `seconds_left` 0, reason `deadline`), or not.
     pub fn set_stop(&self, stop: bool) {
@@ -241,6 +247,7 @@ fn counts_bad(c: &Value) -> Option<usize> {
 
 /// The answer to `req`: status, `Retry-After` and body; `None` drops the connection unanswered.
 fn answer(req: &Request, state: &Mutex<State>) -> Option<(u16, Option<u64>, String)> {
+    lock(state).calls += 1;
     let (path, q) = req.target.split_once('?').unwrap_or((&req.target, ""));
     let segs: Vec<&str> = path.trim_matches('/').split('/').collect();
     let route = match (req.method.as_str(), segs.as_slice()) {

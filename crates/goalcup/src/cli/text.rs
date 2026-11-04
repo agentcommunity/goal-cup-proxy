@@ -154,7 +154,7 @@ pub fn harness_found(name: &str, version: Option<&str>, program: &Path) -> Strin
 }
 
 pub fn not_installed(name: &str) -> String {
-    format!("{name} is not installed. Install it, then run goalcup setup again.")
+    format!("{name} is not installed. Install it, then run the command again.")
 }
 
 pub fn no_harness(installed: &[&str]) -> String {

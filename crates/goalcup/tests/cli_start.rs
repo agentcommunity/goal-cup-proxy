@@ -116,6 +116,24 @@ fn the_deadline_is_the_servers_seconds_left_from_now() {
 }
 
 #[test]
+fn a_harness_that_is_not_installed_stops_the_start_before_anything_is_created() {
+    let fix = Fix::with_program("goalcup-no-such-harness-xyz", "{home}/skills", "");
+    let w = FakeWorker::start();
+    let stop = prepare(&fix.args(), &fix.ctx(Server::Url(w.url())), &mut Vec::new())
+        .err()
+        .unwrap();
+    assert_eq!(stop.code, 1);
+    assert!(
+        stop.text.contains("Tester is not installed"),
+        "{}",
+        stop.text
+    );
+    assert!(stop.text.contains("run the command again"), "{}", stop.text);
+    assert!(!fix.gc().exists());
+    assert_eq!(w.calls(), 0);
+}
+
+#[test]
 fn a_plan_refusal_names_file_and_key_never_the_value_and_creates_no_run() {
     let extra = "[[refuse_if_set]]\nfile = \"{home}/settings.json\"\nkeys = [\"proxy\"]\n";
     let fix = Fix::new("{home}/skills", extra);
