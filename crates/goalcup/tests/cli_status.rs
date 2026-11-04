@@ -330,3 +330,42 @@ fn an_expected_tunnel_is_not_a_problem() {
         vec![text::long_tunnel("t.example.net", None, 3)]
     );
 }
+
+/// Every state line that starts `PROBLEM:` ends in something the participant can do: a command to
+/// run, the support address, or the plain word that nothing is needed. So does a missing first request.
+#[test]
+fn every_problem_line_says_what_to_do() {
+    let states = [
+        S::Recover { since: T0 },
+        S::Continue { since: T0 },
+        S::Over { since: T0 },
+        S::Stale { since: T0 },
+        S::Null { since: T0 },
+        S::NotAnswering { since: T0 },
+        S::Losing {
+            streams: 1,
+            bytes: 1,
+        },
+        S::WriterSlow { secs: 14 },
+        S::OffRestarting { since: T0 },
+        S::Restarting { since: T0 },
+        S::Sealed { at: T0 },
+        S::Recording,
+    ];
+    let mut seen = 0;
+    for state in states {
+        let line = text::state_line(&state, RUN);
+        if !line.starts_with(text::PROBLEM) {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            line.to_lowercase().contains("run:")
+                || line.contains(text::SUPPORT_ADDRESS)
+                || line.contains("do nothing"),
+            "{line}"
+        );
+    }
+    assert!(seen >= 5, "the variants no longer render PROBLEM lines");
+    assert!(text::no_request_yet().contains("goalcup status"));
+}

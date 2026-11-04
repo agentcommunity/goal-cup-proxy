@@ -551,7 +551,8 @@ pub fn state_line(state: &State, run: &str) -> String {
         State::Null { since } => format!(
             "{}it stopped right after each restart, so goalcup lets your agent's traffic pass \
              unrecorded for now. Your agent keeps working. goalcup tries again at most 5 minutes \
-             apart until the run ends. The server is told.",
+             apart until the run ends. The server is told. You need do nothing. If it stays off, \
+             write to {SUPPORT_ADDRESS}.",
             off(since)
         ),
         State::NotAnswering { since } => format!(
@@ -636,7 +637,8 @@ pub fn quiet_proxy(name: &str) -> String {
 pub fn no_request_yet() -> String {
     format!(
         "{PROBLEM} No model request was written yet. If your agent is working, it may not use the \
-         recording proxy."
+         recording proxy. Give it a few minutes, then run goalcup status again. If this stays \
+         after 10 minutes of work, write to {SUPPORT_ADDRESS}."
     )
 }
 
