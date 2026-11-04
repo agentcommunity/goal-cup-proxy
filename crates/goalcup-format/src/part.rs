@@ -597,8 +597,10 @@ fn set_aside(part: &Path) -> io::Result<()> {
         n += 1;
     }
     fs::rename(part, to(part, n))?;
-    let _ = fs::rename(&idx, to(&idx, n));
-    Ok(())
+    match fs::rename(&idx, to(&idx, n)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
 }
 
 /// Shortens a file to at most `len` bytes; a missing file stays missing.
