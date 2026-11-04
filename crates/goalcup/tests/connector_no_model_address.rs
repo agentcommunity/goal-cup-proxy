@@ -90,6 +90,6 @@ fn a_trust_pattern_without_an_address_key_is_refused() {
 fn the_fallback_is_checked_against_the_built_in_list_not_a_hosts_file() {
     let dir = tempfile::tempdir().unwrap();
     let hosts = dir.path().join("hosts.toml");
-    std::fs::write(&hosts, "shared = [\"api.deepseek.com\"]\n").unwrap();
+    std::fs::write(&hosts, "provider = [\"api.deepseek.com\"]\n").unwrap();
     connector::load("hermes-cli", Some(&hosts)).unwrap();
 }
