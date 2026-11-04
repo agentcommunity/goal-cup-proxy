@@ -25,9 +25,23 @@ sys.path.insert(0, HERE)
 import check as pc  # noqa: E402  S7 models are read through check.py's SEAM only
 REPO = os.path.dirname(os.path.dirname(HERE))
 SBX = os.path.join(HERE, "sbx.mjs")
-# The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker and loopback, fixed
-# here. There is no server address setting, and production is never one.
-SERVERS = {"staging": "https://goalcup-ingest-staging.b-9a5.workers.dev", "local": "http://127.0.0.1:8787"}
+# The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker (its address is PAD_STAGING_URL,
+# read only when staging is used) and loopback. There is no server address setting, and production is never one.
+SERVERS = {"local": "http://127.0.0.1:8787"}
+
+
+def staging_url():
+    u = os.environ.get("PAD_STAGING_URL", "")
+    h = urllib.parse.urlsplit(u)
+    if h.scheme != "https" or "staging" not in (h.hostname or "").split(".")[0]:
+        raise Usage("PAD_STAGING_URL must name the staging Worker (https, a host with 'staging' in its first label)")
+    return u.rstrip("/")
+
+
+def server_url(name):
+    return staging_url() if name == "staging" else SERVERS.get(name)
+
+
 NOT = "server copy not fetched: "
 STAGING_BUCKET = "goalcup-traces-staging"  # fetch-run's bucket for staging; no setting, and never production's
 # Organizer secrets that never enter a box (PRD-12 section 7): they are not even in the environment of the
@@ -347,12 +361,14 @@ def load_settings(raw, pad):
          **MODES[raw["mode"]], **raw}
     if s["case"] not in ("direct", "gateway", "dodger", "all"):
         raise Usage("case is direct, gateway, dodger or all")
-    if s["server"] != "off" and s["server"] not in SERVERS:
+    if s["server"] != "off" and s["server"] not in (*SERVERS, "staging"):
         raise Usage("server is off, local or staging (there is no server address setting)")
     if s["where"] not in ("sandbox", "here"):
         raise Usage("where is sandbox or here")
-    if "goalcup_home" in s and (s["where"] != "here" or not isinstance(s["goalcup_home"], str) or not os.path.isabs(s["goalcup_home"])):
+    if "goalcup_home" in s and (s["where"] != "here" or not isinstance(s["goalcup_home"], str) or not os.path.isabs(os.path.expanduser(s["goalcup_home"]))):
         raise Usage("goalcup_home is an absolute path, and only with where = \"here\"")  # the signed-in home, kept as is
+    if "goalcup_home" in s:
+        s["goalcup_home"] = os.path.expanduser(s["goalcup_home"])
     if "model_host" in s and not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(s["model_host"])):
         raise Usage("model_host is a host name")
     if "pre_keys" in s and not (isinstance(s["pre_keys"], list) and all(isinstance(k, str) for k in s["pre_keys"])):
@@ -494,7 +510,7 @@ def approve(server, code):
     key, member = map(os.environ.get, APPROVAL)
     if not (key and member):
         return "approval key or member id not set"
-    req = urllib.request.Request(SERVERS[server] + "/v1/device/approve", method="POST", data=json.dumps(
+    req = urllib.request.Request(server_url(server) + "/v1/device/approve", method="POST", data=json.dumps(
         {"user_code": code, "member_id": member, "approve": True}).encode(),
         headers={"authorization": "Bearer " + key, "content-type": "application/json", "user-agent": UA})
     try:
@@ -673,7 +689,7 @@ class Run:
             self.hosts_sha = hashlib.sha256(data).hexdigest()
         with open(os.path.join(stage, "settings.json"), "w") as f:  # pad-run's input: names, never a value
             json.dump(dict({k: v for k, v in s.items() if k != "plan"}, harness_id=s["harness"], harness=self.harness,
-                           session=self.name, limits=runner_limits(s), server_url=SERVERS.get(s["server"]),
+                           session=self.name, limits=runner_limits(s), server_url=server_url(s["server"]),
                            case=self.case, version=s.get("version") or self.harness["version"], key_files=names,
                            route_key=names[-1] if names else None, home_vars=con.get("home") or {},
                            native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in con.get("native", [])],

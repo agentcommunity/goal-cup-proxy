@@ -55,6 +55,36 @@ def key_file(folder, mode=0o600, value=SENTINEL):
     return path
 
 
+def setUpModule():  # tests that walk a staging run get a fake address; nothing here is a real host
+    patcher = mock.patch.dict(os.environ, {"PAD_STAGING_URL": "https://fake-staging.invalid"})
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
+class StagingUrl(unittest.TestCase):
+    def url(self, v):
+        env = {k: x for k, x in os.environ.items() if k != "PAD_STAGING_URL"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.dict(os.environ, {"PAD_STAGING_URL": v} if v else {}):
+            return pad.staging_url()
+
+    def test_unset_refuses(self):
+        with self.assertRaises(pad.Usage):
+            self.url("")
+
+    def test_production_looking_host_refused(self):
+        with self.assertRaises(pad.Usage):
+            self.url("https://goalcup-ingest.example.workers.dev")
+
+    def test_staging_host_accepted(self):
+        self.assertEqual(self.url("https://goalcup-ingest-staging.example.workers.dev"), "https://goalcup-ingest-staging.example.workers.dev")
+
+    def test_local_and_off_need_no_variable(self):
+        env = {k: x for k, x in os.environ.items() if k != "PAD_STAGING_URL"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(pad.server_url("local"), "http://127.0.0.1:8787")
+            self.assertIsNone(pad.server_url("off"))
+
+
 class KeyFiles(unittest.TestCase):
     def setUp(self):
         self.out, self.repo = (self.enterContext(tempfile.TemporaryDirectory()) for _ in range(2))

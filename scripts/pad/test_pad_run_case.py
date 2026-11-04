@@ -358,6 +358,12 @@ class SignedInHome(unittest.TestCase):
                 pad.load_settings(row, self.PADCFG)
         self.assertEqual(pad.load_settings(dict(self.ROW, goalcup_home="/x/home"), self.PADCFG)["goalcup_home"], "/x/home")
 
+    def test_goalcup_home_tilde_is_expanded(self):
+        with mock.patch.dict(os.environ, {"HOME": "/u"}):
+            self.assertEqual(pad.load_settings(dict(self.ROW, goalcup_home="~/gc/home"), self.PADCFG)["goalcup_home"], "/u/gc/home")
+            with self.assertRaises(pad.Usage):
+                pad.load_settings(dict(self.ROW, goalcup_home="gc/home"), self.PADCFG)
+
     def test_goalcup_home_is_used_and_never_removed(self):
         run, home = (self.enterContext(tempfile.TemporaryDirectory()) for _ in range(2))
         harness_home = os.path.join(home, "harness")
