@@ -37,12 +37,11 @@ def report(tiers, run, only=None) -> tuple[list[str], int]:
     lines, new, failed = [], False, False
     for cid in only or SOURCES:
         try:
-            v = latest(cid, run)
+            v, seen = latest(cid, run), known(tiers, cid)
         except Exception as e:
             failed = True
             lines.append(f"{cid} lookup failed: {str(e).strip() or type(e).__name__}")
             continue
-        seen = known(tiers, cid)
         hit = any(k == v for k, _ in seen)
         new = new or not hit
         shown = ", ".join(f"{k} ({o})" for k, o in seen) or "none"
@@ -62,6 +61,11 @@ if __name__ == "__main__":
     ap.add_argument("--tiers", default=Path(__file__).resolve().parents[2] / "connectors" / "tiers.toml")
     ap.add_argument("--only", choices=list(SOURCES))
     a = ap.parse_args()
-    lines, code = report(tomllib.loads(Path(a.tiers).read_text()), run, [a.only] if a.only else None)
+    try:
+        tiers = tomllib.loads(Path(a.tiers).read_text())
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        print(f"tiers unreadable: {e}")
+        sys.exit(2)  # never 1: that means a new build
+    lines, code = report(tiers, run, [a.only] if a.only else None)
     print("\n".join(lines))
     sys.exit(code)

@@ -91,6 +91,11 @@ class Canary(unittest.TestCase):
         self.assertIn("claude-code-cli latest 2.1.320 verified 2.1.312 (macos) NEW", lines)
         self.assertEqual(code, 1)
 
+    def test_bad_tiers_row_does_not_raise(self):
+        lines, code = one("codex-cli", {"codex-cli": "0.50.0"}, "0.50.0\n")
+        self.assertTrue(lines[0].startswith("codex-cli lookup failed"), lines)
+        self.assertEqual(code, 2)
+
 
 if __name__ == "__main__":
     unittest.main()
