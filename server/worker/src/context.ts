@@ -17,6 +17,8 @@ export interface Config {
   runSeconds: number;
   /** The same for a practice run: PRACTICE_RUN_MINUTES * 60. */
   practiceRunSeconds: number;
+  /** The compressed bytes a practice run may store: PRACTICE_MAX_BYTES (default 1 GiB). Other modes have no ceiling. */
+  practiceMaxBytes: number;
   /** A run is closed this long after it ends. 24 h, or CLOSE_AFTER_SECONDS (local backend only). */
   closeAfterSeconds: number;
   /** The competition start window (local backend only); undefined: the database's, or always open. */
@@ -107,6 +109,7 @@ export function readConfig(env: Env): Config {
     testEventId: env.TEST_EVENT_ID === "" ? undefined : env.TEST_EVENT_ID,
     runSeconds: testOnlySeconds(env, "RUN_SECONDS") ?? positiveNumber("RUN_HOURS", env.RUN_HOURS, 168, "hours", 24 * 365) * 3600,
     practiceRunSeconds: positiveNumber("PRACTICE_RUN_MINUTES", env.PRACTICE_RUN_MINUTES, 10, "minutes", 24 * 60) * 60,
+    practiceMaxBytes: positiveNumber("PRACTICE_MAX_BYTES", env.PRACTICE_MAX_BYTES, 1073741824, "bytes", 2 ** 40),
     closeAfterSeconds: testOnlySeconds(env, "CLOSE_AFTER_SECONDS") ?? CLOSE_AFTER_SECONDS,
     startWindow: opens === null && closes === null ? undefined : { opens, closes },
     githubCheck: env.GITHUB_CHECK === "on",

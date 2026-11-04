@@ -93,8 +93,8 @@ export interface RunRow {
   current_sealed_at: string | null;
   /**
    * What the run holds in R2 so far, over all its entries: the compressed bytes (each committed
-   * chunk's Content-Length) and the number of committed chunks. There is no per-run size limit;
-   * the chunk path logs each 10 GiB a run crosses.
+   * chunk's Content-Length) and the number of committed chunks. Only a practice run has a size
+   * limit (PRACTICE_MAX_BYTES); the chunk path logs each 10 GiB a run crosses.
    */
   stored_bytes: number;
   chunk_count: number;

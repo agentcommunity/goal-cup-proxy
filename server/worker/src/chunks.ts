@@ -6,8 +6,9 @@
 //      run state is looked at, so a retry is answered whatever has happened since)
 //   3. the run state: open, the entry not sealed, and nothing past the end of the run
 //   4. offset / prev / first_seq must continue exactly where the entry stands (409 otherwise)
-//   5. stream the body into R2, create-only, with R2 checking the sha256 (422 if wrong); there is
-//      no per-run size limit, a run that crosses each 10 GiB writes one log line instead
+//   5. stream the body into R2, create-only, with R2 checking the sha256 (422 if wrong); a practice
+//      run stops at PRACTICE_MAX_BYTES (410); other runs have no size limit, a run that crosses
+//      each 10 GiB writes one log line instead
 //   6. one atomic database step advances offset/head, records the chunk, and adds the chunk's
 //      compressed size to the entry's stored_bytes and one to its chunk_count
 //   7. answer with the new position {offset, next_seq, head, received_at, sealed}; if this chunk
@@ -47,8 +48,11 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   const held = offset < entry.offset ? await ctx.db.getChunk(member, runId, entry.entry_id, offset) : null;
   if (held !== null && sameChunk(held, h)) return storedAnswer(held, entry.sealed_at !== null);
 
-  // 3. The run state: open (not closed) and the entry not sealed.
+  // 3. The run state: open (not closed), the entry not sealed, and a practice run under its ceiling.
   requireOpen(ctx, run, entry);
+  if (run.mode === "practice" && run.stored_bytes + contentLength > ctx.cfg.practiceMaxBytes) {
+    throw closed("This practice run has reached its upload limit.");
+  }
 
   // 3. ...and the end. Once the run is over a chunk is accepted only after the final heartbeat has
   //    committed where the entry's chain ends (until then: wait, 503). Once an end is committed,

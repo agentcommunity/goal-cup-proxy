@@ -14,6 +14,8 @@ export interface Env {
   RUN_HOURS?: string;
   /** Practice run length in minutes (default 10). */
   PRACTICE_RUN_MINUTES?: string;
+  /** Compressed bytes a practice run may store (default 1 GiB); competition and test runs have no ceiling. */
+  PRACTICE_MAX_BYTES?: string;
   /**
    * Tests only, DB_BACKEND=local only: run length in seconds; seconds after a run ends until it is
    * closed (default 24 h); and the competition start window (RFC 3339, `2026-11-06T09:00:00Z`;

@@ -48,6 +48,8 @@ TEST_EVENT_ID = "test"
 RUN_HOURS = "168"
 # A practice run lasts this many minutes. Practice has no start window and never replaces a run.
 PRACTICE_RUN_MINUTES = "10"
+# Compressed bytes a practice run may store; competition and test runs have none.
+PRACTICE_MAX_BYTES = "1073741824"
 # The oldest goalcup (x.y.z) that may start a run in any mode or sign in for one; older ones are
 # told to update (403). `continue` is never checked. Empty: no minimum. A dashboard edit is wiped
 # by the next deploy.
@@ -143,6 +145,8 @@ PRACTICE_EVENT_ID = "goalcup-practice-staging"
 TEST_EVENT_ID = "test-staging"
 RUN_HOURS = "168"
 PRACTICE_RUN_MINUTES = "10"
+# Compressed bytes a practice run may store; competition and test runs have none.
+PRACTICE_MAX_BYTES = "1073741824"
 MIN_COMPETITION_VERSION = "1.0.0"
 DB_BACKEND = "supabase"
 GITHUB_CHECK = "on"

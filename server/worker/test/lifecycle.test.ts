@@ -420,6 +420,23 @@ describe("no per-run size limit (ledger R5)", () => {
     const run = (await r.db().getRun("alice", a.run_id, null))!.run;
     assert.equal(run.stored_bytes, 70 * 1024 ** 3 + chunk.body.length);
   }, {});
+
+  lifecycle("a practice run stops taking chunks at its ceiling; a competition run does not", async (r) => {
+    for (const [who, mode, status] of [["pat", "practice", 410], ["cleo", "competition", 200]] as const) {
+      const cred = await r.cred(who, mode);
+      const a = await r.start(cred, `${who}-1`);
+      const head = sha256(`${a.entry_id}:4`);
+      const held = {
+        entry_id: a.entry_id, offset: 0, length: 10, sha256: "1".repeat(64), first_seq: 0, last_seq: 4, prev: GENESIS, head, r2_key: "k",
+        received_at: T0,
+      };
+      assert.equal(await r.db().commitChunk({ member_id: who, run_id: a.run_id, chunk: held, stored_bytes: 1000 }), "committed");
+      const chunk = makeChunk(a.entry_id, 5, 3, head, "x");
+      const put = await r.api.call("PUT", `/v1/runs/${a.run_id}/chunks/10`, { token: cred, body: chunk.body, headers: { ...chunk.headers, "content-length": String(chunk.body.length) } });
+      assert.equal(put.status, status, `${mode}: ${JSON.stringify(put.body)}`);
+      if (status === 410) assert.equal(put.body.error, "closed");
+    }
+  }, { ...WINDOW, PRACTICE_MAX_BYTES: "1000" });
 });
 
 describe("facts about the machine and the connection", () => {

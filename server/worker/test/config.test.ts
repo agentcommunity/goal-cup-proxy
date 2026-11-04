@@ -52,6 +52,7 @@ test("config defaults and validation", () => {
     testEventId: undefined,
     runSeconds: 168 * 3600,
     practiceRunSeconds: 600,
+    practiceMaxBytes: 1073741824,
     closeAfterSeconds: 86400,
     startWindow: undefined,
     githubCheck: false,
