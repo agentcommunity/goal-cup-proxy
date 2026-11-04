@@ -208,16 +208,21 @@ async fn two_thousand_concurrent_connects_are_all_served() {
     let (_h, addr, calls, _) = proxy(HOSTS, &[]);
     let target = format!("{}", echo(b""));
     let all_open = Arc::new(tokio::sync::Barrier::new(2_000));
+    // At most 100 handshakes at once: macOS queues 128 connects per port and resets the rest.
+    // All 2,000 still stay open together at the barrier.
+    let opening = Arc::new(tokio::sync::Semaphore::new(100));
     let tasks: Vec<_> = (0..2_000)
         .map(|i| {
-            let (target, all_open) = (target.clone(), all_open.clone());
+            let (target, all_open, opening) = (target.clone(), all_open.clone(), opening.clone());
             tokio::spawn(async move {
+                let permit = opening.acquire_owned().await.unwrap();
                 let mut s = through(addr, &target).await;
                 let ping = format!("ping {i:04}");
                 s.write_all(ping.as_bytes()).await.unwrap();
                 let mut back = vec![0u8; ping.len()];
                 s.read_exact(&mut back).await.unwrap();
                 assert_eq!(back, ping.as_bytes());
+                drop(permit);
                 all_open.wait().await;
             })
         })
