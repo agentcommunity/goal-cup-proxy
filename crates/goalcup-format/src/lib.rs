@@ -13,6 +13,7 @@
 //! - [`dump`]: one JSON line per record (`goalcup-verify dump`).
 
 pub mod codec;
+pub mod connectors;
 pub mod dump;
 pub mod link;
 pub mod part;

@@ -15,11 +15,7 @@ use std::path::{Path, PathBuf};
 
 /// Exceptions: (file from the repository root, literal text, reason). An empty text exempts the
 /// whole file. An entry that no longer excuses a hit fails as stale.
-const ALLOWED: &[(&str, &str, &str)] = &[(
-    "crates/goalcup/src/connector/builtin.rs",
-    "",
-    "the one include_str! list that embeds the connector files by id (PRD-11); skipped while absent",
-)];
+const ALLOWED: &[(&str, &str, &str)] = &[];
 
 /// Connector ids and programs, then the fixed dotted parts of each host pattern
 /// (`*.maas.aliyuncs.com` gives `maas.aliyuncs.com`, `bedrock-runtime.*.amazonaws.com` gives
