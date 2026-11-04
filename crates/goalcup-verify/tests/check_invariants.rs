@@ -217,6 +217,24 @@ fn m_gap_reason_8(name: &str) -> PathBuf {
     e.seal()
 }
 
+fn m_event_not_json(name: &str) -> PathBuf {
+    mutate(&clean(name), None, |r| {
+        let i = find(r, |x| matches!(x, Record::Event { .. }));
+        if let Record::Event { json, .. } = &mut r[i] {
+            *json = b"{not json".to_vec();
+        }
+    })
+}
+
+fn m_end_tail_not_json(name: &str) -> PathBuf {
+    mutate(&clean(name), None, |r| {
+        let i = find(r, |x| matches!(x, Record::End { .. }));
+        if let Record::End { tail, .. } = &mut r[i] {
+            *tail = b"{not json".to_vec();
+        }
+    })
+}
+
 type Build = fn(&str) -> PathBuf;
 
 /// PRD-17 VR3: every mutation fails its own check with exit 2, never 3. (check id, builder).
@@ -243,7 +261,30 @@ const FAILS: &[(&str, Build)] = &[
     ("counts_match_seal", m_seal_totals_key_missing),
     ("torn_tail", m_torn_tail),
     ("native_path_gen", m_native_path_gen_twice),
+    ("record_json", m_event_not_json),
+    ("record_json", m_end_tail_not_json),
 ];
+
+/// What the recorder writes for no tail (empty bytes) or a `Value::Null` one (`null`) is JSON.
+#[test]
+fn a_null_tail_is_fine() {
+    let d = mutate(&clean("null-tail"), None, |r| {
+        let i = find(
+            r,
+            |x| matches!(x, Record::End { tail, .. } if tail.is_empty()),
+        );
+        if let Record::End { tail, .. } = &mut r[i] {
+            *tail = b"null".to_vec();
+        }
+        assert!(
+            r.iter()
+                .any(|x| matches!(x, Record::End { tail, .. } if tail.is_empty()))
+        );
+    });
+    let (code, v) = check(&d, &[]);
+    assert_eq!(result(&v, "record_json"), "pass");
+    assert_eq!(code, 0, "{:?}", ids_with(&v, "fail"));
+}
 
 #[test]
 fn vr3_every_mutation_fails_its_check_with_exit_2() {

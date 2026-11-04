@@ -65,7 +65,13 @@ impl Check {
 /// The integrity checks, in report order. The first 14 are invariants 1 to 14.
 pub const IDS: &str = "inv1 inv2 inv3 inv4 inv5 inv6 inv7 inv8 inv9 streams_closed \
     seen_matches_written gap_has_end recorder_alive inv14 torn_tail native_path_gen \
-    counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown wall_sane";
+    counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown wall_sane \
+    record_json";
+
+/// Whether a record's JSON body is empty (what the recorder writes for no value) or parses.
+fn json_ok(b: &[u8]) -> bool {
+    b.is_empty() || serde_json::from_slice::<Value>(b).is_ok()
+}
 
 /// Whether a GAP covers a stretch of time: it is not run 1's shape. A GAP in the recorder's own
 /// clock is judged on record time, one carrying `boot_id` (another clock) on wall time. Covers,
@@ -403,6 +409,14 @@ impl Pass {
             }
         );
         let is_link = matches!(it.rec, Record::Link { .. });
+        if let Record::Open { meta: j, .. }
+        | Record::Gap { tail: j, .. }
+        | Record::End { tail: j, .. }
+        | Record::Event { json: j, .. } = &it.rec
+            && !json_ok(j)
+        {
+            self.fail("record_json", "a record's JSON does not parse", at);
+        }
         let ev = match &it.rec {
             Record::Event { json, .. } => {
                 serde_json::from_slice::<Map<String, Value>>(json).unwrap_or_default()
