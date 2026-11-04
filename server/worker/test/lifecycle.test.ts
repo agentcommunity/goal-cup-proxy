@@ -519,53 +519,13 @@ describe("facts about the machine and the connection", () => {
   });
 });
 
-describe("--dev runs and the minimum goalcup version (D70)", () => {
-  const DEV_COMPETES = "A --dev run never enters the competition. Start without --dev.";
-
-  lifecycle("a dev competition open is refused, for everyone", async (r) => {
-    for (const member of ["alice", "root"]) {
-      const res = await r.open(await r.cred(member), `s-${member}`, { dev: true });
-      assertError(res, 403, "forbidden");
-      assert.equal(res.body.message, DEV_COMPETES);
-    }
-  }, WINDOW);
-
-  lifecycle("a dev practice open from any member opens", async (r) => {
-    for (const member of ["alice", "bob", "root"]) {
-      const res = await r.open(await r.cred(member, "practice"), `s-${member}`, { dev: true });
-      assert.equal(res.status, 201, JSON.stringify(res.body));
-    }
-  }, WINDOW);
-
-  lifecycle("a dev continue of a competition run is refused", async (r) => {
-    const root = await r.cred("root");
-    const a = await r.start(root, "s1");
-    const res = await r.cont(root, a.run_id, a.entry_id, "s-two", { dev: true });
-    assertError(res, 403, "forbidden");
-    assert.equal(res.body.message, DEV_COMPETES);
-  }, WINDOW);
-
-  lifecycle("a dev continue of a practice run is open to any member, and of an unknown run is 404", async (r) => {
-    const alice = await r.cred("alice", "practice");
-    const a = await r.start(alice, "s1");
-    assert.equal((await r.cont(alice, a.run_id, a.entry_id, "s-two", { dev: true })).status, 201);
-    assertError(await r.cont(alice, "r0000000000000000", a.entry_id, "s-x", { dev: true }), 404, "not_found");
-  }, WINDOW);
-
-  lifecycle("an open or continue without dev is unchanged", async (r) => {
+describe("the minimum goalcup version (D70)", () => {
+  lifecycle("a body that still says dev is ignored", async (r) => {
     const alice = await r.cred("alice");
-    const a = await r.start(alice, "s1");
-    assert.equal((await r.open(await r.cred("bob", "practice"), "s2", { dev: false })).status, 201);
-    assert.equal((await r.cont(alice, a.run_id, a.entry_id, "x", { dev: false })).status, 201);
-  }, WINDOW);
-
-  lifecycle("dev must be a boolean", async (r) => {
-    for (const bad of ["yes", 1, 0, "true", null, [], {}]) {
-      assertError(await r.open(await r.cred("root", "practice"), "s1", { dev: bad }), 400, "malformed");
-    }
-    const alice = await r.cred("alice");
-    const a = await r.start(alice, "s2");
-    assertError(await r.cont(alice, a.run_id, a.entry_id, "s-two", { dev: "yes" }), 400, "malformed");
+    assert.equal((await r.open(alice, "s1", { dev: true })).status, 201);
+    const bob = await r.cred("bob");
+    const b = await r.start(bob, "s2");
+    assert.equal((await r.cont(bob, b.run_id, b.entry_id, "s3", { dev: "yes" })).status, 201);
   }, WINDOW);
 
   lifecycle("an old goalcup cannot open a competition run once a minimum is set", async (r) => {
@@ -576,14 +536,6 @@ describe("--dev runs and the minimum goalcup version (D70)", () => {
     assert.equal((await r.open(alice, "s1", { proxy_version: "0.7.0" })).status, 201);
     assert.equal((await r.open(bob, "s2", { proxy_version: "1.0.0" })).status, 201);
     assert.equal((await r.open(carol, "s3", { proxy_version: "0.10.0" })).status, 201); // numbers, not text
-  }, WINDOW);
-
-  lifecycle("the version answer comes before the dev answers", async (r) => {
-    const alice = await r.cred("alice");
-    r.env.MIN_COMPETITION_VERSION = "0.7.0";
-    const res = await r.open(alice, "s1", { proxy_version: "0.6.1", dev: true });
-    assertError(res, 403, "forbidden");
-    assert.notEqual(res.body.message, DEV_COMPETES);
   }, WINDOW);
 
   lifecycle("a version with a suffix compares by its numbers", async (r) => {
