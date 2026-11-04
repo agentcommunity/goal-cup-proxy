@@ -328,7 +328,8 @@ fn with_home_swapped_a_login_shell_finds_goalcup() {
 fn trusted(d: &Path, config: Option<&str>) -> (LaunchPlan, String) {
     let file = d.join("trust-cli.toml");
     let toml = "id = \"trust-cli\"\nname = \"T\"\nprogram = \"true\"\n\
-        host_hints = [{ file = \"{home}/config.yaml\", key = \"model.base_url\" }]\n[ca_settings]\n\
+        host_hints = [{ file = \"{home}/config.yaml\", key = \"model.base_url\" }, \
+        { file = \"{home}/config.yaml\", key = \"providers.*.base_url\" }]\n[ca_settings]\n\
         file = \"{home}/config.yaml\"\n\
         entries = [\"custom_providers.*.base_url\", \"providers.*.base_url\"]\n\
         uses = [\"model.base_url\"]\nadd = \"providers.*.base_url\"\nkey = \"ssl_ca_cert\"\n\
@@ -396,7 +397,8 @@ fn a_custom_endpoint_entry_gets_the_bundle_and_is_recorded() {
 fn a_custom_base_url_without_an_entry_gets_one() {
     let dir = tempfile::tempdir().unwrap();
     let config = "model:\n  provider: custom\n  base_url: https://llm.example.net/v1\n\
-        providers:\n  mine:\n    base_url: https://other.example.org/v1\n    ssl_ca_cert: /mine.pem\n";
+        providers:\n  mine:\n    base_url: https://other.example.org/v1\n    ssl_ca_cert: /mine.pem\n  \
+        blank:\n    base_url: https://other.example.org/v2\n    ssl_ca_cert: \"\"\n";
     let (_, text) = trusted(dir.path(), Some(config));
     let entry = format!(
         "  goalcup-trust-llm-example-net-v1:\n    base_url: \"https://llm.example.net/v1\"\n{CA}"
@@ -407,6 +409,13 @@ fn a_custom_base_url_without_an_entry_gets_one() {
         text.contains(
             "  mine:\n    base_url: https://other.example.org/v1\n    ssl_ca_cert: /mine.pem\n"
         ),
+        "{text}"
+    );
+    // An empty CA is not the participant's own: it gets the bundle.
+    assert!(
+        text.contains(&format!(
+            "  blank:\n    base_url: https://other.example.org/v2\n{CA}"
+        )),
         "{text}"
     );
     assert!(!text.contains("deepseek"), "no fallback: {text}");
@@ -420,4 +429,16 @@ fn trust_rows_skip_a_flow_map_and_log() {
     assert!(plan.log.iter().any(skipped), "{:?}", plan.log);
     assert_eq!(text, "providers: {}\n");
     assert!(plan.refusal.is_none());
+}
+
+#[test]
+fn a_host_left_undecrypted_keeps_the_os_trust() {
+    let dir = tempfile::tempdir().unwrap();
+    // A custom_providers entry no host hint names: goalcup does not decrypt it, so writes nothing.
+    let config = "custom_providers:\n- name: lan\n  base_url: https://lan.example.net/v1\n";
+    let (_, text) = trusted(dir.path(), Some(config));
+    assert!(
+        !text.contains("lan.example.net/v1\n  ssl_ca_cert"),
+        "{text}"
+    );
 }

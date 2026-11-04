@@ -156,13 +156,15 @@ fn read(path: &Path) -> Option<Value> {
 /// The rows giving each address the harness uses the run bundle (`ca_settings`): the CA key on
 /// each participant entry holding an address, unless it holds its own CA, and a
 /// `goalcup-trust-*` entry for every other address used; when the file names none, one for each
-/// `fallback` address. An address is an `https` URL whose host may be decrypted, never local.
-pub fn trust_rows(t: &CaSettings, home: &Path) -> Vec<SettingRow> {
+/// `fallback` address. An address is an `https` URL whose host `hosts` decrypts, so a host left
+/// to the OS trust store (local, private, never) keeps it.
+pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<SettingRow> {
     let doc = read(Path::new(&launch::fill(&t.file, home, Path::new("")))).unwrap_or_default();
     let address = |v: &Value| {
         let url = v.as_str()?.trim();
         let (https, host, _) = authority(url)?;
-        (https && hosts::check(host, Source::Config).is_ok()).then(|| url.to_string())
+        let decrypted = matches!(hosts.decide(host), Decision::Listed { .. });
+        (https && hosts::check(host, Source::Config).is_ok() && decrypted).then(|| url.to_string())
     };
     let same = |url: &str| url.trim_end_matches('/').to_ascii_lowercase();
     let row = |key: String, value: &str| SettingRow {
@@ -182,9 +184,8 @@ pub fn trust_rows(t: &CaSettings, home: &Path) -> Vec<SettingRow> {
             };
             have.push(same(&url));
             let ca = format!("{}.{}", path.rsplit_once('.').unwrap().0, t.key);
-            let own = at(&doc, &ca)
-                .into_iter()
-                .any(|v| v.as_str() != Some(&t.value));
+            let mut own = at(&doc, &ca).into_iter().filter_map(Value::as_str);
+            let own = own.any(|v| !v.trim().is_empty() && v != t.value);
             rows.extend((!own).then(|| row(ca, &t.value)));
         }
     }
@@ -195,23 +196,26 @@ pub fn trust_rows(t: &CaSettings, home: &Path) -> Vec<SettingRow> {
         .filter_map(address)
         .collect();
     if have.is_empty() && used.is_empty() {
-        used = t.fallback.clone();
+        used = t
+            .fallback
+            .iter()
+            .filter_map(|u| address(&Value::from(&**u)))
+            .collect();
     }
     for url in used {
         if have.contains(&same(&url)) {
             continue;
         }
         have.push(same(&url));
-        let name = url
+        let rest = url
             .split_once("://")
             .map_or(&*url, |r| r.1)
             .to_ascii_lowercase();
-        let name: Vec<&str> = name.split(|c: char| !c.is_ascii_alphanumeric()).collect();
-        let name = name
-            .into_iter()
+        let name: Vec<&str> = rest
+            .split(|c: char| !c.is_ascii_alphanumeric())
             .filter(|p| !p.is_empty())
-            .collect::<Vec<_>>()
-            .join("-");
+            .collect();
+        let name = name.join("-");
         let key = t.add.replace('*', &format!("goalcup-trust-{name}"));
         let ca = format!("{}.{}", key.rsplit_once('.').unwrap().0, t.key);
         rows.extend([row(key, &url), row(ca, &t.value)]);

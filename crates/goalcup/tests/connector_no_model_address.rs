@@ -66,3 +66,30 @@ fn a_trust_table_for_listed_hosts_loads() {
         ["https://api.deepseek.com/v1"]
     );
 }
+
+#[test]
+fn a_trust_pattern_without_an_address_key_is_refused() {
+    for (entries, add) in [
+        ("p.*.base_url", "*"),
+        ("*", "p.*.base_url"),
+        ("p.*", "p.*.base_url"),
+    ] {
+        let body = format!(
+            "[ca_settings]\nfile = \"{{home}}/c.yaml\"\nentries = [\"{entries}\"]\nuses = []\n\
+             add = \"{add}\"\nkey = \"ssl_ca_cert\"\nvalue = \"x\"\nfallback = []"
+        );
+        let err = load_text(&body).err();
+        assert!(
+            matches!(err, Some(ConnectorError::Invalid { .. })),
+            "{body}: {err:?}"
+        );
+    }
+}
+
+#[test]
+fn the_fallback_is_checked_against_the_built_in_list_not_a_hosts_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let hosts = dir.path().join("hosts.toml");
+    std::fs::write(&hosts, "shared = [\"api.deepseek.com\"]\n").unwrap();
+    connector::load("hermes-cli", Some(&hosts)).unwrap();
+}

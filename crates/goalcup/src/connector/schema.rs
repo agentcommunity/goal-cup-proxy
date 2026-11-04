@@ -354,11 +354,15 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
         if t.value.contains("://") {
             return Err(address("ca_settings.value".into()));
         }
-        let one_star = |k: &String| k.split('.').filter(|p| *p == "*").count() == 1;
-        if !t.entries.iter().chain([&t.add]).all(one_star) || t.key.contains(['.', '*']) {
+        // `a.*.url`: one `*` part for the entry, then the address key.
+        let shape = |k: &String| {
+            let parts: Vec<&str> = k.split('.').collect();
+            parts.iter().filter(|p| **p == "*").count() == 1 && parts.last() != Some(&"*")
+        };
+        if !t.entries.iter().chain([&t.add]).all(shape) || t.key.contains(['.', '*']) {
             return Err(invalid(
                 "ca_settings".into(),
-                "entries and add hold one `*` part each; key is one plain part",
+                "entries and add hold one `*` part each, not the last; key is one plain part",
             ));
         }
         files.push(("ca_settings.file".into(), &t.file, 1));

@@ -94,22 +94,24 @@ fn hermes_trust_gives_every_address_the_run_bundle_and_records_it() {
 fn hermes_trust_on_a_fresh_home_names_every_route_once() {
     let d = tempfile::tempdir().unwrap();
     let c = connector::load("hermes-cli", None).unwrap();
+    let env = connector::Env {
+        vars: [("PATH".to_string(), "/nowhere".to_string())].into(),
+        workspace: d.path().join("workspace"),
+        resume: false,
+        run_start: std::time::SystemTime::now(),
+        goalcup_home: d.path().join("goalcup"),
+        server_host: "ingest.example.org".into(),
+    };
     let home = d.path().join("home");
-    let rows = connector::trust_rows(c.ca_settings.as_ref().unwrap(), &home);
-    let urls: Vec<&str> = rows
-        .iter()
-        .filter(|r| r.key.ends_with(".base_url"))
-        .map(|r| r.value.as_str())
+    drop(connector::plan(&c, &env, &home));
+    let text = fs::read_to_string(home.join("config.yaml")).unwrap();
+    let urls: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("    base_url: \""))
+        .map(|l| l.trim_end_matches('"'))
         .collect();
-    assert_eq!(urls, ROUTES);
-    for r in rows.iter().filter(|r| r.key.ends_with(".base_url")) {
-        assert!(r.key.starts_with("providers.goalcup-trust-"), "{}", r.key);
-        let twin = r.key.replace(".base_url", ".ssl_ca_cert");
-        assert!(
-            rows.iter()
-                .any(|t| t.key == twin && t.value == "${env:SSL_CERT_FILE}"),
-            "{twin}"
-        );
-    }
-    assert_eq!(rows.len(), 18);
+    assert_eq!(urls, ROUTES, "{text}");
+    assert_eq!(text.matches("  goalcup-trust-").count(), 9, "{text}");
+    let ca = "    ssl_ca_cert: \"${env:SSL_CERT_FILE}\"\n";
+    assert_eq!(text.matches(ca).count(), 9, "{text}");
 }
