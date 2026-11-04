@@ -6,7 +6,7 @@ description: Use when adding or supporting a CLI coding-agent harness in Goal Cu
 # Adding a capture harness
 
 Any harness can be added, not only the ones that ship. The test pad is the one way to add it:
-you write two small data files, run one command, read one table. No Rust, no test, no decoder.
+you write two small data files, run one command, read one table. No Rust beyond one line, no test, no decoder.
 
 Rules that never bend:
 
@@ -29,8 +29,8 @@ Rules that never bend:
    [docs/CONNECTOR-SCHEMA.md](../../docs/CONNECTOR-SCHEMA.md). Copy a neighbour such as
    `connectors/hermes-cli.toml`. Add one line, `entry!("<id>")`, to the list in
    `crates/goalcup/src/connector/builtin.rs` in the same PR; `tests/connector_builtin.rs` fails
-   without it. A version with a known problem
-   gets a `[[version_notes]]` row (`versions`, `say`): said at start, recorded, never a refusal
+   without it. A version with a known problem gets a `[[version_notes]]` row (`versions`, `say`):
+   said at start, recorded, never a refusal
    ([Harness versions](../../docs/CONNECTOR-SCHEMA.md#harness-versions)).
 2. **Write `scripts/pad/harnesses/<id>.toml`**, from
    [templates/pad-harness.toml](templates/pad-harness.toml): the pinned version and how to
