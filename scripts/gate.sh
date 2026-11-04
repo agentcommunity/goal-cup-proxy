@@ -80,6 +80,7 @@ step cargo clippy --locked --workspace --all-targets -- -D warnings
 step cargo nextest run --locked --workspace
 step cargo test --locked --workspace --doc # nextest does not run doctests
 step npm --prefix server/worker test
+if command -v initdb >/dev/null 2>&1 || ls /usr/lib/postgresql/*/bin/initdb >/dev/null 2>&1; then step sh server/worker/scripts/check-sql.sh; else echo "gate.sh: SQL scenarios skipped (no initdb)"; fi
 # A named list, not `discover -s scripts`: old script tests name the old crates. A new script test
 # joins only if it guards one of the seven points, the format, masking or the never-stop rules (B10).
 step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py

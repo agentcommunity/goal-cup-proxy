@@ -3,14 +3,14 @@
 
 import type { Auth } from "./auth.ts";
 import type { Ctx } from "./context.ts";
-import { type EntryRow, type MachineFacts, type RecordingState, type RunMode, type Counts, type HeartbeatVitals, type RunRow, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
+import { type EntryRow, type MachineFacts, type RecordingState, type Counts, type HeartbeatVitals, type RunRow, boundCredentialExpiry, endsAt, isPastClose, isPastEnd, isReplaced, statusAt } from "./db.ts";
 import { ApiError, closed, conflict, json, malformed, notFound, tooLarge } from "./errors.ts";
 import { githubHeaders } from "./github.ts";
+import { notesField, pickNotes } from "./notes.ts";
 import {
   REPO_URL,
   addSeconds,
   asObject,
-  boolField,
   formatTime,
   hexField,
   isEntryId,
@@ -93,10 +93,9 @@ function answerStop(ctx: Ctx, run: RunRow) {
   return { stop, deadline_at: run.deadline_at, seconds_left: secondsLeft(run, now), reason };
 }
 
-// ---- D70: the minimum goalcup version, and --dev ------------------------------------------
+// ---- D70: the minimum goalcup version ------------------------------------------------------
 
 export const INSTALL_LINE = "curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh";
-const DEV_COMPETES = "A --dev run never enters the competition. Start without --dev.";
 
 /** `a` sorts before `b`, comparing major, then minor, then patch as numbers. */
 function isBelow(a: [number, number, number], b: [number, number, number]): boolean {
@@ -120,11 +119,6 @@ export function requireMinimumVersion(ctx: Ctx, sent: string): void {
   const have = versionTriple(sent);
   const older = have === null || isBelow(have, min.v);
   if (older) throw new ApiError(403, "forbidden", `This goalcup (${sent}) is older than this server accepts (${min.v.join(".")}). Update it: ${INSTALL_LINE}`);
-}
-
-/** `dev` on a run in this mode: 403 for a competition run. Practice and test runs count for nothing, so anyone may use it there. */
-function requireDevAllowed(mode: RunMode): void {
-  if (mode === "competition") throw new ApiError(403, "forbidden", DEV_COMPETES);
 }
 
 // ---- POST /v1/runs ------------------------------------------------------------------------
@@ -189,19 +183,18 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   const fields = connectorFields(b);
   const repo_url = repoField(b, auth.mode);
   const machine = machineField(b);
-  const dev = boolField(b, "dev", false);
+  const notes = notesFor(ctx, fields, machine?.os);
 
   // A credential opens one run. Asking again with the same session_id is a lost reply: the same run.
   if (auth.run_id !== null) {
     // (The session of the open call is segment 0's, whatever `continue` has added since.)
     let opened = await ctx.db.getRun(auth.member, auth.run_id, null);
     if (opened !== null && opened.entry?.segment !== 0) opened = await ctx.db.getRun(auth.member, auth.run_id, opened.run.first_entry_id);
-    if (opened?.entry != null && opened.entry.session_id === fields.session_id) return json(200, runView(ctx, opened.run, opened.entry));
+    if (opened?.entry != null && opened.entry.session_id === fields.session_id) return json(200, runView(ctx, opened.run, opened.entry, notes));
     throw conflict(OPENED_ALREADY);
   }
 
   requireMinimumVersion(ctx, fields.tracer_version);
-  if (dev) requireDevAllowed(auth.mode);
 
   // A practice run judges nothing, so its repository is never asked about: 0.7 practice runs all
   // name one shared repository, and one commit there must not stop every practice start.
@@ -234,16 +227,21 @@ export async function openRun(ctx: Ctx, auth: Auth, request: Request): Promise<R
   });
   if (result.kind === "conflict") throw conflict(OPENED_ALREADY);
   if (result.kind === "forbidden") throw new ApiError(403, "forbidden", result.message);
-  return json(result.kind === "created" ? 201 : 200, runView(ctx, result.run, result.entry));
+  return json(result.kind === "created" ? 201 : 200, runView(ctx, result.run, result.entry, notes));
 }
 
-const runView = (ctx: Ctx, run: RunRow, { entry_id }: EntryRow) => ({
+const runView = (ctx: Ctx, run: RunRow, { entry_id }: EntryRow, notes: string[]) => ({
   run_id: run.run_id,
   entry_id,
   official_start: run.official_start,
   deadline_at: run.deadline_at,
   seconds_left: secondsLeft(run, ctx.now()),
+  ...notesField(notes),
 });
+
+/** The server's notes for this connector, harness version and OS (src/notes.ts). An OS that is not a string is none. */
+const notesFor = (ctx: Ctx, fields: { connector_id: string; harness_version: string }, os: unknown): string[] =>
+  pickNotes(ctx.cfg.advisories, { connector: fields.connector_id, harnessVersion: fields.harness_version, os: typeof os === "string" ? os : "" });
 
 // ---- POST /v1/runs/{id}/continue ----------------------------------------------------------
 
@@ -252,12 +250,6 @@ export async function continueRun(ctx: Ctx, auth: Auth, runId: string, request: 
   const previous_entry_id = b.previous_entry_id;
   if (!isEntryId(previous_entry_id)) throw malformed("previous_entry_id must be e and 16 lowercase hex digits.");
   const fields = connectorFields(b);
-  if (boolField(b, "dev", false)) {
-    // The run's own mode, not the credential's: a continued run keeps the rules it began under.
-    const found = await ctx.db.getRun(auth.member, runId, null);
-    if (found === null) throw notFound("No such run for this credential.");
-    requireDevAllowed(found.run.mode);
-  }
   const result = await ctx.db.continueRun({
     member_id: auth.member,
     run_id: runId,
@@ -276,6 +268,7 @@ export async function continueRun(ctx: Ctx, auth: Auth, runId: string, request: 
         official_start: result.run.official_start,
         deadline_at: result.run.deadline_at,
         seconds_left: secondsLeft(result.run, ctx.now()),
+        ...notesField(notesFor(ctx, fields, b.os)),
       });
     case "conflict":
       throw conflict("previous_entry_id is not the latest entry of this run; read the position.");

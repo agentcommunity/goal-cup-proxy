@@ -129,7 +129,8 @@ and on each usage bucket that exists. It touches only the four bucket and prefix
 before the database changes, so a failed listing changes nothing. A usage bucket that is missing or not open
 to the token (`404` or `403`) is skipped with one line; a usage bucket skipped under `--older-than` keeps its
 test objects until a run without `--older-than` with a token that reaches it. If the script reports objects
-not deleted, run it again without `--older-than`. Details:
+not deleted, it lists them in `delete-test-runs.failed`; retry only those with
+`sh scripts/delete-test-runs.sh --objects delete-test-runs.failed --yes`. Details:
 [Clean up test runs](../server/worker/README.md#clean-up-test-runs).
 
 ## Fetch and check a run

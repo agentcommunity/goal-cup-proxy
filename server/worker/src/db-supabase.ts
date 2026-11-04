@@ -85,7 +85,12 @@ const TICK_SHAPE: Record<string, Check> = {
   flagged_at: nullable(isTime),
   flag_reason: nullable(oneOf("gaps", "failed")),
   final_commit: nullable((v) => typeof v === "string" && /^([0-9a-f]{40}|none)$/.test(v)),
-  disk_notice_at: nullable(isTime),
+};
+const CRED_SHAPE: Record<string, Check> = {
+  member_id: text,
+  run_id: nullable(RUN_SHAPE.run_id!),
+  mode: oneOf("competition", "practice", "test"),
+  expires_at: isTime,
 };
 const ENTRY_SHAPE: Record<string, Check> = {
   entry_id: isEntryId,
@@ -207,7 +212,7 @@ export class SupabaseDb implements Db {
 
   async credential(credentialSha256: string, now: string): Promise<Credential | null> {
     const v = await this.#rpc("upload_credential", { p_credential_hash: credentialSha256, p_now: now });
-    return (v as Credential | null) ?? null;
+    return v == null ? null : this.#row<Credential>("upload_credential", v, "credential", CRED_SHAPE);
   }
 
   async createDevice(a: CreateDeviceArgs): Promise<void> {
@@ -359,6 +364,13 @@ export class SupabaseDb implements Db {
     const v = await this.#rpc("upload_queue_notices", { p_notices: notices });
     if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0 && v <= notices.length) return v;
     console.error(`supabase upload_queue_notices: unexpected result ${JSON.stringify(v)?.slice(0, 200)}`);
+    throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+  }
+
+  async purgeDevices(now: string): Promise<number> {
+    const v = await this.#rpc("upload_purge_device_requests", { p_now: now });
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) return v;
+    console.error(`supabase upload_purge_device_requests: unexpected result ${JSON.stringify(v)?.slice(0, 200)}`);
     throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
   }
 

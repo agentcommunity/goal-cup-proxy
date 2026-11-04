@@ -3,8 +3,10 @@
 import { CLOSE_AFTER_SECONDS, type Db } from "./db.ts";
 import { LocalDb } from "./db-local.ts";
 import { SupabaseDb } from "./db-supabase.ts";
+import advisoriesFile from "./advisories.json" with { type: "json" };
 import type { Env } from "./env.ts";
 import { ApiError } from "./errors.ts";
+import { type Advisory, validAdvisories } from "./notes.ts";
 import { isTime, versionTriple } from "./util.ts";
 
 export interface Config {
@@ -17,6 +19,8 @@ export interface Config {
   runSeconds: number;
   /** The same for a practice run: PRACTICE_RUN_MINUTES * 60. */
   practiceRunSeconds: number;
+  /** The compressed bytes a practice run may store: PRACTICE_MAX_BYTES (default 1 GiB). Other modes have no ceiling. */
+  practiceMaxBytes: number;
   /** A run is closed this long after it ends. 24 h, or CLOSE_AFTER_SECONDS (local backend only). */
   closeAfterSeconds: number;
   /** The competition start window (local backend only); undefined: the database's, or always open. */
@@ -24,6 +28,8 @@ export interface Config {
   githubCheck: boolean;
   /** MIN_COMPETITION_VERSION. A malformed value is kept, not thrown: only competition starts refuse on it. */
   minCompetitionVersion: MinVersion;
+  /** The rows the open and continue answers take their notes from: advisories.json, or ADVISORIES_JSON (local backend only). */
+  advisories: readonly Advisory[];
 }
 
 export type MinVersion = { kind: "none" } | { kind: "set"; v: [number, number, number] } | { kind: "malformed"; raw: string };
@@ -56,7 +62,7 @@ function positiveNumber(name: string, raw: string | undefined, fallback: number,
  * lifecycle in seconds. They are honoured only with DB_BACKEND=local; anywhere else their
  * presence is a mistake worth stopping for, not a value to ignore.
  */
-function testOnly(env: Env, name: "RUN_SECONDS" | "CLOSE_AFTER_SECONDS" | "START_WINDOW_OPENS" | "START_WINDOW_CLOSES"): string | undefined {
+function testOnly(env: Env, name: "RUN_SECONDS" | "CLOSE_AFTER_SECONDS" | "START_WINDOW_OPENS" | "START_WINDOW_CLOSES" | "ADVISORIES_JSON"): string | undefined {
   const raw = env[name];
   if (raw === undefined || raw === "") return undefined;
   if (env.DB_BACKEND !== "local") throw misconfigured(`${name} is for DB_BACKEND=local (tests) only.`);
@@ -73,6 +79,23 @@ function testOnlyTime(env: Env, name: "START_WINDOW_OPENS" | "START_WINDOW_CLOSE
   if (raw === undefined) return null;
   if (!isTime(raw)) throw misconfigured(`${name} must be an RFC 3339 time like 2026-11-06T09:00:00Z.`);
   return raw;
+}
+
+/** advisories.json; a file that fails its shape check (test/notes.test.ts pins it) gives no notes rather than odd ones. */
+const ADVISORIES: readonly Advisory[] = validAdvisories(advisoriesFile) === null ? (advisoriesFile as Advisory[]) : [];
+
+function advisories(env: Env): readonly Advisory[] {
+  const raw = testOnly(env, "ADVISORIES_JSON");
+  if (raw === undefined) return ADVISORIES;
+  let rows: unknown;
+  try {
+    rows = JSON.parse(raw);
+  } catch {
+    throw misconfigured("ADVISORIES_JSON is not JSON.");
+  }
+  const problem = validAdvisories(rows);
+  if (problem !== null) throw misconfigured(`ADVISORIES_JSON: ${problem}.`);
+  return rows as Advisory[];
 }
 
 /**
@@ -107,10 +130,12 @@ export function readConfig(env: Env): Config {
     testEventId: env.TEST_EVENT_ID === "" ? undefined : env.TEST_EVENT_ID,
     runSeconds: testOnlySeconds(env, "RUN_SECONDS") ?? positiveNumber("RUN_HOURS", env.RUN_HOURS, 168, "hours", 24 * 365) * 3600,
     practiceRunSeconds: positiveNumber("PRACTICE_RUN_MINUTES", env.PRACTICE_RUN_MINUTES, 10, "minutes", 24 * 60) * 60,
+    practiceMaxBytes: positiveNumber("PRACTICE_MAX_BYTES", env.PRACTICE_MAX_BYTES, 1073741824, "bytes", 2 ** 40),
     closeAfterSeconds: testOnlySeconds(env, "CLOSE_AFTER_SECONDS") ?? CLOSE_AFTER_SECONDS,
     startWindow: opens === null && closes === null ? undefined : { opens, closes },
     githubCheck: env.GITHUB_CHECK === "on",
     minCompetitionVersion: minVersion(env.MIN_COMPETITION_VERSION),
+    advisories: advisories(env),
   };
 }
 

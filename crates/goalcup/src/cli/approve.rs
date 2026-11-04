@@ -141,6 +141,7 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
         return Err(stopped(text::WHY_INTERRUPTED));
     }
     let open: Open = opened.map_err(|e| server_stop(&e, text::open_refused))?;
+    open.notes.print(out);
     let deadline = Mono::now()
         .ns()
         .saturating_add(open.seconds_left.saturating_mul(1_000_000_000));
@@ -201,6 +202,8 @@ struct Open {
     entry_id: String,
     deadline_at: String,
     seconds_left: u64,
+    #[serde(default)]
+    notes: super::notes::Notes,
 }
 
 fn server_record(

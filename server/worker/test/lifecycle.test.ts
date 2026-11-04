@@ -286,6 +286,44 @@ describe("continue and segments", () => {
     assertError(dead, 410, "closed");
   });
 
+  lifecycle(
+    "open and continue carry notes only when a row matches",
+    async (r) => {
+      const alice = await r.cred("alice");
+      // No row matches codex-cli 0.153.0 on linux: the open answer is the same as before notes.
+      const plain = await r.open(alice, "s1", { machine: { os: "linux" } });
+      assert.equal(plain.status, 201, JSON.stringify(plain.body));
+      assert.equal("notes" in plain.body, false);
+      const a = plain.body as Opened;
+      const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
+      assert.equal(c.status, 201, JSON.stringify(c.body));
+      assert.deepEqual(c.body.notes, ["Use the newer build."]);
+      assert.deepEqual(Object.keys(c.body), ["entry_id", "segment", "official_start", "deadline_at", "seconds_left", "notes"]);
+      // Continue's `os` picks the os row; one that is not a string is no os, never a refusal.
+      const c2 = await r.cont(alice, a.run_id, c.body.entry_id, "s-three", { os: "macos" });
+      assert.deepEqual(c2.body.notes, ["Use the newer build.", "On macOS, update."]);
+      const c3 = await r.cont(alice, a.run_id, c2.body.entry_id, "s-four", { os: 5, harness_version: "8" });
+      assert.equal(c3.status, 201, JSON.stringify(c3.body));
+      assert.equal("notes" in c3.body, false);
+
+      // The open's os is machine.os; a lost-reply repeat of the open carries the same notes.
+      const bob = await r.cred("bob");
+      const facts = { connector_id: "other-cli", harness_version: "Other v9.1", machine: { os: "macos" } };
+      const opened = await r.open(bob, "b1", facts);
+      assert.equal(opened.status, 201, JSON.stringify(opened.body));
+      assert.deepEqual(opened.body.notes, ["Use the newer build.", "On macOS, update."]);
+      const again = await r.open(bob, "b1", facts);
+      assert.equal(again.status, 200, JSON.stringify(again.body));
+      assert.deepEqual(again.body, opened.body);
+    },
+    {
+      ADVISORIES_JSON: JSON.stringify([
+        { connector: "other-cli", version: "9", os: "*", note: "Use the newer build." },
+        { connector: "*", version: "*", os: "macos", note: "On macOS, update." },
+      ]),
+    },
+  );
+
   lifecycle("a run whose current entry is sealed reads as sealed once the run is over", async (r) => {
     const alice = await r.cred("alice");
     const a = await r.start(alice, "s1");
@@ -403,7 +441,7 @@ describe("what a seal needs", () => {
   }, {});
 });
 
-describe("no per-run size limit (ledger R5)", () => {
+describe("per-run size: no limit, but a ceiling on practice runs (ledger R5)", () => {
   lifecycle("a run that already holds more than the old 64 GiB limit still gets its next chunk stored", async (r) => {
     const alice = await r.cred("alice");
     const a = await r.start(alice, "s1");
@@ -422,6 +460,23 @@ describe("no per-run size limit (ledger R5)", () => {
     const run = (await r.db().getRun("alice", a.run_id, null))!.run;
     assert.equal(run.stored_bytes, 70 * 1024 ** 3 + chunk.body.length);
   }, {});
+
+  lifecycle("a practice run stops taking chunks at its ceiling; a competition run does not", async (r) => {
+    for (const [who, mode, status] of [["pat", "practice", 410], ["cleo", "competition", 200]] as const) {
+      const cred = await r.cred(who, mode);
+      const a = await r.start(cred, `${who}-1`);
+      const head = sha256(`${a.entry_id}:4`);
+      const held = {
+        entry_id: a.entry_id, offset: 0, length: 10, sha256: "1".repeat(64), first_seq: 0, last_seq: 4, prev: GENESIS, head, r2_key: "k",
+        received_at: T0,
+      };
+      assert.equal(await r.db().commitChunk({ member_id: who, run_id: a.run_id, chunk: held, stored_bytes: 1000 }), "committed");
+      const chunk = makeChunk(a.entry_id, 5, 3, head, "x");
+      const put = await r.api.call("PUT", `/v1/runs/${a.run_id}/chunks/10`, { token: cred, body: chunk.body, headers: { ...chunk.headers, "content-length": String(chunk.body.length) } });
+      assert.equal(put.status, status, `${mode}: ${JSON.stringify(put.body)}`);
+      if (status === 410) assert.equal(put.body.error, "closed");
+    }
+  }, { ...WINDOW, PRACTICE_MAX_BYTES: "1000" });
 });
 
 describe("facts about the machine and the connection", () => {
@@ -521,53 +576,13 @@ describe("facts about the machine and the connection", () => {
   });
 });
 
-describe("--dev runs and the minimum goalcup version (D70)", () => {
-  const DEV_COMPETES = "A --dev run never enters the competition. Start without --dev.";
-
-  lifecycle("a dev competition open is refused, for everyone", async (r) => {
-    for (const member of ["alice", "root"]) {
-      const res = await r.open(await r.cred(member), `s-${member}`, { dev: true });
-      assertError(res, 403, "forbidden");
-      assert.equal(res.body.message, DEV_COMPETES);
-    }
-  }, WINDOW);
-
-  lifecycle("a dev practice open from any member opens", async (r) => {
-    for (const member of ["alice", "bob", "root"]) {
-      const res = await r.open(await r.cred(member, "practice"), `s-${member}`, { dev: true });
-      assert.equal(res.status, 201, JSON.stringify(res.body));
-    }
-  }, WINDOW);
-
-  lifecycle("a dev continue of a competition run is refused", async (r) => {
-    const root = await r.cred("root");
-    const a = await r.start(root, "s1");
-    const res = await r.cont(root, a.run_id, a.entry_id, "s-two", { dev: true });
-    assertError(res, 403, "forbidden");
-    assert.equal(res.body.message, DEV_COMPETES);
-  }, WINDOW);
-
-  lifecycle("a dev continue of a practice run is open to any member, and of an unknown run is 404", async (r) => {
-    const alice = await r.cred("alice", "practice");
-    const a = await r.start(alice, "s1");
-    assert.equal((await r.cont(alice, a.run_id, a.entry_id, "s-two", { dev: true })).status, 201);
-    assertError(await r.cont(alice, "r0000000000000000", a.entry_id, "s-x", { dev: true }), 404, "not_found");
-  }, WINDOW);
-
-  lifecycle("an open or continue without dev is unchanged", async (r) => {
+describe("the minimum goalcup version (D70)", () => {
+  lifecycle("a body that still says dev is ignored", async (r) => {
     const alice = await r.cred("alice");
-    const a = await r.start(alice, "s1");
-    assert.equal((await r.open(await r.cred("bob", "practice"), "s2", { dev: false })).status, 201);
-    assert.equal((await r.cont(alice, a.run_id, a.entry_id, "x", { dev: false })).status, 201);
-  }, WINDOW);
-
-  lifecycle("dev must be a boolean", async (r) => {
-    for (const bad of ["yes", 1, 0, "true", null, [], {}]) {
-      assertError(await r.open(await r.cred("root", "practice"), "s1", { dev: bad }), 400, "malformed");
-    }
-    const alice = await r.cred("alice");
-    const a = await r.start(alice, "s2");
-    assertError(await r.cont(alice, a.run_id, a.entry_id, "s-two", { dev: "yes" }), 400, "malformed");
+    assert.equal((await r.open(alice, "s1", { dev: true })).status, 201);
+    const bob = await r.cred("bob");
+    const b = await r.start(bob, "s2");
+    assert.equal((await r.cont(bob, b.run_id, b.entry_id, "s3", { dev: "yes" })).status, 201);
   }, WINDOW);
 
   lifecycle("an old goalcup cannot open a competition run once a minimum is set", async (r) => {
@@ -578,14 +593,6 @@ describe("--dev runs and the minimum goalcup version (D70)", () => {
     assert.equal((await r.open(alice, "s1", { proxy_version: "0.7.0" })).status, 201);
     assert.equal((await r.open(bob, "s2", { proxy_version: "1.0.0" })).status, 201);
     assert.equal((await r.open(carol, "s3", { proxy_version: "0.10.0" })).status, 201); // numbers, not text
-  }, WINDOW);
-
-  lifecycle("the version answer comes before the dev answers", async (r) => {
-    const alice = await r.cred("alice");
-    r.env.MIN_COMPETITION_VERSION = "0.7.0";
-    const res = await r.open(alice, "s1", { proxy_version: "0.6.1", dev: true });
-    assertError(res, 403, "forbidden");
-    assert.notEqual(res.body.message, DEV_COMPETES);
   }, WINDOW);
 
   lifecycle("a version with a suffix compares by its numbers", async (r) => {
