@@ -190,6 +190,10 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
         .env("GOALCUP_HOME", fix.gc())
         .env("HOME", fix.t.home())
         .env("XDG_CONFIG_HOME", fix.t.home())
+        .env_remove("https_proxy") // a build box's proxy would refuse every start
+        .env_remove("HTTPS_PROXY")
+        .env_remove("all_proxy")
+        .env_remove("ALL_PROXY")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -362,4 +366,41 @@ fn another_version_gets_no_note() {
         assert!(!shown.contains("loses calls"), "{shown}");
         assert_eq!(recorded, 0);
     }
+}
+
+/// `goalcup start` on a proxy network stops at once with one plain line, before anything is
+/// created; inside a harness goalcup launched (`GOALCUP_TIME_LEFT_FILE`) `HTTPS_PROXY` is
+/// goalcup's own recorder, so that is no refusal.
+#[test]
+fn a_proxy_network_is_refused_before_anything_starts() {
+    use std::process::Command;
+    let fix = Fix::new("{home}/skills", "");
+    let start = |envs: &[(&str, &str)]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup"));
+        cmd.args(["start", "--practice", "--connector"])
+            .arg(&fix.connector)
+            .current_dir(&fix.project)
+            .env("GOALCUP_SERVER", "off")
+            .env("GOALCUP_HOME", fix.gc())
+            .env("HOME", fix.t.home());
+        for var in ["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"] {
+            cmd.env_remove(var);
+        }
+        let out = cmd.envs(envs.iter().copied()).output().unwrap();
+        let all = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        (out.status.code(), all)
+    };
+    let (code, all) = start(&[("https_proxy", "http://u:s3cret@p:3128")]);
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("(https_proxy is set). goalcup does not support proxy networks yet."),
+        "{all}"
+    );
+    assert!(!all.contains("s3cret") && !fix.gc().exists(), "{all}");
+    let (_, inside) = start(&[
+        ("HTTPS_PROXY", "http://127.0.0.1:1"),
+        ("GOALCUP_TIME_LEFT_FILE", "/x"),
+    ]);
+    assert!(!inside.contains("proxy networks"), "{inside}");
 }

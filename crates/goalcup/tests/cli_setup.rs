@@ -69,6 +69,34 @@ fn setup(home: &TempHome, path: &str, args: &[&str]) -> (Output, String) {
     (out, all)
 }
 
+/// `setup` with `envs` set over a clean proxy environment (both cases of the four proxy
+/// variables and `GOALCUP_TIME_LEFT_FILE` removed first).
+fn setup_env(
+    home: &TempHome,
+    path: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> (Output, String) {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup"));
+    home.apply(&mut cmd)
+        .env("GOALCUP_SERVER", "off")
+        .env("PATH", path);
+    for var in [
+        "HTTPS_PROXY",
+        "https_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+        "GOALCUP_TIME_LEFT_FILE",
+    ] {
+        cmd.env_remove(var);
+    }
+    cmd.envs(envs.iter().copied());
+    let out = cmd.arg("setup").args(args).current_dir(home.home());
+    let out = out.stdin(Stdio::null()).output().expect("goalcup runs");
+    let all = format!("{}{}", lossy(&out.stdout), lossy(&out.stderr));
+    (out, all)
+}
+
 /// Like `setup`, but stdin and stdout are a pty holding `typed`; gives the exit code and output.
 fn setup_tty(home: &TempHome, path: &str, args: &[&str], typed: &str) -> (Option<i32>, String) {
     let (mut master, mut slave) = (0, 0);
@@ -301,4 +329,36 @@ fn answering_n_still_writes_update_off_and_leaves_no_prompts() {
     let saved: Value = serde_json::from_slice(&saved).unwrap();
     assert_eq!(saved["no_prompts"], Value::Array(vec![]), "{saved}");
     assert_ne!(saved["update_off"], Value::Array(vec![]), "{saved}");
+}
+
+/// A proxy network is refused in one plain line that names the variable, never its value, and
+/// setup writes nothing. An empty variable is no proxy.
+#[test]
+fn setup_refuses_a_proxy_network() {
+    let _guard = guard();
+    let (home, c) = (TempHome::new(), connector());
+    let fake = Fake::new(&c.program);
+    let args = ["--harness", c.id.as_str(), "--yes"];
+    for var in ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"] {
+        let (out, all) = setup_env(
+            &home,
+            &fake.path(),
+            &args,
+            &[(var, "http://u:s3cret@p:8080")],
+        );
+        assert_eq!(out.status.code(), Some(1), "{all}");
+        assert_eq!(
+            all.trim(),
+            format!(
+                "goalcup: Your network sends traffic through a proxy ({var} is set). goalcup does not \
+                 support proxy networks yet. Unset it or use another network, then run this again."
+            )
+        );
+        assert!(
+            !isolated_home(&home.goalcup_home(), &c.id).exists(),
+            "{all}"
+        );
+    }
+    let (out, all) = setup_env(&home, &fake.path(), &args, &[("HTTPS_PROXY", " ")]);
+    assert_eq!(out.status.code(), Some(0), "{all}");
 }

@@ -32,7 +32,12 @@ impl TempHome {
     /// Points `cmd` at the temporary homes and drops every variable that could send a harness
     /// back to a real home ([`HOME_VARS`]).
     pub fn apply<'a>(&self, cmd: &'a mut Command) -> &'a mut Command {
-        for var in HOME_VARS.split(' ') {
+        // A build box's proxy would make setup and start refuse (proxy::proxy_network).
+        for var in
+            HOME_VARS
+                .split(' ')
+                .chain(["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"])
+        {
             cmd.env_remove(var);
         }
         cmd.env("HOME", self.home())

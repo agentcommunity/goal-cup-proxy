@@ -233,6 +233,25 @@ fn test_hooks() -> Hooks {
     }
 }
 
+/// The variables that would send goalcup's own traffic through a participant's proxy.
+const PROXY_VARS: [&str; 4] = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"];
+
+/// `goalcup setup` and `goalcup start` refuse a proxy network: goalcup does not chain through a
+/// participant's proxy (owner, Nov 2026). The text names the variable, never its value, which can
+/// hold a password. Inside a harness goalcup launched, `HTTPS_PROXY` is goalcup's own recorder.
+pub fn proxy_network(vars: &std::collections::BTreeMap<String, String>) -> Option<String> {
+    if vars.contains_key(crate::cli::time_left::FILE_ENV) {
+        return None;
+    }
+    let var = PROXY_VARS
+        .iter()
+        .find(|k| vars.get(**k).is_some_and(|v| !v.trim().is_empty()))?;
+    Some(format!(
+        "Your network sends traffic through a proxy ({var} is set). goalcup does not support \
+         proxy networks yet. Unset it or use another network, then run this again."
+    ))
+}
+
 fn listed(d: Decision) -> Option<(Source, Kind)> {
     match d {
         Decision::Listed { source, kind, .. } => Some((source, kind)),

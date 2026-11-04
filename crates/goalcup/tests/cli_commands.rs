@@ -153,6 +153,8 @@ fn second_start_on_one_home_refuses() {
         .env("GOALCUP_HOME", homes.goalcup.path())
         .env("HOME", homes.user.path())
         .env("XDG_CONFIG_HOME", homes.user.path())
+        .env_remove("https_proxy") // a build box's proxy refuses every start
+        .env_remove("HTTPS_PROXY")
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));
