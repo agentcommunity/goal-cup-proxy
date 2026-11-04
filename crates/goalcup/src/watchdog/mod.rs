@@ -328,6 +328,9 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
         return failed("ca_files");
     }
     facts.ca = ca.export();
+    if !start_line_fits(&facts) {
+        return failed("start_line");
+    }
     if write_key(&rec, &facts.ca.key).is_err() {
         remove_key(&rec);
         return failed("key");
@@ -944,11 +947,19 @@ fn read_lines(stream: UnixStream, tx: &mpsc::Sender<Option<ToWatchdog>>) {
 
 /// One control line, both ways: JSON and a newline. Never logged; false when the write failed.
 pub fn send_line(mut to: &UnixStream, l: &impl Serialize) -> bool {
-    let Ok(mut text) = serde_json::to_vec(l) else {
-        return false;
-    };
+    line_bytes(l).is_some_and(|text| to.write_all(&text).is_ok())
+}
+
+/// A control line as [`send_line`] writes it: JSON and a newline.
+fn line_bytes(l: &impl Serialize) -> Option<Vec<u8>> {
+    let mut text = serde_json::to_vec(l).ok()?;
     text.push(b'\n');
-    to.write_all(&text).is_ok()
+    Some(text)
+}
+
+/// The first line, newline included, is at most [`MAX_LINE`], so [`read_line`] reads it.
+fn start_line_fits(facts: &StartFacts) -> bool {
+    line_bytes(&ToRecorder::Start(Box::new(facts.clone()))).is_some_and(|t| t.len() <= MAX_LINE)
 }
 
 /// The next control line, both ways: None at EOF or on a read error; `Some(None)` for a line

@@ -528,3 +528,32 @@ fn watchdog_end_real_sigterm_seals_with_signal() {
     harness.kill().unwrap();
     harness.wait().unwrap();
 }
+
+/// Point 3 (C.6): a start line longer than the recorder reads is refused before anything
+/// starts: no recorder, no harness, `watchdog_failed why=start_line`. `stop` is written at once
+/// so a regression that starts the harness ends instead of hanging.
+#[test]
+fn watchdog_end_stub_oversized_start_line_starts_nothing() {
+    let f = Fixture::new();
+    let big: String = (0..4000)
+        .map(|i| format!("\"h{i}.example.org\", "))
+        .collect();
+    let hosts = HostList::from_file(
+        builtin::HOSTS
+            .replacen("provider = [", &format!("provider = [{big}"), 1)
+            .as_bytes(),
+        "big.toml",
+    )
+    .unwrap();
+    let plan = f.plan();
+    let mut facts = f.facts(&plan);
+    facts.hosts = to_value(&hosts).unwrap();
+    let stop = f.m("stop");
+    f.run_plan(plan, facts, &f.stub(), move || {
+        std::fs::write(stop, "").unwrap()
+    });
+    assert!(!f.m("harness.pid").exists(), "the harness started");
+    assert!(!f.m("recorder.pid").exists(), "the recorder started");
+    let log = std::fs::read_to_string(f.entry_dir.join("goalcup.log")).unwrap();
+    assert!(log.contains("start_line"), "{log}");
+}
