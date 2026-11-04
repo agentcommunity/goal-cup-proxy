@@ -71,7 +71,7 @@ The connector sets `CLAUDE_CONFIG_DIR` to the isolated home and leaves `HOME` al
 
 ## Run without permission prompts
 
-Claude Code asks before it runs a command or writes outside its rules, and a run allows only "keep going". The connector's `no_prompts` rows write two keys into `settings.json` in the isolated home: `permissions.defaultMode = "bypassPermissions"` and `skipDangerousModePermissionPrompt = true`. Without the second key, 2.1.283 and 2.1.299 start in `default` mode ("Permission mode downgraded to default") and ask (measured). Claude Code refuses bypass mode as root unless `IS_SANDBOX=1`; run it as a normal user (docs). See [HARNESS-SETUP](../HARNESS-SETUP.md#claude-code).
+Claude Code asks before it runs a command or writes outside its rules, and a run allows only "keep going". The connector's `no_prompts` rows write two keys into `settings.json` in the isolated home: `permissions.defaultMode = "bypassPermissions"` and `skipDangerousModePermissionPrompt = true`. Without the second key, 2.1.283 and 2.1.299 start in `default` mode ("Permission mode downgraded to default") and ask (measured). Claude Code refuses bypass mode as root unless `IS_SANDBOX=1`; run it as a normal user (docs). See [HARNESS-SETUP](../HARNESS-SETUP.md#what-setup-writes-per-harness).
 
 ## Pad result
 

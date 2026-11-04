@@ -78,7 +78,7 @@ The connector sets `CODEX_HOME` and `CODEX_SQLITE_HOME` to the isolated home. Ro
 
 ## Run without permission prompts
 
-Codex asks for approval whenever its sandbox blocks a command, and a run allows only "keep going". The connector's `no_prompts` rows write two keys into `config.toml` in the isolated home: `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` ([docs](https://learn.chatgpt.com/docs/config-file/config-advanced)). With `never` alone, commands the default `workspace-write` sandbox blocks fail instead of asking, and the agent cannot commit, because `.git` is read-only there (measured). In a Linux container the sandbox cannot start at all (measured). See [HARNESS-SETUP](../HARNESS-SETUP.md#codex).
+Codex asks for approval whenever its sandbox blocks a command, and a run allows only "keep going". The connector's `no_prompts` rows write two keys into `config.toml` in the isolated home: `approval_policy = "never"` and `sandbox_mode = "danger-full-access"` ([docs](https://learn.chatgpt.com/docs/config-file/config-advanced)). With `never` alone, commands the default `workspace-write` sandbox blocks fail instead of asking, and the agent cannot commit, because `.git` is read-only there (measured). In a Linux container the sandbox cannot start at all (measured). See [HARNESS-SETUP](../HARNESS-SETUP.md#what-setup-writes-per-harness).
 
 ## Pad result
 
