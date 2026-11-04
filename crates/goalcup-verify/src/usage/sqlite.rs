@@ -8,7 +8,6 @@
 //! file format page, "WAL format" (header, frame header, checksum).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Read;
 use std::path::Path;
 
 use rusqlite::config::DbConfig;
@@ -267,36 +266,16 @@ fn read(
 
 /// What `f` reads from a database and WAL, opened read-only from a private copy.
 fn query<T>(db: &[u8], wal: &[u8], f: impl FnOnce(&Connection) -> Option<T>) -> Option<T> {
-    // A name no one can guess, so no one can plant it first; the clock only where no urandom is.
-    let rand = std::fs::File::open("/dev/urandom")
-        .and_then(|mut u| {
-            let mut b = [0; 8];
-            u.read_exact(&mut b).map(|()| u64::from_ne_bytes(b))
-        })
-        .unwrap_or_else(|_| {
-            let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
-            t.map_or(0, |d| d.as_nanos() as u64)
-        });
-    let name = format!("goalcup-sqlite-{}-{rand:016x}", std::process::id());
-    let dir = std::env::temp_dir().join(name);
-    // Mode 0700: the copy holds every session of the shared home while it is open. An existing
-    // directory of that name is not ours: `create` fails and nothing is read.
-    let mut mk = std::fs::DirBuilder::new();
+    // A random name made with `create_new` semantics, so no one can plant it first. Mode 0700
+    // (tempfile's default is 0777 less the umask): the copy holds every session of the shared
+    // home while it is open.
+    let mut b = tempfile::Builder::new();
+    b.prefix("goalcup-sqlite-");
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut mk, 0o700);
-    mk.create(&dir).ok()?;
+    b.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let dir = b.tempdir().ok()?;
     // Removed on return and on a panic in `f`, after the connection (dropped inside the closure).
-    let dir = Rm(dir);
-    open(&dir.0, db, wal).and_then(|c| f(&c))
-}
-
-/// A private copy's directory, removed when dropped.
-struct Rm(std::path::PathBuf);
-
-impl Drop for Rm {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
+    open(dir.path(), db, wal).and_then(|c| f(&c))
 }
 
 /// The copy opened read-only, its schema untrusted: a view or trigger the record's author wrote
@@ -490,12 +469,10 @@ mod tests {
         };
         let (a, b) = (copy(), copy());
         assert_ne!(a, b);
-        let pre = format!("goalcup-sqlite-{}-", std::process::id());
         for d in [&a, &b] {
             let name = d.file_name().unwrap().to_str().unwrap();
-            let rand = name.strip_prefix(&pre).unwrap();
-            assert_eq!(rand.len(), 16, "{name}");
-            assert!(rand.bytes().all(|c| c.is_ascii_hexdigit()), "{name}");
+            let rand = name.strip_prefix("goalcup-sqlite-").unwrap();
+            assert!(rand.len() >= 6, "{name}");
             assert!(!d.exists());
         }
     }
