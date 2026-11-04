@@ -99,18 +99,8 @@ struct Boot {
     quiet: Arc<AtomicU64>,
     /// `GOALCUP_TEST_UPSTREAM`; always empty without `test-hooks`.
     upstream: HashMap<String, SocketAddr>,
-    /// The participant's proxy for the upstream leg, if any.
+    /// The participant's proxy for the upstream leg, if any; a test upstream never uses it.
     egress: &'static net::Egress,
-}
-
-impl Boot {
-    /// The participant's proxy for `host`; never for a test upstream.
-    fn via(&self, host: &str, target: Option<SocketAddr>) -> Option<&'static net::Upstream> {
-        target
-            .is_none()
-            .then(|| self.egress.proxy_for(host))
-            .flatten()
-    }
 }
 
 /// Accepts on the inherited `listener` (it binds nothing) on a runtime of its own with
@@ -257,7 +247,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
         expected: b.hosts.is_expected(host),
     };
     let is_listed = connect_listed.is_some();
-    let via = b.via(host, target);
+    let via = b.egress.proxy_for(host);
     let Ok(mut up) = connect::connect_upstream(rec, host, port, is_listed, target, via).await
     else {
         b.notes.note(rec, Some(host), 502);
@@ -477,7 +467,7 @@ async fn fresh_tunnel(
     client: TcpStream,
     (target, retry): (Option<SocketAddr>, bool),
 ) {
-    let via = b.via(&c.host, target);
+    let via = b.egress.proxy_for(&c.host);
     match connect::connect_upstream(&b.rec, &c.host, c.port, retry, target, via).await {
         Ok(up) => run_tunnel(b, hold, c, client, up).await,
         Err(_) => {

@@ -1,6 +1,6 @@
 //! cr-proxy-2: the upstream leg goes through the participant's own proxy (`HTTPS_PROXY`), with a
-//! CONNECT of our own; a refusing proxy is a `502` and one note; a test upstream never goes
-//! through it.
+//! CONNECT of our own; a refusing proxy is a `502` and one note at once, a failing one is retried;
+//! a test upstream never goes through it.
 
 mod common;
 mod proxy_fixtures;
@@ -9,13 +9,16 @@ use common::pki::HTTP11;
 use common::recorder::events;
 use common::upstream::{Script, Upstream};
 use common::{HANG, within_async};
+use goalcup::net::Egress;
 use goalcup::pipeline::Calls;
 use proxy_fixtures::{HOSTS, client_trusting, connect, conns, get, through};
 use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio_rustls::TlsConnector;
 
 const TARGET: &str = "api.openai.com:443";
@@ -136,15 +139,20 @@ async fn model_calls_go_through_the_participants_proxy() {
     );
 }
 
-/// Review focus 4: a proxy that refuses (407) gives the harness a `502` and one note.
+/// Review focus 4: a proxy that refuses (407) gives the harness a `502` and one note at once:
+/// a 4xx is final, never retried.
 #[tokio::test]
 async fn a_proxy_that_refuses_is_a_502_with_one_note() {
-    let (fake, _) = fake_proxy(
+    let (fake, heads) = fake_proxy(
         Some(b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n"),
         None,
     );
     let (_h, addr, calls, _) = proxy(&[("HTTPS_PROXY", format!("http://{fake}"))]);
-    assert_eq!(connect(addr, TARGET).await.1, 502);
+    let code = within_async(Duration::from_secs(5), connect(addr, TARGET))
+        .await
+        .1;
+    assert_eq!(code, 502);
+    assert_eq!(heads.lock().unwrap().len(), 1);
     let notes = notes(&calls, "connect_refused");
     assert_eq!(
         (notes.len(), &notes[0]["status"], &notes[0]["host"]),
@@ -171,12 +179,42 @@ async fn a_test_upstream_never_goes_through_the_proxy() {
     ];
     let (_h, addr, calls, ca) = proxy(&env);
     let c = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]));
-    let mut t = c
-        .connect(name("api.openai.com"), through(addr, TARGET).await)
-        .await
-        .unwrap();
-    get(&mut t).await;
-    drop(t);
+    within_async(HANG, async {
+        let mut t = (c.connect(name("api.openai.com"), through(addr, TARGET).await))
+            .await
+            .unwrap();
+        get(&mut t).await;
+    })
+    .await;
     assert_eq!(conns(&calls, 1).await[0].1["mode"], "decrypt");
     drop(closed_guard);
+}
+
+/// A proxy's 5xx (it could not reach the target now) is retried for a listed host, like a dial
+/// failure.
+#[tokio::test]
+async fn a_proxy_5xx_is_retried() {
+    let (fake, heads) = fake_proxy(Some(b"HTTP/1.1 503 Service Unavailable\r\n\r\n"), None);
+    let (_h, addr, _calls, _) = proxy(&[("HTTPS_PROXY", format!("http://{fake}"))]);
+    let asking = tokio::spawn(connect(addr, TARGET));
+    within_async(Duration::from_secs(5), async {
+        while heads.lock().unwrap().len() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await;
+    asking.abort();
+}
+
+/// An IPv6 target is bracketed in the CONNECT line and the Host header.
+#[test]
+fn an_ipv6_target_is_bracketed_in_the_connect_head() {
+    let vars = BTreeMap::from([("HTTPS_PROXY".to_owned(), "http://p:3128".to_owned())]);
+    let e = Egress::from_vars(&vars, vec![]);
+    assert_eq!(
+        e.proxy_for("2001:db8::1")
+            .unwrap()
+            .connect_head("2001:db8::1", 443),
+        "CONNECT [2001:db8::1]:443 HTTP/1.1\r\nHost: [2001:db8::1]:443\r\n\r\n"
+    );
 }

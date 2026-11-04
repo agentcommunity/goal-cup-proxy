@@ -211,12 +211,17 @@ impl Upstream {
         format!("http://{at}{}:{}", self.host, self.port)
     }
 
-    /// The CONNECT request for `host:port`, with `Proxy-Authorization` when there is a user.
+    /// The CONNECT request for `host:port` (an IPv6 literal in brackets), with
+    /// `Proxy-Authorization` when there is a user.
     pub fn connect_head(&self, host: &str, port: u16) -> String {
         let auth = self.auth.as_ref().map(|a| {
             let b64 = base64::engine::general_purpose::STANDARD.encode(a);
             format!("Proxy-Authorization: Basic {b64}\r\n")
         });
+        let host = match host.contains(':') {
+            true => format!("[{host}]"),
+            false => host.to_owned(),
+        };
         format!(
             "CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n{}\r\n",
             auth.unwrap_or_default()

@@ -242,7 +242,8 @@ pub const PROXY_ANSWER_DEADLINE: Duration = HEAD_DEADLINE;
 /// the harness would make without us. A `listed` target is retried until [`LISTED_RETRY_FOR`]
 /// after the first attempt, timed by `rec.now()` (rule 9), pausing 250 ms doubling to 2 s; any
 /// other gets one round, since retrying the agent's own traffic changes the run (PRD-17 C6).
-/// Nothing has been sent to the target, so a retry replays nothing. The socket gets
+/// A proxy's 4xx is final: no further round. Nothing has been sent to the target, so a retry
+/// replays nothing. The socket gets
 /// `TCP_NODELAY` and keepalive; no idle timeout and no `TCP_USER_TIMEOUT`.
 pub async fn connect_upstream(
     rec: &Recorder,
@@ -264,7 +265,10 @@ pub async fn connect_upstream(
             Ok(stream) => return Ok(stream),
             Err(e) => e,
         };
-        if !listed || rec.now().ns() + pause.as_nanos() as u64 >= until {
+        if !listed
+            || err.kind() == io::ErrorKind::PermissionDenied
+            || rec.now().ns() + pause.as_nanos() as u64 >= until
+        {
             return Err(err);
         }
         tokio::time::sleep(pause).await;
@@ -287,7 +291,8 @@ async fn connect_name(name: &str, port: u16) -> io::Result<TcpStream> {
 }
 
 /// A tunnel to `name:port` through the participant's proxy. The answer is read one byte at a
-/// time, so no byte of the tunnel is taken; only an `HTTP/1.x 2xx` opens it. The head (it may
+/// time, so no byte of the tunnel is taken; only an `HTTP/1.x 2xx` opens it, a `5xx` is a failed
+/// round and anything else is final (`PermissionDenied`). The head (it may
 /// hold `Proxy-Authorization`) and the answer never reach an error or the record.
 async fn through_proxy(via: &net::Upstream, name: &str, port: u16) -> io::Result<TcpStream> {
     let mut s = connect_name(&via.host, via.port).await?;
@@ -301,13 +306,22 @@ async fn through_proxy(via: &net::Upstream, name: &str, port: u16) -> io::Result
             }
             got.push(b[0]);
         }
-        let ok = got.len() > 12
+        let status = (got.len() > 12
             && got.starts_with(b"HTTP/1.")
             && got[7].is_ascii_digit()
             && got[8] == b' '
-            && got[9] == b'2';
-        ok.then_some(())
-            .ok_or_else(|| io::Error::other("the proxy refused the tunnel"))
+            && got[9..12].iter().all(u8::is_ascii_digit))
+        .then_some(got[9]);
+        match status {
+            Some(b'2') => Ok(()),
+            // The proxy could not reach the target now: worth another round, like a dial failure.
+            Some(b'5') => Err(io::Error::other("the proxy could not reach the target")),
+            // A 4xx (credentials, policy) or an answer that is not HTTP: final.
+            _ => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "the proxy refused the tunnel",
+            )),
+        }
     };
     match tokio::time::timeout(PROXY_ANSWER_DEADLINE, ask).await {
         Ok(Ok(())) => Ok(s),
