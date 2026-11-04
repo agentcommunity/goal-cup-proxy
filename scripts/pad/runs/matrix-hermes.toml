@@ -1,0 +1,8 @@
+# matrix-hermes.toml: Hermes direct, gateway and dodger on each listed version, one run per (case, version) (G.23).
+# In a box only the pin installs (no install step yet), so the pad refuses 0.22.6 here; on the Mac use
+# here-hermes-<version>.toml. micro: a quick proof that each version runs and records; mode = "full" makes tier rows ([[hermes-cli.builds]]).
+harness = "hermes-cli"
+key = "deepseek"
+case = "all"
+mode = "micro"
+versions = ["0.22.5", "0.22.6"]

@@ -57,7 +57,7 @@ def mkrepo(tmp, rows, tiers_text=None, harness=None):
         with mock.patch.object(table, "ROOT", root):
             lines = lambda c: table.harness_lines(c, sha)
             got = [json.loads(ln) for ln in (root / table.ROWS_REL).read_text(encoding="utf-8").splitlines()]
-            tiers_text = table.render_tiers({c: table.tier_for(c, got, lines) for c in table.CONNECTOR_IDS})
+            tiers_text = table.render_all(got, lines)[1]
     if tiers_text:
         sha = commit(root, {"connectors/tiers.toml": tiers_text}, "tiers")
     return sha
@@ -229,6 +229,43 @@ class TierOs(unittest.TestCase):
         self.assertIn('os = "darwin-arm64"\nreason', table.render_tiers({"hermes-cli": self.tier(hermes_rows())}))
 
 
+class Builds(unittest.TestCase):
+    def builds(self, rows):
+        with mock.patch.object(table, "harness_lines", return_value=["[gateway]"]):
+            return table.builds("hermes-cli", rows)
+
+    def at(self, v, os_, hour=19):
+        return hermes_rows(harness_version=v, os=os_, started="2026-11-03T%02d:00:00Z" % hour)
+
+    def test_two_versions_two_systems(self):
+        rows = self.at("0.22.5", "darwin-arm64") + self.at("0.22.6", "darwin-arm64", 20) + self.at("0.22.5", "linux-x86_64", 21)
+        self.assertEqual(self.builds(rows), [("0.22.6", "darwin-arm64"), ("0.22.5", "darwin-arm64"), ("0.22.5", "linux-x86_64")])
+
+    def test_incomplete_build_is_not_listed(self):
+        rows = self.at("0.22.5", "darwin-arm64") + [r for r in self.at("0.22.6", "darwin-arm64", 20) if r["case"] != "dodger"]
+        self.assertEqual(self.builds(rows), [("0.22.5", "darwin-arm64")])
+
+    def test_last_five_per_os(self):
+        rows = [r for n in range(2, 12) for r in self.at("0.%d.0" % n, "darwin-arm64")] + self.at("0.1.0", "linux-x86_64")
+        self.assertEqual(self.builds(rows), [("0.%d.0" % n, "darwin-arm64") for n in (11, 10, 9, 8, 7)] + [("0.1.0", "linux-x86_64")])
+
+    def test_mixed_version_latest_rows_still_verified(self):  # a matrix: direct's latest on 0.22.6, gateway's on 0.22.5
+        rows = self.at("0.22.6", "darwin-arm64", 19) + self.at("0.22.5", "darwin-arm64", 20)
+        rows = [dict(r, started="2026-11-03T21:00:00Z") if r["case"] == "direct" and r["harness_version"] == "0.22.6" else r for r in rows]
+        with mock.patch.object(table, "harness_lines", return_value=["[gateway]"]):
+            self.assertEqual(table.tier_for("hermes-cli", rows)[:3], ("verified", "0.22.6", "darwin-arm64"))
+
+    def test_release_sorts_above_its_pre_release(self):
+        self.assertGreater(table.vkey("0.22.6"), table.vkey("0.22.6-rc1"))
+        self.assertGreater(table.vkey("0.22.6.1"), table.vkey("0.22.6"))
+
+    def test_render_has_builds_tables(self):
+        rows = self.at("0.22.5", "darwin-arm64") + self.at("0.22.6", "darwin-arm64", 20)
+        with mock.patch.object(table, "harness_lines", return_value=["[gateway]"]):
+            text = table.render_tiers({"hermes-cli": table.tier_for("hermes-cli", rows)}, {"hermes-cli": self.builds(rows)})
+        self.assertIn('[[hermes-cli.builds]]\nversion = "0.22.6"\nos = "darwin-arm64"\n', text)
+
+
 class ReleaseVersions(Repo):
     HERMES = 'release_versions = ["0.22.5", "0.22.6"]\n[gateway]\n'
 
@@ -264,6 +301,13 @@ class ReleaseVersions(Repo):
     def test_missing_core_harness_file_refuses(self):
         code, out = self.check(self.repo(green_rows(), harness={"hermes-cli": None}))
         self.assertIn("scripts/pad/harnesses/hermes-cli.toml missing at", out)
+
+    def test_no_gateway_route_needs_no_gateway_row(self):  # the same cases builds() needs (G.2)
+        rows = [r for r in green_rows() if (r["connector"], r["case"]) != ("codex-cli", "gateway")]
+        code, out = self.check(self.repo(rows, harness={"codex-cli": "# no gateway route\n"}))
+        self.assertEqual(code, 0, out)
+        code, out = self.check(self.repo(rows))
+        self.assertIn("codex-cli gateway full: missing", out)
 
     def test_the_hermes_file_requires_0_22_6(self):
         self.assertIn("0.22.6", table.release_versions(table.harness_lines("hermes-cli")))

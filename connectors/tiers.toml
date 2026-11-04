@@ -12,6 +12,10 @@ version = "2.1.312"
 os = "darwin-arm64"
 reason = ""
 
+[[claude-code-cli.builds]]
+version = "2.1.312"
+os = "darwin-arm64"
+
 [cline-cli]
 tier = "not verified"
 version = ""
@@ -23,6 +27,10 @@ tier = "verified"
 version = "0.165.0"
 os = "darwin-arm64"
 reason = ""
+
+[[codex-cli.builds]]
+version = "0.165.0"
+os = "darwin-arm64"
 
 [copilot-cli]
 tier = "not verified"
@@ -59,6 +67,10 @@ tier = "verified"
 version = "0.22.6"
 os = "darwin-arm64"
 reason = "subagents shown by their task logs, not tied to individual calls"
+
+[[hermes-cli.builds]]
+version = "0.22.6"
+os = "darwin-arm64"
 
 [kilo-cli]
 tier = "not verified"

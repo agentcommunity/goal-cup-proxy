@@ -26,10 +26,13 @@ HEADER = "# Written by scripts/pad/table (PRD-12 section 9). Do not edit by hand
 
 def toml_str(s): return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
-def render_tiers(tiers):
-    """tiers: {connector id: (tier, version, os, reason)} -> tiers.toml text (PRD-10 T1)."""
+def render_tiers(tiers, builds=None):
+    """tiers: {connector id: (tier, version, os, reason)}, builds: {connector id: [(version, os)]} -> tiers.toml
+    text (PRD-10 T1), each connector's [[<id>.builds]] after its table."""
     return HEADER + "\n" + "\n".join("[%s]\ntier = %s\nversion = %s\nos = %s\nreason = %s\n" % (
-        cid, toml_str(t), toml_str(v), toml_str(o), toml_str(why)) for cid, (t, v, o, why) in sorted(tiers.items()))
+        cid, toml_str(t), toml_str(v), toml_str(o), toml_str(why)) + "".join(
+        "\n[[%s.builds]]\nversion = %s\nos = %s\n" % (cid, toml_str(bv), toml_str(bo)) for bv, bo in (builds or {}).get(cid, []))
+        for cid, (t, v, o, why) in sorted(tiers.items()))
 
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -37,6 +40,7 @@ def write(path, text):
 
 def g(d, k): return d.get(k) if isinstance(d, dict) else None
 def started(r): return str(r.get("started") or "")
+def pair(r): return (str(r.get("harness_version") or ""), str(r.get("os") or ""))
 def is_fault(r): return bool(r.get("variant"))  # a cycle row's own crash and a connector copy are in it too
 def kills(r): return any(str(s).startswith("kill-recorder") for s in r.get("variant") or [])
 
@@ -81,8 +85,11 @@ def has_gateway(cid, rows, lines=None):
     # gateway is n/a, and does not block, when the harness file has no [gateway] table (no documented route).
     return "[gateway]" in (lines or harness_lines)(cid) or latest(rows, tier_row((cid,), "gateway")) is not None
 
-def tier_for(cid, rows, lines=None):
-    lines = lines or harness_lines  # looked up at call time
+def required(cid, rows, lines=None):  # the cases a tier or a build needs (G.2)
+    return [c for c in CASES if (cid, c) not in NO_TIER_ROW and (c != "gateway" or has_gateway(cid, rows, lines))]
+
+def gate(cid, lines):
+    """The harness file's own word, whatever rows exist: a not-verified tier tuple, or None."""
     # "not supported" is the watcher's decision (section 9), kept as `not_supported = "<reason>"` in the pad
     # harness file, never computed from rows.
     said = [m.group(1) for m in map(re.compile(r'not_supported\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
@@ -93,10 +100,20 @@ def tier_for(cid, rows, lines=None):
     why = [m.group(1) for m in map(re.compile(r'not_verified\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
     if why or 'key_kind = "none"' in lines(cid):
         return ("not verified", "", "", why[0] if why else "no key")
+    return None
+
+def tier_for(cid, rows, lines=None):
+    lines = lines or harness_lines  # looked up at call time
+    said = gate(cid, lines)
+    if said:
+        return said
     if not any(r.get("connector") == cid for r in rows):
         return ("not verified", "", "", "not yet run on the pad")
-    got = [(c, latest(rows, tier_row((cid,), c))) for c in CASES
-           if (cid, c) not in NO_TIER_ROW and (c != "gateway" or has_gateway(cid, rows, lines))]
+    note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
+    done = builds(cid, rows, lines)  # a version matrix: each case's latest row may be on another version
+    if done:
+        return ("verified", *max(done, key=lambda p: vkey(p[0])), note[0] if note else "")
+    got = [(c, latest(rows, tier_row((cid,), c))) for c in required(cid, rows, lines)]
     reasons = []
     for _, r in got:
         if r and passed(r) and not counts(r):
@@ -108,14 +125,26 @@ def tier_for(cid, rows, lines=None):
             first = next((w for w in why if w.startswith(bad + " ")), why[0])
             reasons.append((2, "%s %s %s" % (r.get("case"), bad, first.split(": ", 1)[-1])))
     reasons += [(3, "no full %s row" % c) for c, r in got if not r]
-    pairs = {(str(r.get("harness_version") or ""), str(r.get("os") or "")) for _, r in got if r}
+    pairs = {pair(r) for _, r in got if r}
     reasons += [(4, "case rows on different versions or systems")] * (len(pairs) > 1)  # section 9: "on that version"
     reasons += [(4, "no harness version on a case row")] * ("" in {v for v, _ in pairs})  # P7: a named version
     reasons += [(4, "no system on a case row")] * ("" in {o for _, o in pairs})
-    if reasons:
-        return ("not verified", "", "", min(reasons, key=lambda x: x[0])[1])
-    note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
-    return ("verified", *pairs.pop(), note[0] if note else "")
+    return ("not verified", "", "", min(reasons, key=lambda x: x[0])[1] if reasons else "no verified build")
+
+def vkey(v):  # numeric parts numerically, any other part below them; the end above a pre-release (0.22.6 > 0.22.6-rc1)
+    return [(1, int(p)) if p.isdigit() else (0, p) for p in re.split(r"[.+-]", v)] + [(0.5, "")]
+
+def builds(cid, rows, lines=None):
+    """The verified (version, os) builds, newest first within each os, the last 5 per os: every required case's
+    latest full fault-free row on exactly that pair counts (index ruling 5)."""
+    lines = lines or harness_lines
+    if gate(cid, lines):
+        return []
+    need = required(cid, rows, lines)
+    ok = [p for p in {pair(r) for r in rows if r.get("connector") == cid} if all(p) and all(
+        counts(latest(rows, lambda r, w=tier_row((cid,), c): w(r) and pair(r) == p) or {}) for c in need)]
+    ok = sorted(sorted(ok, key=lambda p: vkey(p[0]), reverse=True), key=lambda p: p[1])
+    return [p for i, p in enumerate(ok) if sum(q[1] == p[1] for q in ok[:i]) < 5]
 
 def cell(v):
     return "-" if v in (None, "", [], {}) else str(v).replace("|", "/").replace("\n", " ")
@@ -155,6 +184,11 @@ def results_md(rows, tiers):
                       "Do not edit by hand.", ""] + table(["Harness", "Tier", "Version"] + list(CASES)
                                                          + ["Kill row", "Date"], summary) + body) + "\n"
 
+def render_all(rows, lines=None):
+    """({connector id: tier tuple}, tiers.toml text): what main writes and the release check compares."""
+    tiers = {c: tier_for(c, rows, lines) for c in CONNECTOR_IDS}
+    return tiers, render_tiers(tiers, {c: builds(c, rows, lines) for c in CONNECTOR_IDS})
+
 def release_check(commit):
     def git(*a):
         return subprocess.run(["git", "-C", str(ROOT)] + list(a), capture_output=True, text=True)
@@ -183,7 +217,7 @@ def release_check(commit):
         if not lines or vs is None:
             items.append("scripts/pad/harnesses/%s.toml %s at %s" % (cid, "release_versions unreadable (one line: [\"<v>\", ...])" if lines else "missing", sha))
         for v in vs or [None]:  # no key: the latest rows, any version
-            for case in [c for c in CASES if (cid, c) not in NO_TIER_ROW]:
+            for case in required(cid, rows, lambda _: lines):  # the cases builds() needs
                 want = tier_row((cid,), case)
                 need("%s %s full%s" % (cid, case, " %s on %s" % (v, RELEASE_OS) if v else ""), want if v is None else
                      lambda r, w=want, v=v: w(r) and r.get("harness_version") == v and r.get("os") == RELEASE_OS)
@@ -206,7 +240,7 @@ def release_check(commit):
     tiers = git("show", sha + ":connectors/tiers.toml")
     if tiers.returncode:
         items.append("connectors/tiers.toml missing at %s" % sha)
-    elif tiers.stdout != render_tiers({c: tier_for(c, rows, lambda c: harness_lines(c, sha)) for c in CONNECTOR_IDS}):
+    elif tiers.stdout != render_all(rows, lambda c: harness_lines(c, sha))[1]:
         items.append("connectors/tiers.toml differs from the rows; run scripts/pad/table and commit it")
     print("\n".join(items) if items else "release check: pass at %s" % sha)
     return 1 if items else 0
@@ -231,8 +265,8 @@ def main(argv):
     committed = not found and (ROOT / ROWS_REL).is_file()  # no pad-out: render the committed rows, rewrite nothing else
     if committed:
         rows = [r for r in map(json.loads, (ROOT / ROWS_REL).read_text(encoding="utf-8").splitlines()) if isinstance(r, dict)]
-    tiers = {cid: tier_for(cid, rows) for cid in CONNECTOR_IDS}  # neither: the phase 0 seed
-    write(TIERS, render_tiers(tiers))
+    tiers, text = render_all(rows)  # neither: the phase 0 seed
+    write(TIERS, text)
     if found:
         lines = sorted(((str(r.get("connector") or ""), str(r.get("case") or ""), started(r)),
                         json.dumps(r, sort_keys=True, separators=(",", ":"))) for r in rows)

@@ -5,7 +5,7 @@
 #
 # First, as a comment: every vendor page you read for this file, with the date. A key route or a first-run
 # dialog read from docs and not run against the live harness is said so here.
-version = ""                  # the pinned version; the run refuses an installed version that differs
+version = ""                  # the pinned version; the pad runs and records any installed version
 version_cmd = ""              # prints that version; it must print this file's version and no other
 install = ""                  # installs exactly that version as a non-root user, e.g. "npm i -g <package>@<version>"
                               # (one line; single quotes around the value when it holds double quotes)

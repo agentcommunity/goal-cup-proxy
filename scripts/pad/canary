@@ -18,7 +18,7 @@ def norm(text) -> str:
 
 def known(tiers: dict, cid: str) -> list[tuple[str, str]]:
     row = tiers.get(cid, {})
-    pairs = [(v.get("version", ""), v.get("os", "?")) for v in row.get("verified", [])] or [(row.get("version", ""), "?")]
+    pairs = [(v.get("version", ""), v.get("os", "?")) for v in row.get("builds", [])] or [(row.get("version", ""), row.get("os") or "?")]
     return [(norm(v), o) for v, o in pairs if norm(v)]
 
 

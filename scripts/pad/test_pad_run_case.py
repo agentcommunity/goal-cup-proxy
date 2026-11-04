@@ -378,7 +378,7 @@ class SignedInHome(unittest.TestCase):
 
     def test_key_none_has_no_key_route_and_no_gateway(self):
         s = pad.load_settings(dict(self.ROW, case="all"), self.PADCFG)
-        self.assertEqual(pad.case_list(s, {"gateway": {}})[0], ["direct", "dodger"])
+        self.assertEqual([c for c, _ in pad.case_list(s, {"gateway": {}})[0]], ["direct", "dodger"])
         self.assertEqual(pad.Run(s, "direct", self.PADCFG, {}, self.enterContext(tempfile.TemporaryDirectory())).key_names(), [])
         with self.assertRaises(pad.Usage):
             pad.load_settings(dict(self.ROW, case="gateway"), self.PADCFG)
@@ -442,3 +442,12 @@ class VersionCmdEnv(unittest.TestCase):
             with self.assertRaises(padrun.Step):  # no version printed: setup stops after the first call
                 r.setup(None)
         self.assertEqual(seen[0]["env"]["PAD_VERSION"], "1.18.0")
+
+    def test_required_version_mismatch_fails_on_mac(self):
+        r = bare()
+        r.s, r.h = {"harness_id": "hermes-cli", "version": "0.22.6", "version_required": True}, {"version_cmd": "hermes --version"}
+        with mock.patch.object(padrun, "sh", lambda argv, **kw: mock.Mock(stdout="Hermes Agent v0.22.5\n", stderr="", returncode=0)):
+            with self.assertRaises(padrun.Step) as e:
+                r.setup(None)
+        self.assertEqual(e.exception.args[0], "FAIL")
+        self.assertIn("requested 0.22.6, found 0.22.5", e.exception.args[1])

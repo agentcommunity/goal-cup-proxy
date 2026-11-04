@@ -302,11 +302,11 @@ class Run:
             raise Step("skip", "no entry")
 
     def gc_env(self, clean=False):
-        """The run's GOALCUP_* values; clean: with only HOME, PATH (BOX_BIN first) and TERM beside them (no proxy or
+        """The run's GOALCUP_* values; clean: with only HOME, PATH (here_path, then BOX_BIN, first) and TERM beside them (no proxy or
         CA variable): the participant's shell."""
         s, e = self.s, os.environ
-        path = os.pathsep.join([os.path.expanduser(d) for d in BOX_BIN] + [e.get("PATH", "")])
-        base = dict(HOME=e.get("HOME", ""), PATH=path, TERM=e.get("TERM") or "xterm") if clean else {}
+        path = os.pathsep.join(s.get("here_path", []) + [os.path.expanduser(d) for d in BOX_BIN] + [e.get("PATH", "")])  # here_path: the harness build to run
+        base = dict(HOME=e.get("HOME", ""), PATH=path, TERM=e.get("TERM") or "xterm") if clean else {"PATH": path} if s.get("here_path") else {}
         return dict(base, GOALCUP_HOME=self.env["GOALCUP_HOME"], GOALCUP_SERVER=self.env["GOALCUP_SERVER"],
                     GOALCUP_NO_BROWSER="1", **{"GOALCUP_KEEP_PARTS": "1"} if s.get("keep") else {})
 
@@ -316,6 +316,8 @@ class Run:
         version = harness_version.parse(next((l for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()), ""))  # stdout's first line, else stderr's, as goalcup; section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
         if not version:
             raise Step("FAIL", "%s not installed" % s["harness_id"])
+        if s.get("version_required") and version != s["version"]:  # a versions list: the row must be that build
+            raise Step("FAIL", "requested %s, found %s; install it, for example under here_path" % (s["version"], version))
         self.st.update(harness_version=version, plain_planted=True)
         known, plain = self.plant()
         known += [open(os.path.join(self.keys, name)).read().strip() for name in s["key_files"]]
