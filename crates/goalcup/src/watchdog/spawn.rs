@@ -393,6 +393,27 @@ pub fn end_tree(harness: (u32, u64), spare: &dyn Fn(u32) -> bool) {
     }
 }
 
+/// Reaps the watchdog's exited children (on Linux, orphans the subreaper took in) except those
+/// `keep` names: `waitpid(WNOHANG)` on each zombie child, so none piles up while the harness
+/// runs. Elsewhere nothing (no subreaper, no orphans taken in).
+pub fn reap_orphans(keep: &dyn Fn(u32) -> bool) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let me = std::process::id();
+    for p in procs() {
+        if p.ppid == me
+            && p.zombie
+            && !keep(p.pid)
+            && let Ok(pid) = libc::pid_t::try_from(p.pid)
+        {
+            let mut status = 0;
+            // SAFETY: reaps one child of ours by pid; writes one integer.
+            unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        }
+    }
+}
+
 /// The Linux children of the watchdog that started no earlier than the harness and are still
 /// alive at the seal, with their program names (`/proc/<pid>/comm`). None elsewhere or when
 /// there are none.

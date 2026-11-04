@@ -256,6 +256,9 @@ const SPACE_MAX_NS: u64 = NULL_WAITS[0] * SEC;
 /// left for `close_dead_entry`. While the harness runs the tries never stop.
 const SPAWN_GIVE_UP_NS: u64 = 30 * SEC;
 
+/// How often adopted orphans are reaped while the harness runs.
+const REAP_NS: u64 = 10 * SEC;
+
 /// A null recorder that has not exited this long after the `restart` line is killed.
 const RESTART_KILL_NS: u64 = 10 * SEC;
 
@@ -434,6 +437,7 @@ fn watch(
     let mut next_null = false;
     // Since when the next recorder cannot be spawned.
     let mut failing_since: Option<Mono> = None;
+    let mut reaped_at = Mono::now();
     // After a server `stop` the seal may come first: the harness is waited for all the same.
     while !(sealed || left) || harness_pid.is_some() {
         let next = boot.next();
@@ -497,6 +501,16 @@ fn watch(
                 None if asked.is_none() => asked = Some(reason),
                 _ => {}
             }
+        }
+        // Orphans of its own harness, reaped. The `before` helpers are done and the `after` ones
+        // not started, so the only children kept are the harness and the recorder.
+        if own.is_some()
+            && harness_pid.is_some()
+            && after.is_none()
+            && Mono::now().0.saturating_sub(reaped_at.0) >= REAP_NS
+        {
+            reaped_at = Mono::now();
+            spawn::reap_orphans(&|p| Some(p) == harness_pid || spare(p));
         }
         let gone = match own {
             Some(_) => harness_pid.and_then(spawn::look),

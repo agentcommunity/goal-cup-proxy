@@ -429,6 +429,38 @@ fn watchdog_end_real_deadline_ends_the_tree() {
     assert_eq!(status["boot"], 0);
 }
 
+/// Point 3 (PRD-02 section 8 step 10): an orphan the subreaper took in that exits while the
+/// harness runs is reaped then, not left a zombie until the seal; the harness's own exit status
+/// is still the watchdog's to read.
+#[cfg(target_os = "linux")]
+#[test]
+fn watchdog_end_real_adopted_orphans_are_reaped() {
+    let f = Fixture::new();
+    let d = f.d.display();
+    let mut plan = f.plan();
+    plan.argv[1] = format!(
+        "( sleep 0.2 & echo $! > {d}/quick.pid ); echo $$ > {d}/harness.pid
+         while [ ! -e {d}/stop ]; do sleep 0.05; done"
+    );
+    let facts = f.facts(&plan);
+    let (quick, stop) = (f.m("quick.pid"), f.m("stop"));
+    f.run_plan(plan, facts, &real(), move || {
+        let reaped = std::panic::catch_unwind(|| {
+            let pid = until("quick.pid", || pid_in(&quick));
+            until("reaped", || {
+                (!Path::new(&format!("/proc/{pid}")).exists()).then_some(())
+            });
+        });
+        // Stopped either way, so a failed wait never leaves the watchdog running.
+        std::fs::write(stop, "").unwrap();
+        reaped.unwrap();
+    });
+    assert_eq!(
+        f.sealed_status()["harness"]["exit"],
+        serde_json::json!({"code": 0})
+    );
+}
+
 /// The real recorder under a watchdog played by hand: `start` (deadline `deadline_in` ms ahead),
 /// `ready`, then `launch` for a `sleep 600` harness. Returns the recorder, the control socket and
 /// the harness; a stale `rec/run-ca.key` stands where the watchdog would write it.
