@@ -290,6 +290,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     lines.extend(first_message(a, c, prompt.as_deref(), &opened.run)?);
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(c.server.host()));
+    lines.extend(crate::net::Egress::load().line());
     lines.extend(plan.version_notes.clone());
     if plan.harness_version.is_none() {
         log::line(&entry_dir, "version_unread", &[]);
