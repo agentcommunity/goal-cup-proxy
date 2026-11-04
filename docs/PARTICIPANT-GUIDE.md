@@ -461,7 +461,7 @@ Every folder problem is listed in one refusal, then "Nothing was created." Fix e
 | `--connector and --hosts are for practice and test runs. A competition run uses the connectors built into goalcup.` | Remove the flags. |
 | `goalcup cannot tell where to keep your runs: HOME is not set to a full path.` | Set `HOME`, or `GOALCUP_HOME`, to a full path outside your project. |
 | `"<file>" sets <key>, which routes around the recorder. Remove it, then run this again.` | Remove that setting from the file named. The line names the file and key, never the value. |
-| `<harness> --version does not show <version>, the version goalcup works with.` | Install that version. |
+| `<program> --version shows <version>; this connector is for <program> <major>.x. Run: goalcup setup --harness <id>` | Run the command it names. OpenCode 1 and 2 share the `opencode` program and have a connector each. |
 | `a run uses "<home>" now. Run this again once it has ended.` | One run at a time can use a harness home. |
 
 These two are warnings, not refusals: the folder looks synced (a sync client may upload `.env.local`

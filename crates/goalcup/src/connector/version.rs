@@ -92,7 +92,7 @@ pub fn same_program(program: &str) -> Vec<(&'static str, String)> {
 }
 
 /// A spec as the participant reads it: `1.` and `1.x` show as `1.x`, anything else as written.
-fn show(spec: &str) -> String {
+pub(crate) fn show(spec: &str) -> String {
     match spec.strip_suffix(".x").or(spec.strip_suffix('.')) {
         Some(nums) => format!("{nums}.x"),
         None => spec.to_string(),

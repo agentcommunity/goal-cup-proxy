@@ -121,7 +121,8 @@ fn write_home(
         server_host: server.host().unwrap_or_default().to_owned(),
     };
     let plan = connector::plan(c, &env, &iso);
-    if let Some(r @ Refusal::HomeLocked { .. }) = &plan.refusal {
+    if let Some(r @ (Refusal::HomeLocked { .. } | Refusal::VersionMismatch { .. })) = &plan.refusal
+    {
         return Err(text::refusal(r));
     }
     let version = plan.harness_version.as_deref().map(|v| {

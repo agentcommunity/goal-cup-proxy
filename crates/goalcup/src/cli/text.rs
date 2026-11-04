@@ -176,9 +176,15 @@ pub fn refusal(r: &Refusal) -> String {
             "\"{}\" sets {key}, which routes around the recorder. Remove it, then run this again.",
             file.display()
         ),
-        Refusal::VersionMismatch { program, want } => format!(
-            "{program} --version does not show {want}, the version goalcup works with. Install \
-             that one, then run this again."
+        Refusal::VersionMismatch {
+            program,
+            want,
+            got,
+            sibling,
+        } => format!(
+            "{program} --version shows {got}; this connector is for {program} {}. Run: goalcup \
+             setup --harness {sibling}",
+            crate::connector::version::show(want)
         ),
     }
 }

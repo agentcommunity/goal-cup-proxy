@@ -64,8 +64,13 @@ pub enum Refusal {
     SettingSet { file: PathBuf, key: String },
     /// Another run holds this harness's isolated home.
     HomeLocked { home: PathBuf },
-    /// No word of `program --version` starts with the connector's `version` prefix.
-    VersionMismatch { program: String, want: String },
+    /// `program --version` shows `got`, which another connector for that program (`sibling`) is for.
+    VersionMismatch {
+        program: String,
+        want: String,
+        got: String,
+        sibling: String,
+    },
 }
 
 /// How a session file is read (PRD-04 section 2).
@@ -235,34 +240,38 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     let harness_version = free
         .then(|| launch::harness_version(&program, &harness_env))
         .flatten();
-    // `want` starts a word of the line, a leading `v` stripped: "2." takes v2.1, never 1.12.
-    let held = |want: &str, got: &str| {
-        let starts = |w: &str| w.strip_prefix('v').unwrap_or(w).starts_with(want);
-        got.split_whitespace().any(starts)
-    };
-    let version_refusal = match (&connector.version, &harness_version) {
-        (Some(want), Some(got)) if !held(want, got) => Some(Refusal::VersionMismatch {
-            program: connector.program.clone(),
-            want: want.clone(),
-        }),
-        _ => None,
-    };
-    // A note holds for a version when a word of the line starts with it and no digit follows:
-    // "0.22.6" is not "0.22.60".
-    let exact = |want: &str, got: &str| {
-        let word = |w: &str| {
-            let rest = w.strip_prefix('v').unwrap_or(w).strip_prefix(want);
-            rest.is_some_and(|r| !r.starts_with(|c: char| c.is_ascii_digit()))
-        };
-        got.split_whitespace().any(word)
-    };
+    let read = harness_version.as_deref().and_then(version::parse);
+    let others: Vec<_> = version::same_program(&connector.program)
+        .into_iter()
+        .filter(|(id, _)| *id != connector.id)
+        .collect();
     let said = |n: &&schema::VersionNote| {
-        let hit = |v: &String| harness_version.as_deref().is_some_and(|got| exact(v, got));
+        let hit = |spec: &String| read.as_ref().is_some_and(|v| version::matches(v, spec));
         n.versions.iter().any(hit)
     };
-    let version_notes: Vec<String> = (connector.version_notes.iter().filter(said))
+    let mut version_notes: Vec<String> = (connector.version_notes.iter().filter(said))
         .map(|n| n.say.clone())
         .collect();
+    let program_name = &connector.program;
+    let version_refusal = match (&connector.version, &read) {
+        (Some(want), Some(v)) if !version::matches(v, want) => {
+            let sibling = others.iter().find(|(_, spec)| version::matches(v, spec));
+            if sibling.is_none() {
+                version_notes.push(version::untested_say(program_name, &v.text, want));
+            }
+            sibling.map(|(id, _)| Refusal::VersionMismatch {
+                program: program_name.clone(),
+                want: want.clone(),
+                got: v.text.clone(),
+                sibling: id.to_string(),
+            })
+        }
+        (Some(want), None) => {
+            version_notes.push(version::unchecked_say(program_name, want, &others));
+            None
+        }
+        _ => None,
+    };
     // `never` first, so `decide` is the one never test for participant and config hosts.
     let mut hosts = connector.hosts.clone();
     hosts.add_never(&env.server_host);
