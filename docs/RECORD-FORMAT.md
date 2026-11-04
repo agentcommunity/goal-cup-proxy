@@ -415,7 +415,9 @@ not listed by the file):
 
 - `listed_hosts_decrypted`: a listed host should be read, not tunnelled. A tunnel to one is `named`
   when a GAP of the tunnel's own reason is on that connection, `fail` when none is; a `sign_in`
-  tunnel to a `never` host of that file is no loss, one to any other listed host is judged as
+  tunnel to a `never` host of that file (or goalcup's own server: a name holding `goalcup`, or
+  `agentcommunity.org` and its subdomains, which the recorder never decrypts and the verifier
+  never lists) is no loss, one to any other listed host is judged as
   above, and any `sign_in` tunnel that moved over 1 MiB (`up` plus `down`) is `named` (fact
   `sign_in_big`). A GAP on a decrypted listed connection is `named`. When the `start` event's
   `hosts_sha256` differs from the verifier's file (an absent, empty or all-zero one is not

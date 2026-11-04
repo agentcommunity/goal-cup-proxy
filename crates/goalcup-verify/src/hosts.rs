@@ -19,8 +19,15 @@ struct Lists {
     never: Vec<String>,
 }
 
-static LISTS: LazyLock<Lists> =
-    LazyLock::new(|| toml::from_str(FILE).expect("connectors/model-hosts.toml parses"));
+static LISTS: LazyLock<Lists> = LazyLock::new(|| {
+    let mut l: Lists = toml::from_str(FILE).expect("connectors/model-hosts.toml parses");
+    // The recorder lowercases `never` as it reads it (connector/hosts.rs `from_file`).
+    l.never.iter_mut().for_each(|n| n.make_ascii_lowercase());
+    l
+});
+
+/// goalcup's own server; the recorder's `OWN_SERVER` (crates/goalcup/src/connector/hosts.rs).
+const OWN_SERVER: &str = "agentcommunity.org";
 
 /// SHA-256 of the file's bytes, lowercase hex: the recorder's `hosts_sha256` for the built-in list.
 pub fn sha256() -> &'static str {
@@ -45,8 +52,29 @@ pub fn kind(host: &str) -> Option<&'static str> {
     .find_map(|(k, list)| hit(list).then_some(k))
 }
 
-/// Whether `host` is a sign-in host the recorder never decrypts.
+/// Whether the recorder never decrypts `host`: a `never` host, or goalcup's own server (a
+/// subdomain of it, or any name holding `goalcup`), the recorder's `decide` rule.
 pub fn never(host: &str) -> bool {
     let host = host.to_ascii_lowercase();
-    LISTS.never.iter().any(|p| host_matches(p, &host))
+    let sub = |before: &str| before.is_empty() || before.ends_with('.');
+    let own = host.contains("goalcup") || host.strip_suffix(OWN_SERVER).is_some_and(sub);
+    own || LISTS.never.iter().any(|p| host_matches(p, &host))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn goalcups_own_server_is_never_as_the_recorder_decides() {
+        for h in [
+            "agentcommunity.org",
+            "Up.AgentCommunity.org",
+            "x.goalcup.dev",
+        ] {
+            assert!(never(h), "{h}");
+            assert_eq!(kind(h), None, "{h}");
+        }
+        assert!(!never("notagentcommunity.org"));
+    }
 }

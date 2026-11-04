@@ -163,3 +163,16 @@ fn a_record_with_another_host_list_keeps_its_own_label() {
         assert_eq!(result(&v, "listed_hosts_decrypted"), want, "{name}");
     }
 }
+
+/// A host the recorder never decrypts as goalcup's own (a name holding `goalcup`, or
+/// `agentcommunity.org` and its subdomains) is never judged, whatever list holds it.
+#[test]
+fn a_sign_in_tunnel_to_goalcups_own_server_is_free() {
+    for (name, host) in [
+        ("tun-own", "goalcup-eval.openai.azure.com"),
+        ("tun-own-uc", "GoalCup-Eval.OpenAI.Azure.com"),
+    ] {
+        let v = tunnel(name, host, "sign_in", (10, 10));
+        assert_eq!(result(&v, "listed_hosts_decrypted"), "pass", "{host}");
+    }
+}
