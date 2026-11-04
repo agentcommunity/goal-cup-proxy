@@ -35,9 +35,10 @@ All times are UTC.
   with `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`
   ([guide](PARTICIPANT-GUIDE.md#2-install)).
 - **Until the start window:** you prepare with `goalcup setup` and practice runs, which are not
-  limited to any window. The release is planned for 6 November, 12:00; it is not a cutoff, and
+  limited to any window. The release is published before the start window; it is not a cutoff, and
   releases may follow (D70).
-- **7 November 2026, 00:00:** the 24-hour start window opens. It closes at 00:00 on 8 November.
+- **Start window:** the 24-hour start window opens on the date on the event site (OWNER-Q date) at 00:00
+  and closes 24 hours later.
 - **During the window:** you finalize your prompt and start your run.
 - **The run's start:** the server opens the run, stamps its official start on its own clock, and
   sets its deadline 168 hours later.

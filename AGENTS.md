@@ -19,7 +19,7 @@ What we build toward, from [VISION.md](VISION.md). Every change is judged agains
 6. **Tell the participant plainly** what was recorded.
 7. **Work with the harnesses people actually use,** run the way they use them.
 
-Less code is better. Cut before you add. Ready by Friday 6 November 2026.
+Less code is better. Cut before you add. Ready one week before the start window opens.
 
 Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), then
 [DECISIONS](docs/DECISIONS.md) from "Owner decisions in force". While the 1.0 build runs, also the

@@ -53,7 +53,7 @@ The build uses each default below until the owner answers.
   then move HARNESS-SETUP to `docs/archive/`. Until then it is a temporary duplicate and still
   describes the removed MCP command (D84).
 
-## Release 1.0 (from the Mac test, 3 Nov)
+## Release 1.0 (one freeze, one release-row run, before the event)
 
 Coverage: [TEST-COVERAGE](docs/plans/2026-10-30-v1.0/TEST-COVERAGE.md). Findings:
 [MAC-LEARNINGS](docs/plans/2026-10-30-v1.0/MAC-LEARNINGS.md).
