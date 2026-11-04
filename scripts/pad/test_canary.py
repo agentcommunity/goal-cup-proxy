@@ -31,7 +31,7 @@ def fake(answers):
 
 def all_known(**over):
     """Every harness verified at KNOWN and answering KNOWN, then the overrides."""
-    tiers = {cid: {"verified": [{"version": v, "os": "macos"}]} for cid, v in KNOWN.items()}
+    tiers = {cid: {"builds": [{"version": v, "os": "macos"}]} for cid, v in KNOWN.items()}
     ans = {name: v for cid, v in KNOWN.items() for kind, name in [canary.SOURCES[cid]] if kind == "npm"}
     ans["NousResearch/hermes-agent"] = json.dumps({"tag_name": "v" + KNOWN["hermes-cli"]})
     ans.update(over)
@@ -44,33 +44,36 @@ def one(cid, tiers, answer):
 
 class Canary(unittest.TestCase):
     def test_new_build_exits_1(self):
-        lines, code = one("claude-code-cli", {"claude-code-cli": {"verified": [{"version": "2.1.312", "os": "macos"}]}}, "2.1.320\n")
+        lines, code = one("claude-code-cli", {"claude-code-cli": {"builds": [{"version": "2.1.312", "os": "macos"}]}}, "2.1.320\n")
         self.assertEqual(lines, ["claude-code-cli latest 2.1.320 verified 2.1.312 (macos) NEW"])
         self.assertEqual(code, 1)
 
     def test_known_build_exits_0(self):
-        lines, code = one("claude-code-cli", {"claude-code-cli": {"verified": [{"version": "2.1.312", "os": "macos"}]}}, "2.1.312\n")
+        lines, code = one("claude-code-cli", {"claude-code-cli": {"builds": [{"version": "2.1.312", "os": "macos"}]}}, "2.1.312\n")
         self.assertTrue(lines[0].endswith("known"), lines)
         self.assertEqual(code, 0)
 
     def test_other_os_still_known(self):
-        lines, code = one("claude-code-cli", {"claude-code-cli": {"verified": [{"version": "2.1.312", "os": "linux"}]}}, "2.1.312")
+        lines, code = one("claude-code-cli", {"claude-code-cli": {"builds": [{"version": "2.1.312", "os": "linux"}]}}, "2.1.312")
         self.assertTrue(lines[0].endswith("known"), lines)
         self.assertEqual(code, 0)
 
     def test_amp_suffix_matches(self):
-        tiers = {"amp-cli": {"verified": [{"version": "0.0.1793664053-ga6248e", "os": "macos"}]}}
+        tiers = {"amp-cli": {"builds": [{"version": "0.0.1793664053-ga6248e", "os": "macos"}]}}
         self.assertTrue(one("amp-cli", tiers, "0.0.1793664053-ga6248e\n")[0][0].endswith("known"))
         lines, code = one("amp-cli", tiers, "0.0.1793664099-gb1c2d3\n")
         self.assertTrue(lines[0].endswith("NEW"), lines)
         self.assertEqual(code, 1)
 
     def test_hermes_v_prefix(self):
-        tiers = {"hermes-cli": {"verified": [{"version": "0.22.5", "os": "macos"}]}}
+        tiers = {"hermes-cli": {"builds": [{"version": "0.22.5", "os": "macos"}]}}
         lines, code = one("hermes-cli", tiers, json.dumps({"tag_name": "v0.22.6"}))
         self.assertIn("latest 0.22.6 ", lines[0])
         self.assertTrue(lines[0].endswith("NEW"), lines)
         self.assertEqual(code, 1)
+
+    def test_no_builds_reads_the_row_os(self):
+        self.assertEqual(canary.known({"hermes-cli": {"version": "0.22.5", "os": "darwin-arm64"}}, "hermes-cli"), [("0.22.5", "darwin-arm64")])
 
     def test_nothing_verified_is_new(self):
         lines, code = one("codex-cli", {"codex-cli": {"tier": "not verified", "version": ""}}, "0.50.0\n")

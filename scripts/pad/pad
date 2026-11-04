@@ -1143,6 +1143,8 @@ def main(argv):
         pad = row_pad(s, pad)
         if not (harness.get("version") and harness.get("version_cmd")):
             raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])
+        if s["where"] == "sandbox" and set(s.get("versions") or []) - {harness["version"]}:  # the box has the pin only
+            raise Usage("versions other than the pin %s run where = \"here\" with here_path (no install step in the box yet)" % harness["version"])
         if s["case"] in ("dodger", "all") and not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(harness.get("model_host"))):
             raise Usage("case dodger: scripts/pad/harnesses/%s.toml needs model_host" % s["harness"])
     except (Usage, OSError, ValueError, TypeError) as e:

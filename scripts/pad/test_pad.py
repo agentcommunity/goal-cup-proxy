@@ -1483,6 +1483,14 @@ class Matrix(unittest.TestCase):
         self.assertEqual(pad.case_list(pad.load_settings(dict(BASE), PADCFG), self.HARNESS)[0], [("direct", "0.22.5")])
         self.assertEqual(pad.case_list(pad.load_settings(dict(BASE, version="0.1"), PADCFG), self.HARNESS)[0], [("direct", "0.1")])
 
+    def test_sandbox_refuses_a_version_off_the_pin(self):  # no install step in the box (G.21 not built)
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        f = os.path.join(d, "s.toml")
+        with open(f, "w") as fh:
+            fh.write('harness = "hermes-cli"\nkey = "deepseek"\nmode = "micro"\nversions = ["0.22.5", "0.22.6"]\n')
+        with mock.patch.object(pad, "run_all", side_effect=AssertionError("ran")), mock.patch("sys.stderr", io.StringIO()):
+            self.assertEqual(pad.main(["pad", f]), 2)
+
     def test_run_carries_its_version(self):
         s = pad.load_settings(dict(BASE, versions=["0.22.5", "0.22.6"]), PADCFG)
         r = pad.Run(s, "direct", PADCFG, self.HARNESS, self.enterContext(tempfile.TemporaryDirectory()), "0.22.6")

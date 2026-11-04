@@ -442,3 +442,12 @@ class VersionCmdEnv(unittest.TestCase):
             with self.assertRaises(padrun.Step):  # no version printed: setup stops after the first call
                 r.setup(None)
         self.assertEqual(seen[0]["env"]["PAD_VERSION"], "1.18.0")
+
+    def test_required_version_mismatch_fails_on_mac(self):
+        r = bare()
+        r.s, r.h = {"harness_id": "hermes-cli", "version": "0.22.6", "version_required": True}, {"version_cmd": "hermes --version"}
+        with mock.patch.object(padrun, "sh", lambda argv, **kw: mock.Mock(stdout="Hermes Agent v0.22.5\n", stderr="", returncode=0)):
+            with self.assertRaises(padrun.Step) as e:
+                r.setup(None)
+        self.assertEqual(e.exception.args[0], "FAIL")
+        self.assertIn("requested 0.22.6, found 0.22.5", e.exception.args[1])

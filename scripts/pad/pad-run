@@ -316,6 +316,8 @@ class Run:
         version = harness_version.parse(next((l for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()), ""))  # stdout's first line, else stderr's, as goalcup; section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
         if not version:
             raise Step("FAIL", "%s not installed" % s["harness_id"])
+        if s.get("version_required") and version != s["version"]:  # a versions list: the row must be that build
+            raise Step("FAIL", "requested %s, found %s; install it, for example under here_path" % (s["version"], version))
         self.st.update(harness_version=version, plain_planted=True)
         known, plain = self.plant()
         known += [open(os.path.join(self.keys, name)).read().strip() for name in s["key_files"]]

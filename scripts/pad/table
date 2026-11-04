@@ -109,6 +109,10 @@ def tier_for(cid, rows, lines=None):
         return said
     if not any(r.get("connector") == cid for r in rows):
         return ("not verified", "", "", "not yet run on the pad")
+    note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
+    done = builds(cid, rows, lines)  # a version matrix: each case's latest row may be on another version
+    if done:
+        return ("verified", *max(done, key=lambda p: vkey(p[0])), note[0] if note else "")
     got = [(c, latest(rows, tier_row((cid,), c))) for c in required(cid, rows, lines)]
     reasons = []
     for _, r in got:
@@ -125,13 +129,10 @@ def tier_for(cid, rows, lines=None):
     reasons += [(4, "case rows on different versions or systems")] * (len(pairs) > 1)  # section 9: "on that version"
     reasons += [(4, "no harness version on a case row")] * ("" in {v for v, _ in pairs})  # P7: a named version
     reasons += [(4, "no system on a case row")] * ("" in {o for _, o in pairs})
-    if reasons:
-        return ("not verified", "", "", min(reasons, key=lambda x: x[0])[1])
-    note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
-    return ("verified", *pairs.pop(), note[0] if note else "")
+    return ("not verified", "", "", min(reasons, key=lambda x: x[0])[1] if reasons else "no verified build")
 
-def vkey(v):  # numeric parts numerically, any other part below them
-    return [(1, int(p)) if p.isdigit() else (0, p) for p in re.split(r"[.+-]", v)]
+def vkey(v):  # numeric parts numerically, any other part below them; the end above a pre-release (0.22.6 > 0.22.6-rc1)
+    return [(1, int(p)) if p.isdigit() else (0, p) for p in re.split(r"[.+-]", v)] + [(0.5, "")]
 
 def builds(cid, rows, lines=None):
     """The verified (version, os) builds, newest first within each os, the last 5 per os: every required case's
