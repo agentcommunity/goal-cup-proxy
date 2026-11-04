@@ -10,7 +10,8 @@ you write two small data files, run one command, read one table. No Rust, no tes
 
 Rules that never bend:
 
-- A contribution is data. Add no `.rs` file, and write no test.
+- A contribution is data. The one allowed `.rs` change is the line `entry!("<id>")` in
+  `crates/goalcup/src/connector/builtin.rs`. Add no other `.rs` file, and write no test.
 - Never set a model base URL in a connector. The pad file may hold the provider and model
   settings a participant would write, because it is test data and goalcup never reads it.
 - Never write into a real harness home (`~/.claude`, `~/.codex`, `~/.hermes`, ...). The pad
@@ -26,8 +27,9 @@ Rules that never bend:
    [docs/harnesses/README.md](../../docs/harnesses/README.md)). Then write `connectors/<id>.toml`:
    one flat file, data only. Every key and the rule that refuses it:
    [docs/CONNECTOR-SCHEMA.md](../../docs/CONNECTOR-SCHEMA.md). Copy a neighbour such as
-   `connectors/hermes-cli.toml`. A maintainer adds the one line in
-   `crates/goalcup/src/connector/builtin.rs` when the PR merges. A version with a known problem
+   `connectors/hermes-cli.toml`. Add one line, `entry!("<id>")`, to the list in
+   `crates/goalcup/src/connector/builtin.rs` in the same PR; `tests/connector_builtin.rs` fails
+   without it. A version with a known problem
    gets a `[[version_notes]]` row (`versions`, `say`): said at start, recorded, never a refusal
    ([Harness versions](../../docs/CONNECTOR-SCHEMA.md#harness-versions)).
 2. **Write `scripts/pad/harnesses/<id>.toml`**, from

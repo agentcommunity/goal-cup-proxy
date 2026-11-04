@@ -1,9 +1,10 @@
 # Connector schema
 
-A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A new
-connector is its TOML file plus one `entry!("<id>")` line in `crates/goalcup/src/connector/builtin.rs`, the
-one source file that names connector files; `tests/connector_builtin.rs` fails on a file missing from that
-list or an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
+A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A
+harness PR adds that file plus one line, `entry!("<id>")`, to the list in
+`crates/goalcup/src/connector/builtin.rs`, the only `.rs` change it may make and the one source file
+that names connector files. `tests/connector_builtin.rs` fails on a file missing from that list or
+an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
 connector. The `start` event names the connector (`connector`, `connector_source`,
 `connector_sha256`) and the host list's hash (`hosts_sha256`).
 
