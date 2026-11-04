@@ -53,8 +53,9 @@ not written is a log line, not a refusal.
 ## The usage table
 
 `[usage]` says where a harness keeps its threads. The recorder accepts it and never reads it;
-`goalcup-verify usage` does. Every key is optional. A built-in table with an unknown key or a broken rule fails the gate; at
-run time it reads as none. A connector without the table is wire only.
+`goalcup-verify usage` does. Every key is optional. A built-in table with an unknown key or a
+broken rule fails the gate; at run time it reads as none. A connector without the table is wire
+only.
 
 | Key | Type | What it says |
 |---|---|---|
