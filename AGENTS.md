@@ -52,7 +52,8 @@ what it needs: [README](README.md#the-gate).
 - **Never set a model base URL on any harness.** The only wire path is the loopback recording proxy,
   reached through the harness's process-scoped `HTTPS_PROXY` (D1, D81). The test pad configures a
   harness the way a participant would (for example pointing it at DeepSeek or a gateway, in
-  goalcup's isolated home); goalcup's own launch code never does.
+  goalcup's isolated home); goalcup's own launch code never does. One exception (owner, 4 Nov
+  2026): a connector's `ca_settings` trust entry names the real provider address, never the proxy.
 - **Goal Cup Proxy records and never manages the agent.** No prompting, no auto "keep going", no
   finish tool. The participant types the prompt and may type only "keep going". One exception: D66,
   the agent may ask `goalcup time-left` how much time is left (pull only, nothing is pushed). A full
