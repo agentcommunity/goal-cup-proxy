@@ -98,7 +98,8 @@ pub struct Honesty {
     refused: BTreeSet<(String, String)>,
     hosts: BTreeSet<String>,
     tunnels_named: BTreeMap<String, u64>,
-    /// The start event's `hosts_sha256` is not this build's (an absent one is not judged).
+    /// The start event's `hosts_sha256` is not this build's (an absent, empty or all-zero one,
+    /// as test builds write, is not judged).
     other_list: bool,
     n: Counts,
     checks: Checks,
@@ -215,7 +216,8 @@ impl Honesty {
             };
             set.insert(h.into());
         } else if is("ev", "start") {
-            let sha = e.get("hosts_sha256").and_then(Value::as_str);
+            let sha = (e.get("hosts_sha256").and_then(Value::as_str))
+                .filter(|h| h.bytes().any(|b| b != b'0'));
             self.other_list |= sha.is_some_and(|h| h != hosts::sha256());
             let Some(Value::Object(by_source)) = e.get("hosts") else {
                 return;
@@ -285,7 +287,7 @@ impl Honesty {
                 self.listed.insert(c.host.clone());
                 if !c.tunnel {
                     inc(&mut self.n.decrypted, 1);
-                } else if c.reason == "sign_in" {
+                } else if c.reason == "sign_in" && hosts::never(&c.host) {
                     inc(&mut self.n.sign_in, 1);
                 }
                 let key = c.fp.clone().map(|f| (c.host.clone(), f));

@@ -8,8 +8,10 @@ use std::sync::LazyLock;
 
 const FILE: &str = include_str!("../../../connectors/model-hosts.toml");
 
-/// The arrays honesty reads; the others (`pinned`, `expected`) name no kind.
-#[derive(Deserialize)]
+/// The arrays honesty reads; the others (`pinned`, `expected`) name no kind. A missing array is
+/// empty, as in the recorder's parser.
+#[derive(Default, Deserialize)]
+#[serde(default)]
 struct Lists {
     provider: Vec<String>,
     gateway: Vec<String>,

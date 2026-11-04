@@ -119,3 +119,22 @@ fn a_fresh_record_and_an_old_one_without_the_hash_do_not_warn() {
     let v = with_hosts_sha256("hosts-none", None);
     assert_eq!(result(&v, "listed_hosts_decrypted"), "pass");
 }
+
+#[test]
+fn an_empty_or_all_zero_host_list_hash_is_absent() {
+    for h in ["", &"0".repeat(64)] {
+        let v = with_hosts_sha256("hosts-zero", Some(h));
+        assert_eq!(result(&v, "listed_hosts_decrypted"), "pass", "{h:?}");
+    }
+}
+
+/// The committed 1.0.0 record (index Review focus 4) is read without a warn on its host list.
+#[test]
+fn a_1_0_0_fixture_record_passes_the_listed_check() {
+    let dir = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/pad/fixtures/k7-part"
+    );
+    let v = check(std::path::Path::new(dir), &[]).1;
+    assert_eq!(result(&v, "listed_hosts_decrypted"), "pass");
+}
