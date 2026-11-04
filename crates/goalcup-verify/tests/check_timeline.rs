@@ -115,9 +115,9 @@ fn a_ragged_span_across_buckets_loses_under_a_ms_per_row() {
     );
 }
 
-/// A `standard` entry with a crash, its first LINK after the `recorder_down` GAP moved by `f`,
-/// and the GAP's end wall too when `gap` is set.
-fn link_wall_after_down(name: &str, gap: bool, f: impl Fn(u64) -> u64) -> std::path::PathBuf {
+/// A `standard` entry with a crash; the `recorder_down` GAP's end wall and the first LINK after
+/// it are moved by `f`.
+fn link_wall_after_down(name: &str, f: impl Fn(u64) -> u64) -> std::path::PathBuf {
     let mut e = Entry::new(name);
     e.standard();
     e.crash("killed", 60_000);
@@ -125,18 +125,8 @@ fn link_wall_after_down(name: &str, gap: bool, f: impl Fn(u64) -> u64) -> std::p
     e.count();
     let dir = e.seal();
     mutate(&dir, None, |recs| {
-        let down = find(recs, |r| {
-            matches!(
-                r,
-                Record::Gap {
-                    reason: GapReason::RecorderDown,
-                    ..
-                }
-            )
-        });
-        if let Record::Gap { end_wall, .. } = &mut recs[down]
-            && gap
-        {
+        let down = find(recs, is_down);
+        if let Record::Gap { end_wall, .. } = &mut recs[down] {
             *end_wall = f(*end_wall);
         }
         let i = down + find(&recs[down..], |r| matches!(r, Record::Link { .. }));
@@ -146,23 +136,61 @@ fn link_wall_after_down(name: &str, gap: bool, f: impl Fn(u64) -> u64) -> std::p
     })
 }
 
+fn is_down(r: &Record) -> bool {
+    matches!(
+        r,
+        Record::Gap {
+            reason: GapReason::RecorderDown,
+            ..
+        }
+    )
+}
+
+/// Debug build, a subprocess and up to 100k JSON rows take about 3 s; uncapped takes minutes.
+/// The row bound is the real proof; the time bound only catches a run-away.
+const SLOW: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// cr-format-verify-4: a forged LINK wall time cannot make the timeline allocate a row per
 /// bucket up to u64::MAX (here with the off span forged to reach it); the wall/mono mismatch is
 /// named.
 #[test]
 fn forged_link_wall_does_not_blow_up_the_timeline() {
-    let dir = link_wall_after_down("tl-forge", true, |_| u64::MAX);
+    let dir = link_wall_after_down("tl-forge", |_| u64::MAX);
     let t = std::time::Instant::now();
     let (_, v) = check(&dir, &[]);
-    assert!(t.elapsed() < std::time::Duration::from_secs(5));
+    assert!(t.elapsed() < SLOW);
     assert!(rows(&v).len() <= 100_000, "{} rows", rows(&v).len());
     assert_eq!(result(&v, "wall_sane"), "named");
+}
+
+/// Many forged off spans share one bucket budget: 1000 `recorder_down` GAPs from the first PART
+/// to u64::MAX cost no more than one, and the off total is kept.
+#[test]
+fn a_thousand_forged_off_spans_share_one_bucket_budget() {
+    let dir = link_wall_after_down("tl-forge-many", |_| u64::MAX);
+    let mut n = 0;
+    mutate(&dir, None, |recs| {
+        let Record::Part { wall_ns: first, .. } = recs[0] else {
+            panic!("no PART first")
+        };
+        let down = find(recs, is_down);
+        let mut g = recs[down].clone();
+        if let Record::Gap { start_wall, .. } = &mut g {
+            *start_wall = first;
+        }
+        recs.splice(down + 1..down + 1, std::iter::repeat_n(g, 1000));
+        n = recs.len();
+    });
+    let t = std::time::Instant::now();
+    let (_, v) = check(&dir, &[]);
+    assert!(t.elapsed() < SLOW, "{:?}", t.elapsed());
+    assert!(rows(&v).len() <= 100_000 + n, "{} rows", rows(&v).len());
 }
 
 /// A clock step after boot is legal: a LINK a day off its PART's wall plus mono passes.
 #[test]
 fn a_link_wall_a_day_off_the_mono_clock_is_fine() {
-    let dir = link_wall_after_down("tl-day", false, |w| w + 86_400_000_000_000);
+    let dir = link_wall_after_down("tl-day", |w| w + 86_400_000_000_000);
     let (_, v) = check(&dir, &[]);
     assert_eq!(result(&v, "wall_sane"), "pass");
 }

@@ -14,7 +14,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A timeline bucket, ns.
 const BUCKET: u64 = 600_000_000_000;
-/// At most this many buckets past the first PART: a forged wall time cannot grow the timeline.
+/// The last bucket is at most this far past the first PART, and all off spans together loop over
+/// at most this many buckets: a forged wall time cannot spread them over more rows.
 const MAX_BUCKETS: u64 = 100_000;
 
 /// The record's native and snapshot streams, by the path their OPEN meta names.
@@ -127,6 +128,7 @@ impl Tally {
             .last
             .min(first.saturating_add(MAX_BUCKETS * BUCKET - 1));
         let end = self.last.saturating_sub(first) / BUCKET;
+        let mut budget = MAX_BUCKETS;
         for (s, e) in std::mem::take(&mut self.off) {
             if e <= s {
                 continue;
@@ -145,7 +147,15 @@ impl Tally {
             if e <= s {
                 continue;
             }
-            for i in (s - first) / BUCKET..=(e - 1 - first) / BUCKET {
+            // A span past the shared budget goes whole to the last bucket, so off_ms is kept.
+            let (a, b) = ((s - first) / BUCKET, (e - 1 - first) / BUCKET);
+            if b - a + 1 > budget {
+                let x = self.rows.entry(end).or_default();
+                x[5] = x[5].saturating_add(e - s);
+                continue;
+            }
+            budget -= b - a + 1;
+            for i in a..=b {
                 let lo = first + i * BUCKET;
                 let ns = e.min(lo.saturating_add(BUCKET)) - s.max(lo);
                 let x = self.rows.entry(i).or_default();
