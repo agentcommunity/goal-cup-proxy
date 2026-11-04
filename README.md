@@ -38,10 +38,10 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
    GitHub repository (no README, `.gitignore` or licence). Make a fine-grained token for that one
    repository: Contents read and write, expiry 30 days. Make a new folder holding `.env.local`
    (exactly one line, `GH_TOKEN=<token>`) and a `.gitignore` with the line `.env*`. Write your
-   prompt in a file outside that folder, for example `prompt.txt`. Details:
+   prompt in a file outside that folder, for example `~/goal-prompt.txt`. Details:
    [the guide, step 6](docs/PARTICIPANT-GUIDE.md#6-your-run).
 5. **Start** inside the start window, in that folder:
-   `goalcup start --repo <you>/<repo> --prompt prompt.txt`. goalcup checks the folder and the
+   `goalcup start --repo <you>/<repo> --prompt ~/goal-prompt.txt`. goalcup checks the folder and the
    repository before it asks for the browser approval. Your first message is the push lines and
    your prompt in one block; paste it as the first thing you send. After it, the only message you
    may ever type is "keep going". Delete the token after your run.

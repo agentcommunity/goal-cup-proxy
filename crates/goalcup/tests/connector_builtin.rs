@@ -55,6 +55,28 @@ fn every_connector_file_is_built_in_and_loads_by_its_id() {
 }
 
 #[test]
+fn a_program_name_picks_its_connector_and_an_ambiguous_one_lists_both() {
+    let id = |arg: &str| connector::load(arg, None).unwrap().id;
+    assert_eq!(id("claude"), "claude-code-cli");
+    assert_eq!(id("codex"), "codex-cli");
+    assert_eq!(id("claude-code-cli"), "claude-code-cli");
+    let both = connector::load("opencode", None).unwrap_err().to_string();
+    assert!(
+        both.contains("opencode-cli") && both.contains("opencode2-cli"),
+        "{both}"
+    );
+    assert!(!both.contains("claude-code-cli"), "{both}");
+}
+
+#[test]
+fn an_unknown_id_lists_every_valid_id() {
+    let e = connector::load("nonesuch", None).unwrap_err().to_string();
+    for (id, _) in builtin::CONNECTORS {
+        assert!(e.contains(id), "{e}");
+    }
+}
+
+#[test]
 fn the_shared_host_list_parses() {
     let bytes = std::fs::read(connectors_dir().join("model-hosts.toml")).unwrap();
     let hosts = HostList::from_file(&bytes, "model-hosts.toml").unwrap();

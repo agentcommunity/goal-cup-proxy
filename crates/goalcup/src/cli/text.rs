@@ -38,8 +38,8 @@ Exit codes: 0 done; 1 refused, and you can fix it; 3 the command could not do it
     )
 }
 
-pub const FILE_FLAGS_COMPETE: &str = "--connector and --hosts are for practice and test runs. \
-A competition run uses the connectors built into goalcup.";
+pub const FILE_FLAGS_COMPETE: &str = "--connector, --hosts and a connector file given to --harness \
+are for practice and test runs. A competition run uses the connectors built into goalcup.";
 
 pub const BAD_SERVER: &str = "GOALCUP_SERVER must be off, an https:// address, or an http:// \
 address on this computer (127.0.0.1, ::1 or localhost).";
@@ -114,7 +114,16 @@ pub fn prompt_inside(file: &Path) -> String {
 }
 
 pub fn prompt_missing(file: &Path) -> String {
-    format!("The prompt file \"{}\" does not exist.", file.display())
+    format!(
+        "The prompt file \"{}\" does not exist. A relative path is taken inside the project folder; \
+         give a path outside it, such as ~/goal-prompt.txt.",
+        file.display()
+    )
+}
+
+/// A server message without its closing full stop and spaces, so the sentence around it adds one.
+fn sentence(said: &str) -> String {
+    said.trim_end_matches(['.', ' ']).to_string()
 }
 
 pub fn synced_folder(project: &Path) -> String {
@@ -154,7 +163,13 @@ pub fn harness_found(name: &str, version: Option<&str>, program: &Path) -> Strin
 }
 
 pub fn not_installed(name: &str) -> String {
-    format!("{name} is not installed. Install it, then run goalcup setup again.")
+    format!("{name} is not installed. Install it, then run the command again.")
+}
+
+pub fn setup_needs_terminal(name: &str) -> String {
+    format!(
+        "Nothing was written and sign-in was not checked. Run goalcup setup in a terminal to sign in to {name}, or goalcup setup --yes to write its settings only."
+    )
 }
 
 pub fn no_harness(installed: &[&str]) -> String {
@@ -234,6 +249,8 @@ pub fn no_sleep_lock(why: &str) -> String {
     )
 }
 
+pub const LID_NOTE: &str = "On a laptop the lock does not keep the Mac awake on battery or with the lid closed: use mains power and keep the lid open.";
+
 pub const SERVER_OFF: &str = "Server check skipped: GOALCUP_SERVER=off, so nothing is uploaded.";
 
 pub fn server_unreachable(e: &ServerError) -> String {
@@ -280,19 +297,25 @@ pub fn approval_stopped(why: &str) -> String {
 }
 
 pub fn approval_refused(said: &str) -> String {
-    format!("The server refused the approval request: {said}. {NOTHING_CREATED}")
+    format!(
+        "The server refused the approval request: {}. {NOTHING_CREATED}",
+        sentence(said)
+    )
 }
 
 /// Ctrl-C landed after the server opened the run and it was saved: nothing was launched.
 pub fn opened_then_stopped(run: &str) -> String {
     format!(
-        "You pressed Ctrl-C after the run {run} was opened and saved. The harness was not started. \
-         Running goalcup start again opens a new run; the run {run} stays open and its deadline keeps running."
+        "You pressed Ctrl-C after run {run} was opened and saved. The harness was not started. \
+         Its deadline keeps running. To go on, run: goalcup continue {run}"
     )
 }
 
 pub fn open_refused(said: &str) -> String {
-    format!("The server did not open the run: {said}. {NOTHING_CREATED} Run the command again.")
+    format!(
+        "The server did not open the run: {}. {NOTHING_CREATED} Run the command again.",
+        sentence(said)
+    )
 }
 
 pub fn bad_answer() -> String {
@@ -313,7 +336,8 @@ pub fn repo_missing(repo: &str) -> String {
 
 pub fn repo_not_empty(repo: &str) -> String {
     format!(
-        "{repo} already has commits. A run needs a new, empty, public repository: no README, .gitignore or license. {NOTHING_CREATED}"
+        "{repo} already has commits. A run needs a new, empty, public repository: no README, .gitignore or license. {NOTHING_CREATED} \
+         To go on with a run you already started, run: goalcup continue."
     )
 }
 
@@ -325,7 +349,7 @@ pub fn masking(db: Option<&str>) -> String {
         ("", format!(", and {n}'s database"))
     });
     format!(
-        "Goal Cup Proxy hides known secret shapes in memory, before anything is saved: API keys with a \
+        "goalcup hides known secret shapes in memory, before anything is saved: API keys with a \
          known prefix, login headers, cookies, passwords in URLs, private keys, login tokens, values \
          named like `api_key`, `secret`, `token` or `password`, and your project's GitHub token. The \
          values of known keys found in your project's own files and in your environment are hidden \
@@ -467,7 +491,7 @@ pub fn gap_words(name: &str) -> String {
         "protocol_other" => "a connection in a form goalcup does not read",
         "source_changed" => "a session file was replaced or cut short",
         "tls_refused" => "the program refused the recorder",
-        "pinned" => "the host list pins it",
+        "pinned" => "the host list says to pass it through unread",
         "cut_at_seal" => "still arriving when the part ended",
         "mask_failed" => "goalcup could not check it for secrets, so it dropped it",
         "upstream_untrusted" => "the model service's certificate was not one goalcup trusts",
@@ -541,7 +565,8 @@ pub fn state_line(state: &State, run: &str) -> String {
         State::Null { since } => format!(
             "{}it stopped right after each restart, so goalcup lets your agent's traffic pass \
              unrecorded for now. Your agent keeps working. goalcup tries again at most 5 minutes \
-             apart until the run ends. The server is told.",
+             apart until the run ends. The server is told. You need do nothing. If it stays off, \
+             write to {SUPPORT_ADDRESS}.",
             off(since)
         ),
         State::NotAnswering { since } => format!(
@@ -626,7 +651,8 @@ pub fn quiet_proxy(name: &str) -> String {
 pub fn no_request_yet() -> String {
     format!(
         "{PROBLEM} No model request was written yet. If your agent is working, it may not use the \
-         recording proxy."
+         recording proxy. Give it a few minutes, then run goalcup status again. If this stays \
+         after 10 minutes of work, write to {SUPPORT_ADDRESS}."
     )
 }
 
@@ -752,7 +778,7 @@ pub fn continue_now(run: &str) -> String {
 pub fn no_request_written(name: &str, pinned: Option<&str>) -> String {
     match pinned {
         Some(host) => format!(
-            "No model request was written. The host list pins {host}, so its traffic passed through unread."
+            "No model request was written. The host list says to pass {host} through unread, so its traffic was not recorded."
         ),
         None => format!(
             "No model request was written. {name} may not use the recording proxy, or it made no call."
@@ -1037,12 +1063,28 @@ this computer, so there is no time left to show.";
 pub const PUSH_FRAME: &str = "Your first message must start with these lines. Without them your \
 agent cannot push, and you may not send them later.";
 
+/// After the push lines on `continue` when `start` never wrote the first message.
+pub const PROMPT_AFTER_PUSH: &str =
+    "If you gave goalcup start a --prompt, put it after these lines, in the same first message.";
+
 pub fn first_message(file: &Path, copied: bool) -> String {
     let clip = if copied { "on your clipboard and " } else { "" };
     format!(
         "Your first message (the push block, then your prompt) is {clip}in {}. Paste it once as your first message and press Enter.",
         file.display()
     )
+}
+
+/// `status` of a run whose newest part was never started (Ctrl-C after the open).
+pub fn not_launched(run: &str, name: &str) -> String {
+    format!(
+        "Run {run} was opened but {name} was not started. To go on, run: goalcup continue {run}"
+    )
+}
+
+/// The `status` line for the file holding the first message.
+pub fn first_message_line(file: &Path) -> String {
+    format!("First message: {}", file.display())
 }
 
 pub fn prompt_not_utf8(file: &Path) -> String {
@@ -1130,6 +1172,27 @@ pub const NEEDS_REPO: &str =
     "a real run needs --repo <owner>/<name>, its new, empty, public GitHub repository.";
 
 pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harness <id>";
+
+/// The end screen's first line when the harness never started; `kind` is the logged io error.
+pub fn harness_not_started(name: &str, kind: Option<&str>, run: &str) -> String {
+    // `PermissionDenied` reads "permission denied".
+    let words = |k: &str| {
+        k.chars().enumerate().fold(String::new(), |mut s, (i, ch)| {
+            if ch.is_uppercase() && i > 0 {
+                s.push(' ');
+            }
+            s.extend(ch.to_lowercase());
+            s
+        })
+    };
+    match kind.map(words) {
+        Some(kind) => format!(
+            "{name} did not start ({kind}). Check that it runs on its own, then run goalcup \
+             continue {run}."
+        ),
+        None => format!("{name} did not start."),
+    }
+}
 
 pub fn mask_refused() -> String {
     format!("goalcup could not set up masking, so nothing was started. Write to {SUPPORT_ADDRESS}.")
@@ -1285,12 +1348,19 @@ pub fn file_changed(what: &str, first: &str) -> String {
     )
 }
 
+pub fn wrong_folder(run: &str, folder: &str) -> String {
+    format!("Run {run} was started in \"{folder}\". Run goalcup continue there.")
+}
+
 pub fn updated(name: &str, from: &str, to: &str) -> String {
     format!("{name} was updated from {from} to {to} since the last part.")
 }
 
 pub fn refused(said: &str) -> String {
-    format!("The server did not continue the run: {said}. Nothing was started.")
+    format!(
+        "The server did not continue the run: {}. Nothing was started.",
+        sentence(said)
+    )
 }
 
 // `goalcup recover` (section 3.2).

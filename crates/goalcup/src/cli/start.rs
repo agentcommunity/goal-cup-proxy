@@ -5,6 +5,7 @@
 //! code lives (P14): the only timers are `approve`'s. No token or credential is printed.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -121,7 +122,7 @@ pub(super) fn hand_over(ready: Ready) -> ExitCode {
         let handler = on_signal as *const () as libc::sighandler_t;
         // SAFETY: `signal` with a handler that does nothing.
         unsafe { libc::signal(libc::SIGINT, handler) };
-        println!("{line}");
+        tell(&line);
     });
     let code = watchdog::run(plan, facts);
     // Joined before the reset, so the thread cannot install the handler after it.
@@ -135,14 +136,21 @@ pub(super) fn hand_over(ready: Ready) -> ExitCode {
     let refused =
         code == ExitCode::from(watchdog::MASK_REFUSED) && !super::status_json(&dir).exists();
     let not_started = code == ExitCode::from(watchdog::NOT_STARTED);
-    print!(
+    let _ = write!(
+        std::io::stdout(),
         "{}",
         finish::closing(&dir, &name, &run, refused, not_started)
     );
     if !refused {
-        finish::wrap_up(&dir, &mut |l| println!("{l}"));
+        finish::wrap_up(&dir, &mut tell);
     }
     if refused { ExitCode::from(1) } else { code }
+}
+
+/// One line to the terminal. A closed terminal is not an error: the run goes on, so a failed
+/// write is dropped (`println!` would panic on it).
+fn tell(line: &str) {
+    let _ = writeln!(std::io::stdout(), "{line}");
 }
 
 fn stop(text: String) -> Stop {
@@ -167,6 +175,13 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
         (_, _, Some(_)) => RunMode::Competition,
         _ => return Err(stop(text::NEEDS_REPO.to_owned())),
     };
+    // `load` reads a file for a `/` or `.toml`: in a competition run only built-ins count.
+    if mode == RunMode::Competition
+        && a.harness
+            .is_some_and(|h| h.contains('/') || h.ends_with(".toml"))
+    {
+        return Err(stop(text::FILE_FLAGS_COMPETE.to_owned()));
+    }
     // Step 1: load the connector. `load` only reads, so a refused start has still created nothing.
     let saved = super::saved_harness(&c.home);
     let id = match (a.connector, a.harness.map(str::to_owned).or(saved)) {
@@ -205,6 +220,9 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
     let Some(connector) = loaded else {
         return Err(stop(text::NO_HARNESS_SAVED.to_owned()));
     };
+    if !connector::launch::resolve_program(&connector.program, &c.vars).is_absolute() {
+        return Err(stop(text::not_installed(&connector.name)));
+    }
     let env = Env {
         vars: c.vars.clone(),
         workspace: c.project.clone(),
@@ -400,32 +418,45 @@ pub(super) fn start_facts(
 /// Section 8: the push block and the prompt, written to `first-message.txt` and put on the
 /// clipboard; the lines the launch block shows for them.
 fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<Vec<String>, Stop> {
-    let block = a.repo.map(|repo| {
-        let token = c.project.join(".env.local");
-        let url = format!("https://github.com/{repo}");
-        push::block(
-            &url,
-            "Goal Cup",
-            text::SUPPORT_ADDRESS,
-            ".env.local",
-            &token,
-        )
-    });
     let Some(prompt) = prompt else {
-        let Some(block) = block else {
-            return Ok(vec![]);
-        };
-        push::clipboard::copy(&block.join("\n"), &c.vars);
-        let mut lines = vec![text::PUSH_FRAME.to_owned()];
-        lines.extend(block.iter().map(|l| format!("  {l}")));
-        return Ok(lines);
+        return Ok(a
+            .repo
+            .map(|repo| push_only(repo, &c.project, &c.vars))
+            .unwrap_or_default());
     };
+    let block = a.repo.map(|repo| push_block(repo, &c.project));
     let dir = super::run_dir(&c.home, run);
     let file = dir.join("first-message.txt");
     let message = push::write_first_message(&dir, block.as_deref(), prompt)
         .map_err(|e| Stop { text: e, code: 3 })?;
     let copied = push::clipboard::copy(&message, &c.vars);
     Ok(vec![text::first_message(&file, copied)])
+}
+
+fn push_block(repo: &str, project: &Path) -> Vec<String> {
+    let token = project.join(".env.local");
+    let url = format!("https://github.com/{repo}");
+    push::block(
+        &url,
+        "Goal Cup",
+        text::SUPPORT_ADDRESS,
+        ".env.local",
+        &token,
+    )
+}
+
+/// The push lines alone, with no prompt: put on the clipboard, and the lines the launch block
+/// shows for them.
+pub(super) fn push_only(
+    repo: &str,
+    project: &Path,
+    vars: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let block = push_block(repo, project);
+    push::clipboard::copy(&block.join("\n"), vars);
+    let mut lines = vec![text::PUSH_FRAME.to_owned()];
+    lines.extend(block.iter().map(|l| format!("  {l}")));
+    lines
 }
 
 /// One row of `tiers.toml`; the file also holds a reason, which is not shown.

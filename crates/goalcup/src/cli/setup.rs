@@ -76,14 +76,13 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
     if !program.is_absolute() {
         return fail(&text::not_installed(&c.name));
     }
-    let fix = if yes || ask {
-        match write_home(&c, &home, &server, vars.clone(), ask) {
-            Ok(fix) => fix,
-            Err(e) => return fail(&e),
-        }
-    } else {
+    if !(yes || ask) {
         put(&text::harness_found(&c.name, None, &program));
-        None
+        return fail(&text::setup_needs_terminal(&c.name));
+    }
+    let fix = match write_home(&c, &home, &server, vars.clone(), ask) {
+        Ok(fix) => fix,
+        Err(e) => return fail(&e),
     };
     machine(&home, &server, &vars);
     let db = c.native.iter().any(|row| row.form == Form::Final);

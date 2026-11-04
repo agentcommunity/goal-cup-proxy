@@ -249,6 +249,38 @@ fn status_command_reads_the_files() {
     assert!(!String::from_utf8_lossy(&plain.stdout).contains(text::PART_RECORDED));
 }
 
+/// The first message's path comes back in `status` for the run's first part, and only when the
+/// file exists.
+#[test]
+fn status_shows_where_the_first_message_is() {
+    let home = TempHome::new();
+    let part = part(&home.goalcup_home());
+    let run_dir = part.parent().unwrap();
+    put(run_dir, "server.json", &server_json());
+    put(&part, "status.json", &status(Mode::Recording));
+    let none = goalcup(&home, &["status"]);
+    assert!(!String::from_utf8_lossy(&none.stdout).contains("first-message.txt"));
+    let file = run_dir.join("first-message.txt");
+    std::fs::write(&file, "push\n\nprompt").unwrap();
+    let shown = String::from_utf8_lossy(&goalcup(&home, &["status"]).stdout).into_owned();
+    assert!(shown.contains(&file.display().to_string()), "{shown}");
+}
+
+/// A run opened but never launched (Ctrl-C after the open: no part folder) says so and names
+/// `goalcup continue`, and does not send the participant to support.
+#[test]
+fn status_of_a_run_that_never_launched_says_so() {
+    let home = TempHome::new();
+    let part = part(&home.goalcup_home());
+    put(part.parent().unwrap(), "server.json", &server_json());
+    let out = goalcup(&home, &["status"]);
+    assert_eq!(out.status.code(), Some(1));
+    let all =
+        String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout);
+    assert!(all.contains(&format!("goalcup continue {RUN}")), "{all}");
+    assert!(!all.contains(text::SUPPORT_ADDRESS), "{all}");
+}
+
 /// A sealed part shows its end screen after the block (point 6), so a recovered part's counts are
 /// reachable; `--json` is unchanged.
 #[test]
@@ -297,4 +329,74 @@ fn an_expected_tunnel_is_not_a_problem() {
         problems(&st, &State::Recording, &cx),
         vec![text::long_tunnel("t.example.net", None, 3)]
     );
+}
+
+/// Every state line that starts `PROBLEM:` ends in something the participant can do: a command to
+/// run, the support address, or the plain word that nothing is needed. So does a missing first request.
+#[test]
+fn every_problem_line_says_what_to_do() {
+    let states = [
+        S::Recover { since: T0 },
+        S::Continue { since: T0 },
+        S::Over { since: T0 },
+        S::Stale { since: T0 },
+        S::Null { since: T0 },
+        S::NotAnswering { since: T0 },
+        S::Losing {
+            streams: 1,
+            bytes: 1,
+        },
+        S::WriterSlow { secs: 14 },
+        S::OffRestarting { since: T0 },
+        S::Restarting { since: T0 },
+        S::Sealed { at: T0 },
+        S::Recording,
+    ];
+    let mut seen = 0;
+    for state in states {
+        // No wildcard: a new State fails to compile here until it is added to the list above.
+        match state {
+            S::Recover { .. }
+            | S::Continue { .. }
+            | S::Over { .. }
+            | S::Stale { .. }
+            | S::Null { .. }
+            | S::NotAnswering { .. }
+            | S::Losing { .. }
+            | S::WriterSlow { .. }
+            | S::OffRestarting { .. }
+            | S::Restarting { .. }
+            | S::Sealed { .. }
+            | S::Recording => {}
+        }
+        let line = text::state_line(&state, RUN);
+        if !line.starts_with(text::PROBLEM) {
+            continue;
+        }
+        seen += 1;
+        assert!(
+            line.to_lowercase().contains("run:")
+                || line.contains(text::SUPPORT_ADDRESS)
+                || line.contains("do nothing"),
+            "{line}"
+        );
+    }
+    assert!(seen >= 5, "the variants no longer render PROBLEM lines");
+    assert!(text::no_request_yet().contains("goalcup status"));
+}
+
+/// Terminal text says "goalcup" and plain words: no product jargon, no "pin" talk (usability-16).
+#[test]
+fn no_jargon() {
+    let all = [
+        text::masking(None),
+        text::gap_words("pinned"),
+        text::no_request_written("Agent", Some("h.example")),
+    ];
+    for t in &all {
+        for bad in ["Goal Cup Proxy", "pinned", "pins"] {
+            assert!(!t.contains(bad), "{bad:?} in {t:?}");
+        }
+    }
+    assert!(all[2].starts_with("No model request was written."));
 }

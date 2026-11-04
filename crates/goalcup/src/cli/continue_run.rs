@@ -122,6 +122,17 @@ pub fn prepare(
     let (Some(sj), Some(last)) = (found.server.clone(), found.entries.last().cloned()) else {
         return Err(refuse(text::NOT_STARTED_HERE));
     };
+    // An old file has no recorded folder: then there is nothing to compare. A recorded folder
+    // that no longer exists (moved or renamed) cannot be gone back to, so it does not refuse.
+    if let Some(ws) = sj.entries.last().and_then(|e| e.workspace.as_ref())
+        && let Ok(recorded) = std::fs::canonicalize(ws)
+        && std::fs::canonicalize(project).ok() != Some(recorded)
+    {
+        return Err(refuse(text::wrong_folder(
+            &found.run,
+            &ws.to_string_lossy(),
+        )));
+    }
     let base = sj.server.clone();
     let secret = match &base {
         Some(_) => match std::fs::read_to_string(credential(&found.run_dir)) {
@@ -287,7 +298,13 @@ pub fn prepare(
         lines.extend((a != b).then(|| text::updated(&name, a, b)));
     }
     lines.extend(connector.first_screen.clone());
-    lines.extend(first_message(&found.run_dir, resumed, vars));
+    lines.extend(first_message(
+        &found.run_dir,
+        resumed,
+        sj.repo.as_deref(),
+        project,
+        vars,
+    ));
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(server.host()));
     lines.extend(plan.version_notes.clone());
@@ -320,14 +337,32 @@ pub fn prepare(
     })
 }
 
-/// A new session has not seen the first message: it is on the clipboard again.
-fn first_message(run_dir: &Path, resumed: bool, vars: &BTreeMap<String, String>) -> Option<String> {
+/// A new session has not seen the first message: it is on the clipboard again. A start stopped
+/// before it wrote one (Ctrl-C after the open, or no prompt) still owes the push lines.
+fn first_message(
+    run_dir: &Path,
+    resumed: bool,
+    repo: Option<&str>,
+    project: &Path,
+    vars: &BTreeMap<String, String>,
+) -> Vec<String> {
+    if resumed {
+        return vec![];
+    }
     let file = run_dir.join("first-message.txt");
-    let message = std::fs::read_to_string(&file).ok().filter(|_| !resumed)?;
-    Some(text::first_message(
-        &file,
-        push::clipboard::copy(&message, vars),
-    ))
+    match std::fs::read_to_string(&file) {
+        Ok(message) => vec![text::first_message(
+            &file,
+            push::clipboard::copy(&message, vars),
+        )],
+        Err(_) => repo
+            .map(|r| {
+                let mut lines = start::push_only(r, project, vars);
+                lines.push(text::PROMPT_AFTER_PUSH.to_owned());
+                lines
+            })
+            .unwrap_or_default(),
+    }
 }
 
 #[derive(Deserialize)]

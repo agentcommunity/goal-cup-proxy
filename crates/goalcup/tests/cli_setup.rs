@@ -137,7 +137,9 @@ fn no_terminal_asks_nothing_opens_nothing_writes_nothing() {
     let fake = Fake::new(&c.program);
     let before = snapshot(home.home());
     let (out, all) = setup(&home, &fake.path(), &["--harness", &c.id]);
-    assert_eq!(out.status.code(), Some(0), "{all}");
+    assert_eq!(out.status.code(), Some(1), "{all}");
+    assert!(all.contains("goalcup setup"), "{all}");
+    assert!(!all.contains("Ready."), "{all}");
     assert_eq!(snapshot(home.home()), before, "{all}");
     assert!(fake.argv().is_empty(), "the harness ran: {:?}", fake.argv());
     assert!(!all.contains("goalcup mcp"), "{all}");

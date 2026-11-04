@@ -219,6 +219,35 @@ fn ctrl_c_while_waiting_creates_nothing() {
 }
 
 #[test]
+fn a_server_message_that_ends_in_a_full_stop_is_not_followed_by_a_second() {
+    let w = FakeWorker::start();
+    w.inject(
+        Route::Open,
+        Inject {
+            answer: Some((
+                403,
+                json!({"error": "window_closed", "message": "after the start window you can only continue."}),
+            )),
+            ..Inject::default()
+        },
+    );
+    let (_home, got, _) = start(&url(&w), None, "");
+    let said = got.unwrap_err().text;
+    assert!(said.contains("only continue"), "{said}");
+    assert!(!said.contains(".."), "{said}");
+}
+
+#[test]
+fn a_stop_after_the_open_points_to_continue_not_to_a_new_start() {
+    let said = goalcup::cli::text::opened_then_stopped("r0123456789abcdef");
+    assert!(
+        said.contains("goalcup continue r0123456789abcdef"),
+        "{said}"
+    );
+    assert!(!said.contains("start again"), "{said}");
+}
+
+#[test]
 fn a_repository_with_commits_is_refused_before_any_approval() {
     // GitHub's fake has a first commit. The server is a closed port: if the approval were
     // asked first the stop would be exit 3.

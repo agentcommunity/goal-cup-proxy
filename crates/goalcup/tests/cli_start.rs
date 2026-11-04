@@ -116,6 +116,24 @@ fn the_deadline_is_the_servers_seconds_left_from_now() {
 }
 
 #[test]
+fn a_harness_that_is_not_installed_stops_the_start_before_anything_is_created() {
+    let fix = Fix::with_program("goalcup-no-such-harness-xyz", "{home}/skills", "");
+    let w = FakeWorker::start();
+    let stop = prepare(&fix.args(), &fix.ctx(Server::Url(w.url())), &mut Vec::new())
+        .err()
+        .unwrap();
+    assert_eq!(stop.code, 1);
+    assert!(
+        stop.text.contains("Tester is not installed"),
+        "{}",
+        stop.text
+    );
+    assert!(stop.text.contains("run the command again"), "{}", stop.text);
+    assert!(!fix.gc().exists());
+    assert_eq!(w.calls(), 0);
+}
+
+#[test]
 fn a_plan_refusal_names_file_and_key_never_the_value_and_creates_no_run() {
     let extra = "[[refuse_if_set]]\nfile = \"{home}/settings.json\"\nkeys = [\"proxy\"]\n";
     let fix = Fix::new("{home}/skills", extra);
@@ -180,6 +198,11 @@ fn a_denied_approval_creates_no_run() {
 /// Runs the real `goalcup start --practice` in `fix`'s project folder, against `server`, and
 /// kills it if it has not ended in two minutes.
 fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
+    spawn_start_to(fix, server, std::process::Stdio::piped())
+}
+
+/// `spawn_start` with the command's standard output set to `stdout`.
+fn spawn_start_to(fix: &Fix, server: &str, stdout: std::process::Stdio) -> std::process::Output {
     use std::process::{Command, Stdio};
     let child = Command::new(env!("CARGO_BIN_EXE_goalcup"))
         .args(["start", "--practice", "--connector"])
@@ -191,7 +214,7 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
         .env("HOME", fix.t.home())
         .env("XDG_CONFIG_HOME", fix.t.home())
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(stdout)
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -210,6 +233,21 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
     let _ = done.send(());
     let _ = timer.join();
     out
+}
+
+/// A terminal closed during the run: every write to standard output fails. The harness's exit code
+/// is still the command's, and nothing panics.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_dead_stdout_does_not_panic_the_hand_over_and_the_exit_code_survives() {
+    let fix = Fix::with_program("sh", "{home}/skills", "args = [\"-c\", \"exit 7\"]\n");
+    let w = FakeWorker::start();
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let out = spawn_start_to(&fix, &w.url(), writer.into());
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(7), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
 }
 
 /// PRD-10 section 3 steps 7 to 10: the hand-over. The harness runs, its exit code is the command's
