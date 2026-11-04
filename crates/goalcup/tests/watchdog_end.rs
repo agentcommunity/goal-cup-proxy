@@ -2,8 +2,8 @@
 //! `watchdog::run_with` with a hand-built plan whose harness is `sh`. The harness forks a child
 //! and an orphaned grandchild and waits for a stop file. The `stub_` cases start a shell stub as
 //! the recorder (it answers `ready` and `sealed`), so they test the watchdog alone; the `real_`
-//! cases start the goalcup binary as the recorder, server off. Linux only (the subreaper).
-#![cfg(target_os = "linux")]
+//! cases start the goalcup binary as the recorder, server off. The orphan checks are Linux only
+//! (the subreaper).
 
 mod common;
 mod watchdog_share;
@@ -21,14 +21,7 @@ use std::io::BufReader;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use watchdog_share::{WAIT, until};
-
-/// The pid is gone: no `/proc` entry, or a zombie.
-fn gone(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |s| {
-        s[s.rfind(')').unwrap() + 1..].trim_start().starts_with('Z')
-    })
-}
+use watchdog_share::{WAIT, gone, until};
 
 fn pid_in(path: &Path) -> Option<u32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
@@ -261,13 +254,26 @@ fn watchdog_end_stub_seal_command_ends_the_tree_only() {
         assert!(watchdog_alive(&entry_dir));
         seal_command(&entry_dir);
     });
-    for name in ["harness.pid", "child.pid", "orphan.pid"] {
+    for name in ["harness.pid", "child.pid"] {
         let pid = pid_in(&f.m(name)).unwrap();
         until(name, || gone(pid).then_some(()));
     }
+    orphan_ended(&f);
     assert!(!f.m("recorder_signalled").exists());
     let seal = std::fs::read_to_string(f.m("seal_line")).unwrap();
     assert!(seal.contains("seal_command"));
+}
+
+/// On Linux the orphan was ended with the tree (the subreaper took it in). Elsewhere nothing
+/// finds it, so it is killed here and does not outlive the test.
+fn orphan_ended(f: &Fixture) {
+    let pid = pid_in(&f.m("orphan.pid")).unwrap();
+    if cfg!(target_os = "linux") {
+        until("orphan", || gone(pid).then_some(()));
+    } else {
+        // SAFETY: a signal to one pid this test started.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
 }
 
 /// The real recorder, server off.
@@ -292,6 +298,7 @@ fn watchdog_end_real_seal_command_seals() {
     assert_eq!(status["seal"]["reason"], "seal_command");
     assert!(!status["harness"]["exit"].is_null());
     assert!(!f.entry_dir.join("rec").join(watchdog::KEY_FILE).exists());
+    orphan_ended(&f);
 }
 
 /// Point 3, ledger R3 and L-P1 (PRD-02 section 8 step 8): a recorder killed mid-run is
@@ -338,6 +345,60 @@ fn watchdog_end_real_killed_recorder_restarts() {
         .collect();
     assert_eq!(down.len(), 1, "{down:?}");
     assert!(down[0].0 < down[0].1);
+    orphan_ended(&f);
+}
+
+/// Point 3 (review focus 2): a recorder that can no longer be spawned never ends the watch while
+/// the harness runs, and never wedges it after: the watchdog gives up 30 s after the harness
+/// exit, and the entry is left for `close_dead_entry`.
+#[test]
+fn watchdog_end_real_unspawnable_recorder_ends_after_the_harness() {
+    let f = Fixture::new();
+    // Every boot after the first fails with ENOENT.
+    let rec = f.m("rec.sh");
+    let text = format!(
+        "#!/bin/sh\nrm -f \"$0\"\nexec \"{}\" \"$@\"\n",
+        real().display()
+    );
+    std::fs::write(&rec, text).unwrap();
+    std::fs::set_permissions(&rec, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (entry_dir, stop) = (f.entry_dir.clone(), f.m("stop"));
+    let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        f.run(&rec, move || {
+            let pid = until("the recorder", || {
+                let s: serde_json::Value = cli::read_json(&cli::status_json(&entry_dir))?;
+                let counts = std::fs::metadata(entry_dir.join("counts.jsonl")).ok()?;
+                s["pid"].as_u64().filter(|p| *p > 0 && counts.len() > 0)
+            });
+            // SAFETY: a signal to one pid, the recorder's.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            let log = entry_dir.join("goalcup.log");
+            until("recorder_spawn_failed", || {
+                let l = std::fs::read_to_string(&log).ok()?;
+                l.contains("recorder_spawn_failed").then_some(())
+            });
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            stopped_tx.send(std::time::Instant::now()).unwrap();
+            std::fs::write(stop, "").unwrap();
+        });
+        let _ = done_tx.send(f);
+    });
+    let f = done_rx.recv_timeout(WAIT).expect("the watchdog wedged");
+    let stopped = stopped_rx.recv().unwrap();
+    assert!(stopped.elapsed() >= std::time::Duration::from_secs(29));
+    assert!(stopped.elapsed() < std::time::Duration::from_secs(60));
+    let log = std::fs::read_to_string(f.entry_dir.join("goalcup.log")).unwrap();
+    assert!(log.contains("recorder_spawn_gave_up"), "{log}");
+    assert!(matches!(
+        goalcup::pipeline::close_dead_entry(&f.entry_dir),
+        Ok(goalcup::pipeline::Closed::Sealed(_))
+    ));
+    for name in ["child.pid", "orphan.pid"] {
+        // SAFETY: a signal to one pid this test started.
+        unsafe { libc::kill(pid_in(&f.m(name)).unwrap() as libc::pid_t, libc::SIGKILL) };
+    }
 }
 
 /// Point 3 (PRD-02 section 8 step 10): at the deadline (boot time, from the start facts) the
@@ -354,14 +415,50 @@ fn watchdog_end_real_deadline_ends_the_tree() {
     f.run_plan(plan, facts, &real(), move || {
         until("the orphan", || pid_in(&orphan));
     });
-    for name in ["harness", "child", "orphan"] {
+    for name in ["harness", "child"] {
         assert!(f.m(&format!("{name}_term")).exists(), "{name}: no SIGTERM");
         let pid = pid_in(&f.m(&format!("{name}.pid"))).unwrap();
         until(name, || gone(pid).then_some(()));
     }
+    if cfg!(target_os = "linux") {
+        assert!(f.m("orphan_term").exists(), "orphan: no SIGTERM");
+    }
+    orphan_ended(&f);
     let status = f.sealed_status();
     assert_eq!(status["seal"]["reason"], "deadline");
     assert_eq!(status["boot"], 0);
+}
+
+/// Point 3 (PRD-02 section 8 step 10): an orphan the subreaper took in that exits while the
+/// harness runs is reaped then, not left a zombie until the seal; the harness's own exit status
+/// is still the watchdog's to read.
+#[cfg(target_os = "linux")]
+#[test]
+fn watchdog_end_real_adopted_orphans_are_reaped() {
+    let f = Fixture::new();
+    let d = f.d.display();
+    let mut plan = f.plan();
+    plan.argv[1] = format!(
+        "( sleep 0.2 & echo $! > {d}/quick.pid ); echo $$ > {d}/harness.pid
+         while [ ! -e {d}/stop ]; do sleep 0.05; done"
+    );
+    let facts = f.facts(&plan);
+    let (quick, stop) = (f.m("quick.pid"), f.m("stop"));
+    f.run_plan(plan, facts, &real(), move || {
+        let reaped = std::panic::catch_unwind(|| {
+            let pid = until("quick.pid", || pid_in(&quick));
+            until("reaped", || {
+                (!Path::new(&format!("/proc/{pid}")).exists()).then_some(())
+            });
+        });
+        // Stopped either way, so a failed wait never leaves the watchdog running.
+        std::fs::write(stop, "").unwrap();
+        reaped.unwrap();
+    });
+    assert_eq!(
+        f.sealed_status()["harness"]["exit"],
+        serde_json::json!({"code": 0})
+    );
 }
 
 /// The real recorder under a watchdog played by hand: `start` (deadline `deadline_in` ms ahead),
@@ -430,4 +527,33 @@ fn watchdog_end_real_sigterm_seals_with_signal() {
     assert!(!f.entry_dir.join("rec").join(watchdog::KEY_FILE).exists());
     harness.kill().unwrap();
     harness.wait().unwrap();
+}
+
+/// Point 3 (C.6): a start line longer than the recorder reads is refused before anything
+/// starts: no recorder, no harness, `watchdog_failed why=start_line`. `stop` is written at once
+/// so a regression that starts the harness ends instead of hanging.
+#[test]
+fn watchdog_end_stub_oversized_start_line_starts_nothing() {
+    let f = Fixture::new();
+    let big: String = (0..4000)
+        .map(|i| format!("\"h{i}.example.org\", "))
+        .collect();
+    let hosts = HostList::from_file(
+        builtin::HOSTS
+            .replacen("provider = [", &format!("provider = [{big}"), 1)
+            .as_bytes(),
+        "big.toml",
+    )
+    .unwrap();
+    let plan = f.plan();
+    let mut facts = f.facts(&plan);
+    facts.hosts = to_value(&hosts).unwrap();
+    let stop = f.m("stop");
+    f.run_plan(plan, facts, &f.stub(), move || {
+        std::fs::write(stop, "").unwrap()
+    });
+    assert!(!f.m("harness.pid").exists(), "the harness started");
+    assert!(!f.m("recorder.pid").exists(), "the recorder started");
+    let log = std::fs::read_to_string(f.entry_dir.join("goalcup.log")).unwrap();
+    assert!(log.contains("start_line"), "{log}");
 }

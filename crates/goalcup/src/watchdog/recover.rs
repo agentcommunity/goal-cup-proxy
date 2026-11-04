@@ -3,11 +3,12 @@
 //! same run CA, and the harness is never touched.
 
 use super::{
-    Boot, CaPem, Cause, KEY_FILE, Prev, StartFacts, ToRecorder, catch_seal, no_core, not_dumpable,
-    send_line, spawn, watch, write_pid,
+    Boot, CaPem, Cause, EXE_FILE, KEY_FILE, Prev, StartFacts, ToRecorder, catch_seal, no_core,
+    not_dumpable, pin, send_line, spawn, watch, write_pid,
 };
 use crate::cli::log::{Fact, line};
 use crate::cli::{self, read_json, status_json};
+use crate::connector::HomeLock;
 use crate::pipeline::fds::{self, Target};
 use crate::proxy::ca::{RUN_CA_FILE, RunCa};
 use std::fs::{self, TryLockError};
@@ -60,10 +61,11 @@ const LATE: u8 = 2;
 /// The report byte: the recorder could not be started, and the watchdog ends.
 const FAILED: u8 = 0;
 
-/// [`recover_with`] with this binary as the recorder.
+/// [`recover_with`] with this binary, pinned in `rec/` ([`super::spawn::pin_exe`]), as the
+/// recorder. The caller has found no watchdog alive (cli/recover.rs), so no live pin is replaced.
 pub fn recover(entry_dir: &Path, facts: StartFacts) -> Result<Recovered, NotRecovered> {
     let exe = std::env::current_exe().map_err(|_| NotRecovered::NotStarted)?;
-    recover_with(entry_dir, facts, &exe)
+    recover_with(entry_dir, facts, &pin(entry_dir, &exe))
 }
 
 /// Section 8.1: the checks and the bind here, then `recorder_exe` started as a new process in its
@@ -142,6 +144,15 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     if write_pid(&dir.join("rec")).is_err() {
         line(&dir, "watchdog_pid_failed", &[]);
     }
+    // Held to the end, so a `goalcup start` of this harness is refused. `Err`: a start took it in
+    // the gap after cli/recover.rs dropped its own.
+    let (home, id) = (dir.ancestors().nth(3), facts.connector["id"].as_str());
+    let lock = home
+        .zip(id)
+        .map(|(h, id)| HomeLock::take(&cli::isolated_home(h, id)));
+    if let Some(Err(_)) = lock {
+        line(&dir, "home_locked", &[]);
+    }
     let exe = std::env::current_exe().unwrap_or_default();
     let recorder_pid = Arc::new(Mutex::new(0));
     let Ok(mut boot) = Boot::start(&exe, &listener, &facts, &recorder_pid, false) else {
@@ -172,5 +183,6 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     line(&dir, "watchdog_recovered", &facts_line);
     let pid = facts.harness.as_ref().map(|h| h.pid);
     let _ = watch(boot, facts, None, (&exe, &listener, &recorder_pid), pid);
+    let _ = fs::remove_file(dir.join("rec").join(EXE_FILE));
     ExitCode::SUCCESS
 }

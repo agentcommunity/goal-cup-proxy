@@ -17,7 +17,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 /// The recorder's listen socket.
@@ -27,6 +27,27 @@ pub const CONTROL_FD: RawFd = 4;
 
 /// The accept backlog; the kernel clamps it to `somaxconn`.
 const BACKLOG: i32 = 4_096;
+
+/// Links `exe` to `rec/goalcup` (a copy, mode kept, where a link fails: another volume), so
+/// every boot of the run starts the binary the run started with, whatever an install puts at
+/// `exe` meanwhile. Never a copy onto a tmp that exists (a crash's, or a second pin's): it may be
+/// a link to `exe`, and the copy would empty `exe`. A symlink at `exe` is followed first: a link
+/// to the symlink itself (macOS `linkat`) could point at nothing from `rec/`.
+pub fn pin_exe(exe: &Path, rec: &Path) -> io::Result<PathBuf> {
+    let exe = std::fs::canonicalize(exe)?;
+    let (tmp, pinned) = (rec.join("goalcup.tmp"), rec.join(super::EXE_FILE));
+    let _ = std::fs::remove_file(&tmp);
+    let done = std::fs::hard_link(&exe, &tmp)
+        .or_else(|e| match e.kind() {
+            io::ErrorKind::AlreadyExists => Err(e),
+            _ => std::fs::copy(&exe, &tmp).map(drop),
+        })
+        .and_then(|()| std::fs::rename(&tmp, &pinned));
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done.map(|()| pinned)
+}
 
 /// [`bind_exact`], and a port that is taken or refused gives way to port 0 (`goalcup continue`).
 pub fn bind(port: u16) -> io::Result<TcpListener> {
@@ -374,6 +395,27 @@ pub fn end_tree(harness: (u32, u64), spare: &dyn Fn(u32) -> bool) {
     }
 }
 
+/// Reaps the watchdog's exited children (on Linux, orphans the subreaper took in) except those
+/// `keep` names: `waitpid(WNOHANG)` on each zombie child, so none piles up while the harness
+/// runs. Elsewhere nothing (no subreaper, no orphans taken in).
+pub fn reap_orphans(keep: &dyn Fn(u32) -> bool) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let me = std::process::id();
+    for p in procs() {
+        if p.ppid == me
+            && p.zombie
+            && !keep(p.pid)
+            && let Ok(pid) = libc::pid_t::try_from(p.pid)
+        {
+            let mut status = 0;
+            // SAFETY: reaps one child of ours by pid; writes one integer.
+            unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        }
+    }
+}
+
 /// The Linux children of the watchdog that started no earlier than the harness and are still
 /// alive at the seal, with their program names (`/proc/<pid>/comm`). None elsewhere or when
 /// there are none.
@@ -423,5 +465,45 @@ pub fn look(pid: u32) -> Option<Option<std::process::ExitStatus>> {
             None
         }
         _ => Some(Some(std::process::ExitStatus::from_raw(status))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pin_exe_survives_a_replace() {
+        let t = tempfile::tempdir().unwrap();
+        let (exe, rec) = (t.path().join("goalcup"), t.path().join("rec"));
+        std::fs::create_dir(&rec).unwrap();
+        std::fs::write(&exe, b"old").unwrap();
+        let pinned = pin_exe(&exe, &rec).unwrap();
+        assert_eq!(pinned, rec.join(super::super::EXE_FILE));
+        std::fs::write(t.path().join("new"), b"new").unwrap();
+        std::fs::rename(t.path().join("new"), &exe).unwrap(); // install.sh:328
+        assert_eq!(std::fs::read(&pinned).unwrap(), b"old");
+        pin_exe(&exe, &rec).unwrap(); // recover pins again
+        assert_eq!(std::fs::read(&pinned).unwrap(), b"new");
+        assert!(!rec.join("goalcup.tmp").exists());
+    }
+
+    #[test]
+    fn pin_exe_follows_a_relative_symlink() {
+        let t = tempfile::tempdir().unwrap();
+        let (bin, rec) = (t.path().join("bin"), t.path().join("rec"));
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::create_dir(&rec).unwrap();
+        std::fs::write(t.path().join("real"), b"real").unwrap();
+        std::os::unix::fs::symlink("../real", bin.join("goalcup")).unwrap();
+        let pinned = pin_exe(&bin.join("goalcup"), &rec).unwrap();
+        assert_eq!(std::fs::read(&pinned).unwrap(), b"real");
+    }
+    #[test]
+    fn pin_exe_fails_cleanly() {
+        let t = tempfile::tempdir().unwrap();
+        let exe = t.path().join("goalcup");
+        std::fs::write(&exe, b"x").unwrap();
+        assert!(pin_exe(&exe, &t.path().join("no-such-dir")).is_err());
     }
 }

@@ -92,8 +92,9 @@ The rules of the shape:
 - **Null mode.** If the recorder crashes three times in ten minutes, each within a minute of its
   start, the watchdog runs a relay-only recorder, says so in `status.json`, and retries a normal
   boot after 30 seconds, then 1, 2 and 5 minutes, never more than 5 minutes apart. The crash count
-  resets once a recorder stays up 60 seconds. The harness keeps its connections. The span is a
-  `recorder_down` gap.
+  resets once a recorder stays up 60 seconds. Each retry waits up to 8 seconds for a moment with
+  no traffic; a connection still open then is cut, and the harness reconnects to the next recorder
+  on the same port. The span is a `recorder_down` gap.
 - **Boot-time timers.** Every timer counts boot time, which keeps running while the machine
   sleeps, on a short tick: deadline, restart pauses, null-mode retries, upload backoff.
 - **The memory guard is a guard, not a cap** (D79). Held bytes stay under a stated size (512 MiB,
