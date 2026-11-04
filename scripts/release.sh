@@ -93,29 +93,29 @@ if git rev-parse -q --verify "refs/heads/$branch" >/dev/null ||
     die "the branch $branch already exists"
 fi
 
-# Work on a detached origin/main, so a failed check leaves no branch behind.
+# Work on a detached origin/main, so a failed step leaves no branch behind. Any exit before the
+# end puts the tree back as it was.
 start=$(git symbolic-ref --short -q HEAD || git rev-parse HEAD)
 git switch -q --detach origin/main
 restore() {
-    git checkout -q -- Cargo.toml Cargo.lock
+    git checkout -q HEAD -- Cargo.toml Cargo.lock
+    rm -f Cargo.toml.new
     git checkout -q "$start"
 }
+trap restore EXIT
 # The first `version = "..."` line is the workspace's (under [workspace.package]).
 awk -v v="$new" '!done && /^version = "/ { print "version = \"" v "\""; done = 1; next } { print }' \
     Cargo.toml >Cargo.toml.new
 mv Cargo.toml.new Cargo.toml
-if ! cargo update --workspace --offline; then
-    restore
-    die "cargo could not update Cargo.lock"
-fi
-git switch -q -c "$branch"
+cargo update --workspace --offline || die "cargo could not update Cargo.lock"
 git add Cargo.toml Cargo.lock
 git commit -q -m "Release $new"
+git switch -q -c "$branch"
 if ! { git push -q -u origin "$branch" &&
     gh pr create --base main --head "$branch" --title "Release $new" \
         --body "Sets the workspace version to $new. After it is merged, $next"; }; then
-    git checkout -q "$start"
     die "the release commit is on the local branch $branch (and on origin if the push worked). Finish by hand: git push -u origin $branch && gh pr create --base main --head $branch"
 fi
 git checkout -q "$start"
 echo "release: pull request opened for $branch. After it is merged, $next"
+trap - EXIT
