@@ -187,24 +187,91 @@ fn secrets_known_value_found_in_a_raw_file_and_on_stdin() {
     );
 }
 
-#[test]
-fn secrets_check_known_adds_the_secrets_check() {
-    let (path, k) = (tmp("check-known").join("known"), known());
-    std::fs::write(&path, &k).unwrap();
-    let mut e = Entry::new("check-dirty");
+/// A clean entry plus one session file holding `body`.
+fn with_file(name: &str, body: &[u8]) -> PathBuf {
+    let mut e = Entry::new(name);
     e.standard();
     let meta = json!({"path": "fake:notes.txt", "gen": 0, "size_at_open": 0, "from": 0,
         "fid": "1a2c"});
     let s = e.open(Native, 0, 0, meta);
-    e.data(s, 0, 0, k.as_bytes());
-    e.end(s, EndReason::Complete, k.len() as u64, Value::Null);
+    e.data(s, 0, 0, body);
+    e.end(s, EndReason::Complete, body.len() as u64, Value::Null);
+    e.seal()
+}
+
+/// Runs `secrets` on an SSE response of `pieces` within 10 s (debug builds included); the report.
+fn scan_within_10s(name: &str, pieces: &[Vec<u8>]) -> (i32, Value) {
+    let e = entry(name, true, pieces, &[]);
+    let t = std::time::Instant::now();
+    let got = scan(&[&e], b"");
+    let took = t.elapsed();
+    eprintln!("{name}: {took:?}");
+    assert!(took.as_secs() < 10, "{name}: {took:?}");
+    got
+}
+
+#[test]
+fn secrets_check_known_adds_the_secrets_check() {
+    let (path, k) = (tmp("check-known").join("known"), known());
+    std::fs::write(&path, &k).unwrap();
     let args = ["--known", path.to_str().unwrap()];
-    let (code, v) = check(&e.seal(), &args);
+    let (code, v) = check(&with_file("check-dirty", k.as_bytes()), &args);
     assert_eq!((code, ids_with(&v, "fail")), (2, vec!["secrets".into()]));
     let (code, v) = check(&clean("check-clean"), &args);
     assert_eq!((code, result(&v, "secrets")), (0, "pass"));
-    let (_, v) = check(&clean("check-none"), &[]);
-    assert!(!v.to_string().contains(r#""id":"secrets""#));
+}
+
+#[test]
+fn plain_check_reports_a_secrets_check_and_fails_on_a_shape() {
+    // Key-shaped, built at run time: no real key.
+    let key = format!("sk-ant-api03-{}", "A".repeat(90));
+    let (code, v) = check(&with_file("plain-dirty", key.as_bytes()), &[]);
+    assert_eq!((code, ids_with(&v, "fail")), (2, vec!["secrets".into()]));
+    // The text form names it too.
+    let out = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
+        .arg("check")
+        .arg(with_file("plain-text", key.as_bytes()))
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(text.contains("secrets fail"), "{text}");
+    assert!(!text.contains(&key), "{text}");
+}
+
+#[test]
+fn plain_check_says_no_known_values_were_given() {
+    let (code, v) = check(&clean("plain-clean"), &[]);
+    assert_eq!((code, result(&v, "secrets")), (0, "pass"));
+    let why = item(&v, "secrets")["why"].as_str().unwrap();
+    assert!(why.contains("shapes only"), "{why}");
+}
+
+#[test]
+fn one_big_sse_line_scans_in_linear_time() {
+    // 32 MiB of one `data:` line with no newline, in 64 KiB DATA pieces, as the recorder writes.
+    let mut pieces = vec![b"data: ".to_vec()];
+    pieces.extend((0..512).map(|_| vec![b'x'; 64 << 10]));
+    let (code, v) = scan_within_10s("big-line", &pieces);
+    // The line is over 1 MiB: not parsed, and named, not failed.
+    assert_eq!((code, &v["result"]), (1, &json!("named")), "{v}");
+}
+
+#[test]
+fn a_million_tiny_lines_finish() {
+    let all = b"data:x\n".repeat(1_000_000);
+    let pieces: Vec<Vec<u8>> = all.chunks(64 << 10).map(<[u8]>::to_vec).collect();
+    let (code, v) = scan_within_10s("tiny-lines", &pieces);
+    assert_eq!((code, &v["result"]), (0, &json!("pass")), "{v}");
+}
+
+#[test]
+fn a_mask_with_off_near_u64_max_does_not_panic() {
+    let (code, got, v) = lens("mask-max", &[b"clean".to_vec()], &[[u64::MAX - 1, 5, 0]]);
+    assert_eq!(
+        (code, got, &v["masks"]),
+        (0, [Some(0); 4], &json!({"bearer": 1}))
+    );
 }
 
 #[test]

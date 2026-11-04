@@ -18,12 +18,13 @@ pub struct Report {
 }
 
 /// Checks every entry of the input. `now_ns` is set for `--live`; `local` is `--local`, the
-/// local entries a server copy is compared with; `known` (`--known`) adds the `secrets` check.
+/// local entries a server copy is compared with; `known` is what the `secrets` check looks for:
+/// the shapes, and the `--known` values when given.
 pub fn build(
     input: &Input,
     now_ns: Option<u64>,
     local: Option<&Input>,
-    known: Option<&Rules>,
+    known: &Rules,
     files: Option<&[(String, u64)]>,
 ) -> Report {
     let is_server = input.kind == "server";
@@ -37,7 +38,7 @@ pub fn build(
         if let Some(f) = &f {
             checks.extend(server::checks(e, f, &o, local));
         }
-        checks.extend(known.map(|k| secrets::check(k, e)));
+        checks.push(secrets::check(known, e));
         if let (Some(f), Some(c)) = (
             files,
             checks.iter_mut().find(|c| c.id == "subagents_present"),
