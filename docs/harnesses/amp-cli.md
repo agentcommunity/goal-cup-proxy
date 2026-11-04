@@ -72,7 +72,7 @@ The connector is the only one that sets `HOME`, plus the four XDG folders, all u
 
 ## Run without permission prompts
 
-None needed: Amp runs tools without asking by default (strings in the binary; a Mac run made 19 commits with no prompt). Do not add `amp.permissions` rules that ask. The connector has no `no_prompts` row. See [HARNESS-SETUP](../HARNESS-SETUP.md#amp).
+None needed: Amp runs tools without asking by default (strings in the binary; a Mac run made 19 commits with no prompt). Do not add `amp.permissions` rules that ask. The connector has no `no_prompts` row. See [HARNESS-SETUP](../HARNESS-SETUP.md#what-setup-writes-per-harness).
 
 ## Pad result
 
