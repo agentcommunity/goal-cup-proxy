@@ -222,13 +222,15 @@ row has verified. It covers Claude Code, Codex, Amp and Hermes, needs `npm` and 
 
 Run `python3.11 scripts/pad/canary` on the maintainer Mac every 2 hours for Claude Code, Codex and Hermes, and
 hourly for Amp (about 7 npm builds a day, [Amp section 2](harnesses/amp-cli.md#2-install-and-record-a-version)):
-`python3.11 scripts/pad/canary --only amp-cli`. Exit 0 means nothing new; 1 a new build, named in its line (read every line: a lookup can
-have failed too); 2 a lookup failed, so run it again before assuming nothing is new.
+`python3.11 scripts/pad/canary --only amp-cli`. Exit 0 means nothing new; 1 a new build, named in its line
+(read every line: a lookup can have failed too); 2 a lookup failed or the canary could not start: read the
+line, fix it or run again, before assuming nothing is new.
 
-Classify a new build within 2 hours, on the pad (serial, one Mac). Install that exact build with the `install`
-line of `scripts/pad/harnesses/<id>.toml`, the version changed (for Hermes, the tag and the `--commit` hash). Copy `scripts/pad/runs/micro.toml`, set its
-`harness` and `key` lines for that harness (`key` names one in `scripts/pad/pad.toml`), and run
-`python3.11 scripts/pad/pad <your copy>`. Amp has no pad key (`key_kind = "none"`): install the build by hand
+Classify a new build within 2 hours, on the pad (serial, one Mac). Install that exact build on the Mac with the
+`install` line of `scripts/pad/harnesses/<id>.toml`, the version changed (for Hermes, the tag and the `--commit`
+hash). Copy `scripts/pad/runs/micro.toml`, set its `harness` and `key` lines for that harness (`key` names one
+in `scripts/pad/pad.toml`), add `where = "here"`, and run `python3.11 scripts/pad/pad <your copy>`. Without
+`where = "here"` the row runs in the sandbox image, on the build pinned there, not the new one. Amp has no pad key (`key_kind = "none"`): install the build by hand
 and run it as in [Amp section 1](harnesses/amp-cli.md#1-run-one-prompt-in-chat-mode-first).
 
 | Outcome | Do |
