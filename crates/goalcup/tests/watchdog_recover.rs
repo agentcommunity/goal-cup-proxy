@@ -1,8 +1,7 @@
 //! PRD-02 section 8.1 (ledger R3b, points 3 and 4): `watchdog::recover_with` after the watchdog
 //! and then the recorder died while the harness runs. The state is built by hand: a minted CA and its key
 //! file, a recorder started on a listener with the start line, `ready`, a shell harness sent as
-//! `launch`, one TLS request served, then the recorder SIGKILLed and everything closed. Linux only.
-#![cfg(target_os = "linux")]
+//! `launch`, one TLS request served, then the recorder SIGKILLed and everything closed.
 
 mod common;
 mod watchdog_share;

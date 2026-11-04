@@ -2,8 +2,8 @@
 //! `watchdog::run_with` with a hand-built plan whose harness is `sh`. The harness forks a child
 //! and an orphaned grandchild and waits for a stop file. The `stub_` cases start a shell stub as
 //! the recorder (it answers `ready` and `sealed`), so they test the watchdog alone; the `real_`
-//! cases start the goalcup binary as the recorder, server off. Linux only (the subreaper).
-#![cfg(target_os = "linux")]
+//! cases start the goalcup binary as the recorder, server off. The orphan checks are Linux only
+//! (the subreaper).
 
 mod common;
 mod watchdog_share;
@@ -21,14 +21,7 @@ use std::io::BufReader;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use watchdog_share::{WAIT, until};
-
-/// The pid is gone: no `/proc` entry, or a zombie.
-fn gone(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat")).map_or(true, |s| {
-        s[s.rfind(')').unwrap() + 1..].trim_start().starts_with('Z')
-    })
-}
+use watchdog_share::{WAIT, gone, until};
 
 fn pid_in(path: &Path) -> Option<u32> {
     std::fs::read_to_string(path).ok()?.trim().parse().ok()
@@ -261,13 +254,26 @@ fn watchdog_end_stub_seal_command_ends_the_tree_only() {
         assert!(watchdog_alive(&entry_dir));
         seal_command(&entry_dir);
     });
-    for name in ["harness.pid", "child.pid", "orphan.pid"] {
+    for name in ["harness.pid", "child.pid"] {
         let pid = pid_in(&f.m(name)).unwrap();
         until(name, || gone(pid).then_some(()));
     }
+    orphan_ended(&f);
     assert!(!f.m("recorder_signalled").exists());
     let seal = std::fs::read_to_string(f.m("seal_line")).unwrap();
     assert!(seal.contains("seal_command"));
+}
+
+/// On Linux the orphan was ended with the tree (the subreaper took it in). Elsewhere nothing
+/// finds it, so it is killed here and does not outlive the test.
+fn orphan_ended(f: &Fixture) {
+    let pid = pid_in(&f.m("orphan.pid")).unwrap();
+    if cfg!(target_os = "linux") {
+        until("orphan", || gone(pid).then_some(()));
+    } else {
+        // SAFETY: a signal to one pid this test started.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    }
 }
 
 /// The real recorder, server off.
@@ -292,6 +298,7 @@ fn watchdog_end_real_seal_command_seals() {
     assert_eq!(status["seal"]["reason"], "seal_command");
     assert!(!status["harness"]["exit"].is_null());
     assert!(!f.entry_dir.join("rec").join(watchdog::KEY_FILE).exists());
+    orphan_ended(&f);
 }
 
 /// Point 3, ledger R3 and L-P1 (PRD-02 section 8 step 8): a recorder killed mid-run is
@@ -338,6 +345,7 @@ fn watchdog_end_real_killed_recorder_restarts() {
         .collect();
     assert_eq!(down.len(), 1, "{down:?}");
     assert!(down[0].0 < down[0].1);
+    orphan_ended(&f);
 }
 
 /// Point 3 (PRD-02 section 8 step 10): at the deadline (boot time, from the start facts) the
@@ -354,11 +362,15 @@ fn watchdog_end_real_deadline_ends_the_tree() {
     f.run_plan(plan, facts, &real(), move || {
         until("the orphan", || pid_in(&orphan));
     });
-    for name in ["harness", "child", "orphan"] {
+    for name in ["harness", "child"] {
         assert!(f.m(&format!("{name}_term")).exists(), "{name}: no SIGTERM");
         let pid = pid_in(&f.m(&format!("{name}.pid"))).unwrap();
         until(name, || gone(pid).then_some(()));
     }
+    if cfg!(target_os = "linux") {
+        assert!(f.m("orphan_term").exists(), "orphan: no SIGTERM");
+    }
+    orphan_ended(&f);
     let status = f.sealed_status();
     assert_eq!(status["seal"]["reason"], "deadline");
     assert_eq!(status["boot"], 0);

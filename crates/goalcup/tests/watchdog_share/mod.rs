@@ -17,6 +17,7 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -50,10 +51,39 @@ pub fn facts(entry_dir: &Path, workspace: &Path, hosts: &HostList, ca: Value) ->
     .unwrap()
 }
 
-/// L-C12: the one socket listening on `port` is bound to 127.0.0.1 (none on IPv6).
+/// The pid is gone: no process, or a zombie (Linux `/proc/<pid>/stat`, elsewhere `ps`).
+pub fn gone(pid: u32) -> bool {
+    let state = if cfg!(target_os = "linux") {
+        std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .map(|s| s[s.rfind(')').unwrap() + 1..].trim_start().to_string())
+            .unwrap_or_default()
+    } else {
+        let p = pid.to_string();
+        let out = Command::new("ps").args(["-o", "stat=", "-p", &p]).output();
+        String::from_utf8_lossy(&out.unwrap().stdout)
+            .trim()
+            .to_string()
+    };
+    state.is_empty() || state.starts_with('Z')
+}
+
+/// L-C12: the one socket listening on `port` is bound to 127.0.0.1 (none on IPv6). Linux reads
+/// `/proc/net/tcp{,6}`; elsewhere `lsof`, which names the socket once per process holding it.
 pub fn loopback_only(port: u16) {
-    let tail = format!(":{port:04X}");
     let mut listening = Vec::new();
+    if !cfg!(target_os = "linux") {
+        let i = format!("-iTCP:{port}");
+        let out = Command::new("lsof")
+            .args(["-nP", &i, "-sTCP:LISTEN", "-Fn"])
+            .output();
+        let out = String::from_utf8_lossy(&out.unwrap().stdout).into_owned();
+        listening.extend(out.lines().filter(|l| l.starts_with('n')).map(String::from));
+        listening.sort();
+        listening.dedup();
+        assert_eq!(listening, [format!("n127.0.0.1:{port}")], "port {port}");
+        return;
+    }
+    let tail = format!(":{port:04X}");
     for file in ["/proc/net/tcp", "/proc/net/tcp6"] {
         for l in std::fs::read_to_string(file)
             .unwrap_or_default()
