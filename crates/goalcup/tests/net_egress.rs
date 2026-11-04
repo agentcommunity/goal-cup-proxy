@@ -238,6 +238,25 @@ fn the_token_reaches_a_proxy_only_inside_connect() {
 }
 
 #[test]
+fn a_server_in_no_proxy_goes_direct() {
+    let l = TcpListener::bind("127.0.0.1:0").unwrap();
+    l.set_nonblocking(true).unwrap();
+    let fake = l.local_addr().unwrap();
+    let e = Egress::from_vars(
+        &vars(&[
+            ("HTTPS_PROXY", &format!("http://{fake}")),
+            ("NO_PROXY", "ingest.example"),
+        ]),
+        vec![],
+    );
+    let c = ServerClient::with_egress("https://ingest.example", None, &e);
+    // Direct, this fails on DNS or connect; through the proxy it would knock on the fake.
+    let _ = c.json::<serde_json::Value, ()>("GET", "/v1/health", None);
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(l.accept().is_err(), "the proxy was used");
+}
+
+#[test]
 fn an_http_server_is_never_proxied() {
     let (server, addr) = answer_once(
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",

@@ -238,9 +238,12 @@ impl ServerClient {
             )
         });
         // An `http://` server (a local Worker) is never proxied: the token would go in the clear.
+        let server = crate::cli::Server::Url(base.clone());
         let proxy = base
-            .strip_prefix("https://")
-            .and_then(|rest| egress.proxy_for(host_of(rest)))
+            .starts_with("https://")
+            .then(|| server.host())
+            .flatten()
+            .and_then(|host| egress.proxy_for(host))
             .map(|up| up.ureq());
         ServerClient {
             proxy,
@@ -389,15 +392,6 @@ impl ServerClient {
             Some(Token(secret)) => request.set("Authorization", &format!("Bearer {secret}")),
             None => request,
         }
-    }
-}
-
-/// The host of `host[:port][/path]`, an IPv6 literal with its brackets.
-fn host_of(rest: &str) -> &str {
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
-    match authority.rfind(':') {
-        Some(i) if !authority[i..].contains(']') => &authority[..i],
-        _ => authority,
     }
 }
 
