@@ -55,3 +55,61 @@ fn hermes_end_note_matches_the_verifier_text() {
         Some("Subagents are shown by their task logs, not tied to individual calls.")
     );
 }
+
+/// Hermes's built-in routes, the trust fallback (plugins/model-providers/*/__init__.py, checked
+/// at v0.22.5 and v0.22.7).
+const ROUTES: [&str; 9] = [
+    "https://api.deepseek.com/v1",
+    "https://ai-gateway.vercel.sh/v1",
+    "https://openrouter.ai/api/v1",
+    "https://inference-api.nousresearch.com/v1",
+    "https://api.x.ai/v1",
+    "https://api.z.ai/api/paas/v4",
+    "https://api.fireworks.ai/inference/v1",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+];
+
+#[test]
+fn hermes_trust_gives_every_address_the_run_bundle_and_records_it() {
+    let c = connector::load("hermes-cli", None).unwrap();
+    let t = c.ca_settings.as_ref().unwrap();
+    assert_eq!(t.fallback, ROUTES);
+    assert_eq!(
+        (t.key.as_str(), t.value.as_str()),
+        ("ssl_ca_cert", "${env:SSL_CERT_FILE}")
+    );
+    assert_eq!(t.file, "{home}/config.yaml");
+    // Every address given the bundle is also a host hint, so its calls are decrypted and recorded.
+    let hinted = |k: &String| {
+        let k = k.replace("goalcup-trust", "*");
+        c.host_hints.iter().any(|h| h.file == t.file && h.key == k)
+    };
+    for key in t.entries.iter().chain(&t.uses).chain([&t.add]) {
+        assert!(hinted(key), "{key} is not a host hint");
+    }
+}
+
+#[test]
+fn hermes_trust_on_a_fresh_home_names_every_route_once() {
+    let d = tempfile::tempdir().unwrap();
+    let c = connector::load("hermes-cli", None).unwrap();
+    let home = d.path().join("home");
+    let rows = connector::trust_rows(c.ca_settings.as_ref().unwrap(), &home);
+    let urls: Vec<&str> = rows
+        .iter()
+        .filter(|r| r.key.ends_with(".base_url"))
+        .map(|r| r.value.as_str())
+        .collect();
+    assert_eq!(urls, ROUTES);
+    for r in rows.iter().filter(|r| r.key.ends_with(".base_url")) {
+        assert!(r.key.starts_with("providers.goalcup-trust-"), "{}", r.key);
+        let twin = r.key.replace(".base_url", ".ssl_ca_cert");
+        assert!(
+            rows.iter()
+                .any(|t| t.key == twin && t.value == "${env:SSL_CERT_FILE}"),
+            "{twin}"
+        );
+    }
+    assert_eq!(rows.len(), 18);
+}

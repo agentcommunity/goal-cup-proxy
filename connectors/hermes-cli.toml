@@ -51,3 +51,22 @@ readers = [
   { row = "delegation-manifest", file = "manifest.json", reader = "hermes-manifest" },
 ]
 join = "time"
+
+# Since 0.21.6 Hermes model calls trust the OS store plus the `ssl_ca_cert` of the first
+# `custom_providers` or `providers` entry whose `base_url` is the route (agent/ssl_verify.py:300-343,
+# hermes_cli/config_providers.py:446-472): on macOS SSL_CERT_FILE never reaches them. At every start
+# and continue goalcup gives each address in config.yaml the run bundle; the fallback is the built-in
+# routes (plugins/model-providers/*/__init__.py, same at v0.22.5 to v0.22.7).
+[ca_settings]
+file = "{home}/config.yaml"
+entries = ["custom_providers.*.base_url", "providers.*.base_url"]
+uses = ["model.base_url", "delegation.base_url", "auxiliary.*.base_url"]
+add = "providers.*.base_url"
+key = "ssl_ca_cert"
+value = "${env:SSL_CERT_FILE}"
+fallback = [
+  "https://api.deepseek.com/v1", "https://ai-gateway.vercel.sh/v1", "https://openrouter.ai/api/v1",
+  "https://inference-api.nousresearch.com/v1", "https://api.x.ai/v1", "https://api.z.ai/api/paas/v4",
+  "https://api.fireworks.ai/inference/v1", "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+]
