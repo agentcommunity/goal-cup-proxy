@@ -5,9 +5,9 @@ Written by scripts/pad/table (PRD-12 section 9) from pad-rows.jsonl. Do not edit
 | Harness | Tier | Version | direct | gateway | dodger | Kill row | Date |
 |---|---|---|---|---|---|---|---|
 | amp-cli | not verified: no key | - | - | - | - | - | - |
-| claude-code-cli | not verified: no full gateway row | - | PASS | - | - | - | 2026-11-04 |
+| claude-code-cli | not verified: gateway C1 ai-gateway.vercel.sh not decrypted in counts.hosts | - | PASS | FAIL | PASS | - | 2026-11-04 |
 | cline-cli | not verified: needs sign-in (no provider config file or env route; the auth command puts the key in argv) | - | - | - | - | - | - |
-| codex-cli | not verified: no full direct row | - | - | PASS | - | - | 2026-11-04 |
+| codex-cli | verified | 0.165.0 | PASS | PASS | PASS | PASS | 2026-11-04 |
 | copilot-cli | not verified: no full direct row | - | - | - | - | - | 2026-11-02 |
 | crush-cli | not verified: no full direct row | - | - | - | - | - | 2026-11-02 |
 | droid-cli | not verified: no key | - | - | - | - | - | - |
@@ -24,6 +24,9 @@ Written by scripts/pad/table (PRD-12 section 9) from pad-rows.jsonl. Do not edit
 
 | Started | Case | Mode | Variant | Result | C1 | C2 | C3 | C4 | C5 | C6 | Wire / harness calls | Subagents | Tokens in / out | Gaps | Why |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-04T05:08:35+00:00 | gateway | micro | - | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | 0 / None | 0 | None / None | - | C3 INCONCLUSIVE: secret exercise not done: no MASK of a planted shape; C1 INCONCLUSIVE: the harness did no work (commits since start 0, model requests 4, tool turn none; work is a commit, or 10 model requests with a tool-using turn); C2 INCONCLUSIVE: the harness did no work (commits since start 0, model requests 4, tool turn none; work is a commit, or 10 model requests with a tool-using turn); C4 INCONCLUSIVE: the harness did no work (commits since start 0, model requests 4, tool turn none; work is a commit, or 10 model requests with a tool-using turn); C5 INCONCLUSIVE: the harness did no work (commits since start 0, model requests 4, tool turn none; work is a commit, or 10 model requests with a tool-using turn); C6 INCONCLUSIVE: the harness did no work (commits since start 0, model requests 4, tool turn none; work is a commit, or 10 model requests with a tool-using turn); faults INCONCLUSIVE: the harness did no work (commits since start 0, model requests 4, tool turn none; work is a commit, or 10 model requests with a tool-using turn) |
+| 2026-11-04T05:04:20+00:00 | gateway | full | - | FAIL | FAIL | FAIL | INCONCLUSIVE | PASS | FAIL | PASS | 3 / None | 0 | 8 / 1 | - | C3 INCONCLUSIVE: secret exercise not done: no MASK of a planted shape; C1 FAIL: ai-gateway.vercel.sh not decrypted in counts.hosts; C1 FAIL: model calls not through the gateway: api.anthropic.com; C2 INCONCLUSIVE: no thread with a parent; C2 FAIL: a thread with no wire calls and no native stream; recorded model claude-haiku-4-5-20251001, pinned deepseek/deepseek-v4.1-flash; C5 FAIL: a thread with no model or no calls |
+| 2026-11-04T05:04:20+00:00 | dodger | full | - | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 0 / 93 | 5 | 196 / 320302 | pinned 45 | - |
 | 2026-11-04T00:32:50+00:00 | direct | full | - | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 124 / 90 | 5 | 61398 / 281724 | - | - |
 | 2026-11-03T21:02:47+00:00 | direct | full | - | FAIL | PASS | INCONCLUSIVE | PASS | FAIL | INCONCLUSIVE | PASS | None / None | 0 | None / None | - | C3 PASS: stated loss: shape in streamed reply: generic_secret_assignment in ed92698b9d59dd415/0.188/deltas, ed92698b9d59dd415/0.255/deltas, ed92698b9d59dd415/0.286/deltas; C4 FAIL: server copy not fetched; C2 INCONCLUSIVE: no usage summary; C5 INCONCLUSIVE: no usage summary |
 
@@ -31,7 +34,15 @@ Written by scripts/pad/table (PRD-12 section 9) from pad-rows.jsonl. Do not edit
 
 | Started | Case | Mode | Variant | Result | C1 | C2 | C3 | C4 | C5 | C6 | Wire / harness calls | Subagents | Tokens in / out | Gaps | Why |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-04T05:47:47+00:00 | dodger | full | - | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 0 / 169 | 6 | 216609 / 60687 | pinned 242 | - |
+| 2026-11-04T05:25:55+00:00 | direct | full | - | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 153 / 152 | 5 | 206499 / 60842 | - | - |
 | 2026-11-04T00:32:50+00:00 | gateway | full | - | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 321 / 317 | 7 | 609746 / 525060 | - | - |
+
+## codex-cli, fault and check runs
+
+| Started | Case | Mode | Variant | Result | C1 | C2 | C3 | C4 | C5 | C6 | Wire / harness calls | Subagents | Tokens in / out | Gaps | Why |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-04T06:09:19+00:00 | direct | full | kill-recorder@3 kill-recorder@5 | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 182 / 176 | 7 | 252062 / 66545 | recorder_down 2 | - |
 
 ## copilot-cli, runs
 
