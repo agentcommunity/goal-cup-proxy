@@ -232,21 +232,7 @@ fn add(list: &mut Vec<Host>, pinned: &[String], mut host: Host) {
     }
 }
 
-/// Whether `name` matches `pattern`: exact, `*.a.b` (labels before `a.b`), or one `*` in a label.
-pub(crate) fn matches(pattern: &str, name: &str) -> bool {
-    if let Some(suffix) = pattern.strip_prefix("*.").filter(|s| !s.contains('*')) {
-        let labels_before = |b: &str| b.len() > 1 && b.ends_with('.');
-        return name.strip_suffix(suffix).is_some_and(labels_before);
-    }
-    let (p, n): (Vec<&str>, Vec<&str>) = (pattern.split('.').collect(), name.split('.').collect());
-    p.len() == n.len()
-        && p.iter().zip(&n).all(|(p, n)| match p.split_once('*') {
-            Some((head, tail)) => {
-                n.len() >= head.len() + tail.len() && n.starts_with(head) && n.ends_with(tail)
-            }
-            None => p == n,
-        })
-}
+pub(crate) use goalcup_format::shared::host_matches as matches;
 
 /// goalcup's own server or a subdomain, or any name holding `goalcup` (PRD-17 N5).
 fn own_server(name: &str) -> bool {

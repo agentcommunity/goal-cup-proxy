@@ -457,7 +457,7 @@ is shown as `sha12` (the first 12 hex digits of its SHA-256) and where it is, ne
 `secrets` is the same scan on records and loose files. `FILE` holds one value per line, trimmed,
 blank lines skipped. A value is looked for as written (`raw`), in base64 at its three alignments
 (`base64_0` to `base64_2`), percent encoded (`percent`) and JSON escaped (`json`). The shapes are
-the masker's own list, `crates/goalcup/src/mask/shapes.tsv`.
+the masker's own list, `connectors/shapes.tsv`.
 
 The scan reads DATA joined per stream (a value split over two pieces is found), the joined text of
 server-sent events and WebSocket messages, OPEN meta, END and GAP tails, and events. A GAP or an

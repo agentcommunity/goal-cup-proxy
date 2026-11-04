@@ -8,7 +8,7 @@ use crate::input::{self, Entry};
 use crate::integrity::{Check, Res};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use goalcup_format::StreamKind::{HttpResp, WsDown};
-use goalcup_format::{FLAG_FIN, Record, hex};
+use goalcup_format::{FLAG_FIN, Record, hex, shared};
 use regex::bytes::Regex;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -16,18 +16,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::LazyLock;
 
 /// Seam S12: kind, guard and regex per data line.
-const SHAPES: &str = include_str!("../../goalcup/src/mask/shapes.tsv");
-/// What ends just before a glued match when the masker's left guard still masks it (PRD-05
-/// section 4: a backslash, `\u`, `\x`, percent or ANSI escape): such a hit is no `glued_shape`.
-/// SEAM NOTE for PRD-05: exporting `glued` would let this copy of `ends_an_escape` go.
-static ESCAPE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?:\\+(?:[A-Za-z0-9]|u[0-9A-Fa-f]{4}|x[0-9A-Fa-f]{2})|%[0-9A-Fa-f]{2}|(?:\x1b|\\+(?:u001[bB]|x1[bB]|033|e))\[[0-9;]{0,16}[A-Za-z])$").expect("escape")
-});
-/// The bytes before a match the left guard reads (the masker's `GUARD_BYTES`).
-const GUARD: usize = 24;
+const SHAPES: &str = include_str!("../../../connectors/shapes.tsv");
 /// The bytes a tail gathers before it is scanned again with the 4 KiB it keeps.
 const BATCH: usize = 64 << 10;
 
@@ -253,7 +244,6 @@ impl Scan {
         if t.seen == t.buf.len() {
             return;
         }
-        let word = |c: &u8| *c == b'_' || c.is_ascii_alphanumeric();
         let base = t.end - t.buf.len() as u64;
         t.last.resize(r.rules.len(), 0);
         let buf = &t.buf;
@@ -264,8 +254,7 @@ impl Scan {
                     continue;
                 }
                 t.last[i] = base + m.end() as u64;
-                let before = &buf[s.saturating_sub(GUARD)..s];
-                let glued = *guard && before.last().is_some_and(word) && !ESCAPE.is_match(before);
+                let glued = *guard && shared::glued(&buf[..s]);
                 let (list, name) = match (kind.is_empty(), glued) {
                     (true, _) => (0, r.forms[b]),
                     (false, false) => (1, *kind),

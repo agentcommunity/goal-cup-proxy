@@ -16,7 +16,7 @@ use regex::bytes::Regex;
 use std::sync::OnceLock;
 
 /// The shared literals as data (S12). The verifier includes the same file.
-pub(crate) const SHAPES_TSV: &str = include_str!("shapes.tsv");
+pub(crate) const SHAPES_TSV: &str = include_str!("../../../../connectors/shapes.tsv");
 
 /// The kind of the one soft rule: it loses every overlap and keeps what the winner did not
 /// cover (see [`select`]).
@@ -49,7 +49,7 @@ pub(crate) const PEM_BODY_MAX: usize = 15_872;
 pub(crate) const PEM_SLICE: usize = 8 * 1024;
 
 /// How many bytes before a match the left guard reads.
-pub(crate) const GUARD_BYTES: usize = 24;
+pub(crate) const GUARD_BYTES: usize = goalcup_format::shared::GUARD_BYTES;
 
 /// What an invalid byte reads as when the rules match: one ASCII `0`. Every key body class
 /// takes it and no shared rule's fixed prefix starts or completes with it, so a key with an
@@ -202,58 +202,7 @@ pub(crate) fn match_view(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
 
 // ── the left guard ─────────────────────────────────────────────────────────────────────
 
-/// Whether a guarded match whose raw bytes before it are `before` is glued to a word: the byte
-/// just before it is one of `[A-Za-z0-9_]` and ends no escape (PRD-05 section 4). Reads at most
-/// the last [`GUARD_BYTES`]. Nothing before the match (start of input, after a gap, after a
-/// message end) is never glued. Never `\b`: that misses keys after `\n` in JSON text.
-pub(crate) fn glued(before: &[u8]) -> bool {
-    let before = &before[before.len().saturating_sub(GUARD_BYTES)..];
-    let Some(&last) = before.last() else {
-        return false;
-    };
-    (last.is_ascii_alphanumeric() || last == b'_') && !ends_an_escape(before)
-}
-
-/// Whether the last byte of `b` ends a backslash escape (one or more backslashes, then a letter
-/// or digit, or `u` and 4 hex, or `x` and 2 hex), a percent escape, or an ANSI colour code.
-fn ends_an_escape(b: &[u8]) -> bool {
-    let n = b.len();
-    let Some(&last) = b.last() else {
-        return false;
-    };
-    let backslash_before = |i: usize| i > 0 && b[i - 1] == b'\\';
-    let hex_tail = |k: usize| n >= k && b[n - k..].iter().all(u8::is_ascii_hexdigit);
-    if last.is_ascii_alphanumeric() && backslash_before(n - 1) {
-        return true;
-    }
-    if hex_tail(4) && n >= 5 && b[n - 5] == b'u' && backslash_before(n - 5) {
-        return true;
-    }
-    if hex_tail(2) && n >= 3 && (b[n - 3] == b'%' || (b[n - 3] == b'x' && backslash_before(n - 3)))
-    {
-        return true;
-    }
-    if !last.is_ascii_alphabetic() {
-        return false;
-    }
-    // ESC `[`, up to 16 of `[0-9;]`, then the letter.
-    let mut i = n - 1;
-    let mut params = 0;
-    while i > 0 && params < 16 && (b[i - 1].is_ascii_digit() || b[i - 1] == b';') {
-        i -= 1;
-        params += 1;
-    }
-    if i == 0 || b[i - 1] != b'[' {
-        return false;
-    }
-    let head = &b[..i - 1];
-    if head.last() == Some(&0x1b) {
-        return true;
-    }
-    [&b"u001b"[..], b"u001B", b"x1b", b"x1B", b"033", b"e"]
-        .iter()
-        .any(|intro| head.ends_with(intro) && backslash_before(head.len() - intro.len()))
-}
+pub(crate) use goalcup_format::shared::glued;
 
 /// The last up-to-[`GUARD_BYTES`] bytes of `a` then `b`, into `buf`; their count.
 pub(crate) fn guard_context(a: &[u8], b: &[u8], buf: &mut [u8; GUARD_BYTES]) -> usize {
