@@ -74,4 +74,5 @@ When a release changes something a sheet says (a path, a variable, the session f
 flow, a host), open a PR that edits the sheet and updates "Facts for version" and "Last checked".
 If the harness has a connector, change the connector in the same PR and follow
 [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md) again. A new build of a known harness needs no
-connector change when the sheet's facts still hold: builds are recorded, not pinned.
+connector change when the sheet's facts still hold: builds are recorded, never refused
+([Harness versions](../CONNECTOR-SCHEMA.md#harness-versions)).

@@ -19,12 +19,16 @@ It has eight commands: `setup`, `start`, `continue`, `recover`, `status`, `seal`
 
 ## 1. What you need
 
-- A Mac or a Linux machine. On Windows use WSL2 (Ubuntu inside Windows) and do everything inside it.
-  WSL1 is refused, and so is a project folder on a Windows drive.
+- A Mac or a Linux machine ([platforms](../README.md#platforms)). On Windows use WSL2 (Ubuntu
+  inside Windows) and do everything inside it. WSL1 is refused, and so is a project folder on a
+  Windows drive.
+- A direct internet connection. Company proxy networks are not supported: goalcup refuses to set up
+  or start when `HTTPS_PROXY` or `ALL_PROXY` is set.
 - `git`, and a GitHub account for the real run.
 - A harness from [the harness list](harnesses/README.md), and the account or API key it uses.
 - An Agent Community account signed up at [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup),
-  where you hand in your demo video and questionnaire after the run.
+  where you hand in your two videos (a setup video before the run, a demo after it) and the
+  questionnaire ([RULES](RULES.md#submission)).
 
 ## 2. Install
 
@@ -164,9 +168,9 @@ no model request was written, fix the setup now.
 
 ## 6. Your run
 
-Start inside the 24-hour start window (7 Nov 2026, 00:00 to 8 Nov, 00:00 UTC). Steps 1 to 4 can be
-done before it opens. A real run needs its own new repository and token. Do the steps in this order:
-a token for one repository needs the repository to exist first.
+Start inside the start window (date and length: [RULES](RULES.md#timeline)).
+Steps 1 to 4 can be done before it opens. A real run needs its own new repository and token. Do the
+steps in this order: a token for one repository needs the repository to exist first.
 
 1. **Create the repository.** On [github.com/new](https://github.com/new): public, and empty. Add no
    README, no `.gitignore`, no licence. A repository with any commit is refused, and the server
@@ -321,7 +325,8 @@ line.
 | `No model request was written yet. If your agent is working, it may not use the recording proxy.` (5 minutes after the launch) | Type your prompt if you have not. If the agent is answering, write to support. |
 | `No model request was written for 10 minutes, but <harness>'s session files grew. ...` | The agent may not be using the proxy, or uses a model service `goalcup` does not know. Its session files are still recorded. See `goalcup setup --record-host`. |
 | `<host> streamed data for N minutes and was not recorded. If it is a model service, run: goalcup setup --record-host <host>. ...` (also "received N MB from your agent") | Run the command, then `goalcup seal` and `goalcup continue`; the host is recorded from that part on. If it is not a model service, ignore the line. |
-| `Not recorded: <host> refused the recorder (it checks its own certificates). Its traffic passed through unread.` (or: its certificate is not one `goalcup` trusts, a company proxy) | Nothing to fix. The traffic passes unread and the end screen names it. |
+| `Not recorded: <host> refused the recorder (it checks its own certificates). Its traffic passed through unread.` | Nothing to fix. The traffic passed unread and the end screen names it. |
+| `Not recorded: <host>'s certificate is not one goalcup trusts (a company proxy?), so goalcup passed it through unread.` | goalcup did not read or record that traffic; the end screen names it. If `<host>` is your model service, its calls are not recorded: use a direct network ([section 1](#1-what-you-need)) and write to support. |
 | `goalcup has not updated this run since ... The computer may have slept or restarted. To go on, run: goalcup continue <run>` | The computer slept or restarted. Run the command. |
 | `<harness> has exited (exit code 0). The run is still open until ... To go on, run: goalcup continue <run>` | The agent ended before the deadline. Run the command. |
 | `goalcup hid N MB it could not check for secrets in time. Those bytes are stars in the record.` | Nothing to do. Hiding too much is the safe side. |
@@ -403,8 +408,9 @@ Then:
 
 - **Delete the token** on GitHub (Settings, Developer settings, Fine-grained personal access tokens,
   Delete), and delete `.env.local`. Log the harness out, or rotate its key.
-- Hand in your demo video and questionnaire on
-  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup) within 24 hours.
+- Hand in the demo and the questionnaire on
+  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup); the setup video comes before the
+  run ([RULES](RULES.md#submission)).
 
 ## 9. What is recorded, and what is not
 
@@ -432,7 +438,9 @@ Also not recorded, or recorded less:
 - **An HTTP/2 feature goalcup cannot follow** is passed on unharmed and named as a gap. For an
   extended CONNECT stream only that stream is not read; for a push, a broken header compression, an
   oversized header block or broken HTTP/2 framing the rest of that connection is not read.
-- **HTTP/3, QUIC and ECH** never reach a proxy, and a network that re-signs TLS is not supported.
+- **HTTP/3, QUIC and ECH** never reach a proxy. A host whose certificate goalcup does not trust
+  passes through unread and is named on the end screen. Company proxy networks are not supported
+  ([section 1](#1-what-you-need)).
 - **A token used as the user name of a URL with no password** may be recorded.
 - **SQLite harnesses** keep their data in a database; it is copied once, at the seal.
 - **On Linux**, memory `goalcup` holds can reach swap that is not encrypted. It is the one place raw

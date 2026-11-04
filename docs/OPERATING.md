@@ -47,8 +47,7 @@ All times UTC.
 |---|---|
 | 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
 | 6 Nov | Release 1.0.0 ([Releasing](#releasing)), then the owner deploys production ([Deploy](#deploy)), then the `EVENT_ID` switch, any time from 00:00 on 6 Nov to 00:00 on 7 Nov ([EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026)). Releases may continue during the cup. |
-| 7 Nov 00:00 | Start window opens. It lasts 24 hours. |
-| 8 Nov 00:00 | Start window closes |
+| Start window | Date and length: [RULES](RULES.md#timeline). |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
 
 Before the window opens:

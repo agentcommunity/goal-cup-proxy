@@ -35,9 +35,10 @@ All times are UTC.
   with `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`
   ([guide](PARTICIPANT-GUIDE.md#2-install)).
 - **Until the start window:** you prepare with `goalcup setup` and practice runs, which are not
-  limited to any window. The release is planned for 6 November, 12:00; it is not a cutoff, and
+  limited to any window. The release is published before the start window; it is not a cutoff, and
   releases may follow (D70).
-- **7 November 2026, 00:00:** the 24-hour start window opens. It closes at 00:00 on 8 November.
+- **Start window:** opens 5 December 2026, 00:00 UTC (placeholder, OWNER-Q date: confirm) and lasts
+  24 hours (OWNER-Q length: may become 48 hours).
 - **During the window:** you finalize your prompt and start your run.
 - **The run's start:** the server opens the run, stamps its official start on its own clock, and
   sets its deadline 168 hours later.
@@ -204,9 +205,11 @@ disclosure and no-side-channel rules.
 
 - One measured root agent owns the run. It may create trace-linked subagents inside the same
   harness. It may not run another harness; one run uses one harness.
-- Do not update the harness during the run. Goal Cup Proxy records the harness build that runs and
-  refuses no build. Some apps update themselves whatever you do; Goal Cup Proxy samples the version,
-  records a change as an event, and an organizer looks at it. That is a flag, not a disqualification.
+- Do not update the harness during the run. Goal Cup Proxy reads the harness version each time a
+  run starts or continues and records it. Some apps update themselves whatever you do: if the version
+  differs when you continue, the record shows it and an organizer looks at it. That is a flag, not a
+  disqualification. Which versions are accepted:
+  [Harness versions](CONNECTOR-SCHEMA.md#harness-versions).
 - **Do not use flags or modes that switch capture off.** Each of these was tested and silently
   produces a session with no evidence: Hermes `--safe-mode`, `HERMES_SAFE_MODE=1` and
   `--ignore-user-config`; OpenCode `--pure`, `OPENCODE_PURE=1`, `OPENCODE_DISABLE_PROJECT_CONFIG=1`,
@@ -256,8 +259,9 @@ disclosure and no-side-channel rules.
   login is passed to the agent: not your SSH agent, your `gh` configuration or your credential
   helper. Your agent runs as you, so it can still read what any program of yours can read (next
   bullets), including an SSH key in `~/.ssh` (see Keys).
-- **Platforms.** macOS (Apple silicon and Intel) and Linux (x86_64 and arm64). On Windows, use WSL2
-  for the event. Native Windows comes later.
+- **Platforms.** See the [README table](../README.md#platforms). On Windows, use WSL2 for the event.
+  Native Windows comes later. Company proxy networks are not supported
+  ([guide](PARTICIPANT-GUIDE.md#1-what-you-need)).
 - **Desktop apps are not supported.** The Codex desktop app and Claude Desktop cannot be launched with
   a private environment, so the only way to record one would be a system-wide proxy that captures
   every application on the machine. We do not do that. Use the CLI.
@@ -341,10 +345,9 @@ disclosure and no-side-channel rules.
   Claude or login credentials are not stored as headers: the recording proxy masks their header values
   before anything is written, and keeps neither their values nor any fingerprint of them. Goal Cup
   Proxy does not watch other terminals, your browser, other processes or audio. It also records the
-  harness build and non-identifying facts about the machine (operating system and version,
-  architecture, CPU count, memory, disk size and free space, WSL2, container, mains power): no host
-  name, user name or serial number. The server keeps the IP address and country of each connection,
-  on the server only, never in the trace and never public.
+  harness build and two non-identifying facts about the machine (operating system and CPU count):
+  no host name, user name or serial number. The server keeps the IP address and country of each
+  connection, on the server only, never in the trace and never public.
 - **Raw traces and terminal output stay private.** They are used only for compliance review and the
   announced research project. They hold more about you than you might expect (Codex stamps your plan
   type, credit balance and quota percentage into every token-count event), which is another reason
@@ -404,10 +407,12 @@ supported recording path and its runs do not count.
   it up to date as it works; judges read the version in the judged push, and it can be your written
   material. Ask for it in your prompt: the goal-cup skill tells Codex and Claude Code, but not every
   harness gets that skill.
-- **Demo video and questionnaire.** You hand in a demo video and answer a questionnaire after the run.
-  They are due 24 hours after your own run's 168 hours end, so a later start gets a later due time.
-  You hand them in on the website, not through Goal Cup Proxy. Nothing is added to your repository for
-  them.
+- **Two videos and a questionnaire.** Both the setup video and the demo video are required. The
+  setup video comes before the run: the goal, the harness, the model and the plan. Its due time is
+  not set yet (OWNER-Q setup-due). The demo comes after the run and shows the product; it and the
+  questionnaire are due 24 hours after your own 168 hours end. You hand in both videos and the
+  questionnaire on the event site (OWNER-Q setup-upload: where the setup video goes), not through
+  Goal Cup Proxy. Nothing is added to your repository for them.
 - A local product may run for demonstration, and ordinary runtime data and caches are allowed. Source,
   history and submitted artifacts must stay unchanged through judging. Online services may not be
   rebuilt or redeployed with changed code.

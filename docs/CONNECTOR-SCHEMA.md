@@ -3,8 +3,8 @@
 A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A new
 connector is its TOML file alone; `crates/goalcup-format/build.rs` builds every `connectors/*.toml`
 into both binaries, and `tests/connector_builtin.rs` fails on an `id` that differs from the file name.
-Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a connector. Nothing is
-pinned. The `start` event names the connector (`connector`, `connector_source`, `connector_sha256`)
+Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a connector.
+The `start` event names the connector (`connector`, `connector_source`, `connector_sha256`)
 and the host list's hash (`hosts_sha256`).
 
 ## The connector contract
@@ -83,6 +83,21 @@ thread = ["x-session-id"]
 join = "thread"
 thread_db = { row = "db", file = "crush.db*", table = "sessions", id = "id", parent = "parent_session_id", xxh3 = true }
 ```
+
+## Harness versions
+
+Goal Cup Proxy reads the harness version, records it and says one plain line. The policy is that no
+version refuses a start; one exception remains today and is being removed.
+
+- Read: the first version-looking token of `<program> --version` (stdout, else stderr).
+- Recorded: `harness_version` in the `start` event of every boot, a continue included (see
+  [RECORD-FORMAT](RECORD-FORMAT.md)). Planned: a version read at seal too.
+- Refused: only at start and setup, when another built-in connector fits the version better
+  (OpenCode 1 vs 2). That refusal is being removed.
+- A known problem: today a `[[version_notes]]` row (`versions`, `say`), said at start and recorded;
+  planned: a `[[versions]]` note.
+- "Verified" is not a connector field. [`connectors/tiers.toml`](../connectors/tiers.toml) is
+  written from pad rows; (version, os) pairs are planned.
 
 ## Load checks
 

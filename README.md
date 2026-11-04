@@ -7,8 +7,9 @@ start and an end, never skipped. It uploads the record to the Goal Cup server wh
 Everything runs on your machine, and anyone can check a record later with `goalcup-verify`.
 
 Its first use is the /goal Cup: one prompt, one agent, 168 hours. The organizer is
-[Agent Community](https://agentcommunity.org). Sign-up, the rules summary, the demo video and the
-questionnaire are on the event site, [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup).
+[Agent Community](https://agentcommunity.org). Sign-up, the rules summary, and where you hand in the
+videos and the questionnaire are on the event site,
+[agentcommunity.org/goalcup](https://agentcommunity.org/goalcup).
 
 Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 
@@ -65,8 +66,9 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
 **The end.** At the deadline goalcup stops the agent, finishes the record and uploads the rest. The
 end screen says what was written and what was lost. What is judged is the last push to your
 repository's default branch that GitHub received before the deadline. Your agent must push its own
-work; goalcup never pushes. Then hand in your demo video and questionnaire on the event site
-within 24 hours ([the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
+work; goalcup never pushes. Then hand in the demo and the questionnaire on the event site.
+The setup video comes before the run ([rules](docs/RULES.md#submission),
+[the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
 
 ## Commands
 
@@ -89,7 +91,7 @@ command could not do its job.
 
 | Command | What it does |
 |---|---|
-| `goalcup-verify check <PATH> [--json] [--live] [--server] [--local <ENTRY_DIR>] [--known <FILE>]` | Prove an entry, a run or a fetched folder whole, and name every loss. `--json` prints the report ([RECORD-FORMAT](docs/RECORD-FORMAT.md)). |
+| `goalcup-verify check <PATH> [--json] [--live] [--server] [--local <ENTRY_DIR>] [--known <FILE>] [--harness-files <MANIFEST>]` | Prove an entry, a run or a fetched folder whole, and name every loss. `--json` prints the report ([RECORD-FORMAT](docs/RECORD-FORMAT.md)). `--harness-files` takes the pad's list of harness files on disk, `[{"path": "<source>:<path>", "size": n}]`. `check` checks for secrets only with `--known`; `goalcup-verify secrets` also scans for secret shapes. |
 | `goalcup-verify dump <PATH> [--sid <ID>] [--kind <KIND>] [--text]` | One JSON line per record. Payload only with `--text`. |
 | `goalcup-verify secrets [--known <FILE>] <PATHS>...` | Scan records and raw files for known secret values and secret shapes. |
 | `goalcup-verify usage <PATH> [--json] [--out <OUT>]` | Read tokens, models and subagents from a record. |
@@ -141,8 +143,12 @@ flow are [ARCHITECTURE](docs/ARCHITECTURE.md).
 |---|---|
 | macOS arm64 | Tested on the owner's Mac (macOS 26.6). |
 | Linux x86_64 | Tested in sandboxes. |
-| Linux arm64 | Built, not yet tested. |
+| macOS Intel (x86_64) | OWNER-Q platforms: supported, tested or untested? Built: yes (release.yml, `x86_64-apple-darwin`). |
+| Linux arm64 | Built (release.yml, `aarch64-unknown-linux-gnu`), not yet tested. |
 | Windows | Use WSL2 (below). |
+
+Company proxy networks are not supported
+([guide](docs/PARTICIPANT-GUIDE.md#1-what-you-need)).
 
 Known issues: [TODO](TODO.md#known-issues). On a machine with no browser, set `GOALCUP_NO_BROWSER=1`:
 the approval address is printed instead.
