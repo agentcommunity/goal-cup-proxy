@@ -407,10 +407,10 @@ supported recording path and its runs do not count.
   harness gets that skill.
 - **Two videos and a questionnaire.** Both the setup video and the demo video are required. The
   setup video comes before the run: the goal, the harness, the model and the plan. It is due by
-  OWNER-Q setup-due. The demo comes after the run and shows the product; it is due 24 hours after
-  your own 168 hours end. You hand in both, and the questionnaire, on the event site
-  (OWNER-Q setup-upload: where the setup video goes), not through Goal Cup Proxy. Nothing is added to
-  your repository for them.
+  OWNER-Q setup-due. The demo comes after the run and shows the product; it and the questionnaire
+  are due 24 hours after your own 168 hours end. You hand in both videos and the questionnaire on the
+  event site (OWNER-Q setup-upload: where the setup video goes), not through Goal Cup Proxy. Nothing
+  is added to your repository for them.
 - A local product may run for demonstration, and ordinary runtime data and caches are allowed. Source,
   history and submitted artifacts must stay unchanged through judging. Online services may not be
   rebuilt or redeployed with changed code.

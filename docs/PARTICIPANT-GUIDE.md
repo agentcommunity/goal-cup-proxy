@@ -405,7 +405,7 @@ Then:
 - **Delete the token** on GitHub (Settings, Developer settings, Fine-grained personal access tokens,
   Delete), and delete `.env.local`. Log the harness out, or rotate its key.
 - Hand in the demo and the questionnaire on
-  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup); the setup video was due before the
+  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup); the setup video comes before the
   run ([RULES](RULES.md#submission)).
 
 ## 9. What is recorded, and what is not
