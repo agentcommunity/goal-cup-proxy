@@ -22,7 +22,7 @@ not a signature.
 
 It edits no shell profile. When the bin folder is not on `PATH` it prints one line which, when the
 participant runs it, exports `PATH` and appends the same export to `~/.zshrc`, `~/.bashrc`
-(`~/.bash_profile` on macOS) or `~/.profile` (by `$SHELL`).
+(`~/.bash_profile` on macOS) or `~/.profile` (by `$SHELL`); for fish it is `fish_add_path`.
 
 **Run guard.** Before anything in the prefix changes, the installer asks the `goalcup` it would
 replace (`<prefix>/bin/goalcup`, else the one on `PATH`) for `goalcup status --json`, one JSON

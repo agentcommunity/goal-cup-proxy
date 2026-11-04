@@ -57,7 +57,8 @@ detect_target() {
 }
 
 # fetch <url> <file>: curl, else wget. Fails on an HTTP error. An https:// address is fetched
-# over TLS 1.2 or later only, and a redirect may not leave https.
+# over TLS 1.2 or later only. curl also refuses a redirect that leaves https; wget cannot (its
+# --https-only covers only recursive downloads) and follows the release host's redirect as given.
 fetch() {
     if command -v curl >/dev/null 2>&1; then
         case "$1" in
@@ -216,8 +217,8 @@ cleanup() {
     exit "$cleanup_status"
 }
 
-# The one line that puts the bin folder on PATH now and appends the same export to the profile
-# of the participant's shell. Nothing here runs it.
+# The one line that puts the bin folder on PATH now and for new shells: an export appended to the
+# profile of the participant's shell, or for fish `fish_add_path`. Nothing here runs it.
 path_line() {
     dir="$prefix/bin"
     case $dir in

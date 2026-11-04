@@ -31,14 +31,16 @@ const BACKLOG: i32 = 4_096;
 /// Links `exe` to `rec/goalcup` (a copy, mode kept, where a link fails: another volume), so
 /// every boot of the run starts the binary the run started with, whatever an install puts at
 /// `exe` meanwhile. Never a copy onto a tmp that exists (a crash's, or a second pin's): it may be
-/// a link to `exe`, and the copy would empty `exe`.
+/// a link to `exe`, and the copy would empty `exe`. A symlink at `exe` is followed first: a link
+/// to the symlink itself (macOS `linkat`) could point at nothing from `rec/`.
 pub fn pin_exe(exe: &Path, rec: &Path) -> io::Result<PathBuf> {
+    let exe = std::fs::canonicalize(exe)?;
     let (tmp, pinned) = (rec.join("goalcup.tmp"), rec.join(super::EXE_FILE));
     let _ = std::fs::remove_file(&tmp);
-    let done = std::fs::hard_link(exe, &tmp)
+    let done = std::fs::hard_link(&exe, &tmp)
         .or_else(|e| match e.kind() {
             io::ErrorKind::AlreadyExists => Err(e),
-            _ => std::fs::copy(exe, &tmp).map(drop),
+            _ => std::fs::copy(&exe, &tmp).map(drop),
         })
         .and_then(|()| std::fs::rename(&tmp, &pinned));
     if done.is_err() {
@@ -486,6 +488,17 @@ mod tests {
         assert!(!rec.join("goalcup.tmp").exists());
     }
 
+    #[test]
+    fn pin_exe_follows_a_relative_symlink() {
+        let t = tempfile::tempdir().unwrap();
+        let (bin, rec) = (t.path().join("bin"), t.path().join("rec"));
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::create_dir(&rec).unwrap();
+        std::fs::write(t.path().join("real"), b"real").unwrap();
+        std::os::unix::fs::symlink("../real", bin.join("goalcup")).unwrap();
+        let pinned = pin_exe(&bin.join("goalcup"), &rec).unwrap();
+        assert_eq!(std::fs::read(&pinned).unwrap(), b"real");
+    }
     #[test]
     fn pin_exe_fails_cleanly() {
         let t = tempfile::tempdir().unwrap();

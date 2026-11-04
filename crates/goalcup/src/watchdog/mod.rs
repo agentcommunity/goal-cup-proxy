@@ -328,7 +328,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
         return failed("ca_files");
     }
     facts.ca = ca.export();
-    if !start_line_fits(&facts) {
+    if !start_line_fits(&facts, &plan.program) {
         return failed("start_line");
     }
     if write_key(&rec, &facts.ca.key).is_err() {
@@ -957,9 +957,24 @@ fn line_bytes(l: &impl Serialize) -> Option<Vec<u8>> {
     Some(text)
 }
 
-/// The first line, newline included, is at most [`MAX_LINE`], so [`read_line`] reads it.
-fn start_line_fits(facts: &StartFacts) -> bool {
-    line_bytes(&ToRecorder::Start(Box::new(facts.clone()))).is_some_and(|t| t.len() <= MAX_LINE)
+/// The longest first line of this run, newline included, is at most [`MAX_LINE`], so
+/// [`read_line`] reads it: a later boot or a recover sends the same facts with the harness, the
+/// cause, `null_since` and the deadline filled in, here at their longest.
+fn start_line_fits(facts: &StartFacts, program: &Path) -> bool {
+    let mut worst = facts.clone();
+    worst.deadline = Some(u64::MAX);
+    worst.null_since = Some(u64::MAX);
+    worst.prev = Some(Prev::Cause(Cause::NullMode {
+        exits: u64::MAX,
+        last: Some(Exit::Signal(i32::MIN)),
+    }));
+    worst.harness = Some(HarnessFacts {
+        pid: u32::MAX,
+        program: program.display().to_string(),
+        started: goalcup_format::dump::wall(u64::MAX),
+        start_id: u64::MAX,
+    });
+    line_bytes(&ToRecorder::Recover(Box::new(worst))).is_some_and(|t| t.len() <= MAX_LINE)
 }
 
 /// The next control line, both ways: None at EOF or on a read error; `Some(None)` for a line
@@ -1202,6 +1217,29 @@ mod tests {
             longest = longest.max(line.len() + 1);
         }
         assert!(longest <= MAX_LINE, "{longest}");
+    }
+
+    /// A first line that fits only until a later boot fills in the harness and the cause is
+    /// refused at the start: else that boot, or a recover, could not read its line.
+    #[test]
+    fn a_start_line_with_no_room_for_a_later_boot_is_refused() {
+        let ca = RunCa::mint(&["example.org".to_string()]).unwrap().export();
+        let mut facts: StartFacts = serde_json::from_value(serde_json::json!({
+            "run": "r", "entry": "e", "segment": 0, "entry_dir": "/e", "local_wall": 0,
+            "workspace": "/w", "keep": true, "connector": {"id": "fake"}, "hosts": {},
+            "hosts_sha256": "", "native": {}, "mask_rules": [], "values": [], "ca": ca,
+            "notes": []}))
+        .unwrap();
+        let first = |f: &StartFacts| line_bytes(&ToRecorder::Start(Box::new(f.clone()))).unwrap();
+        let room = MAX_LINE - first(&facts).len();
+        facts.harness_version = Some("v".repeat(room - 100));
+        assert!(first(&facts).len() <= MAX_LINE);
+        assert!(!start_line_fits(
+            &facts,
+            Path::new("/usr/local/bin/harness")
+        ));
+        facts.harness_version = Some("v".repeat(room - 1_000));
+        assert!(start_line_fits(&facts, Path::new("/usr/local/bin/harness")));
     }
 
     /// Ledger R3a: a null boot's space never puts the normal try after the wait's end; with a
