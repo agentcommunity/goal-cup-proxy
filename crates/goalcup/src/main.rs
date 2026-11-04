@@ -53,7 +53,7 @@ enum Command {
         #[arg(long, conflicts_with_all = ["test", "repo"])]
         practice: bool,
         /// An organizer test run. Not for participants.
-        #[arg(long)]
+        #[arg(long, hide = true)]
         test: bool,
         /// This run's new, empty, public GitHub repository: <owner>/<name>.
         #[arg(long, value_name = "NAME")]
@@ -62,10 +62,10 @@ enum Command {
         #[arg(long, value_name = "FILE")]
         prompt: Option<PathBuf>,
         /// A connector from a file (practice and test runs only).
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", hide = true)]
         connector: Option<PathBuf>,
         /// A host list from a file (practice and test runs only).
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", hide = true)]
         hosts: Option<PathBuf>,
     },
     /// Start your agent again when it stopped before the run's time was up.
@@ -74,10 +74,10 @@ enum Command {
         #[arg(value_name = "RUN")]
         run: Option<String>,
         /// The connector file of the run's first part, if it used one.
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", hide = true)]
         connector: Option<PathBuf>,
         /// The host list file of the run's first part, if it used one.
-        #[arg(long, value_name = "FILE")]
+        #[arg(long, value_name = "FILE", hide = true)]
         hosts: Option<PathBuf>,
     },
     /// Restart recording when status says recording stopped and your agent still runs.
@@ -155,12 +155,22 @@ fn parse_error(e: clap::Error) -> ExitCode {
             ExitCode::from(1)
         }
         _ => {
-            let text = e.to_string();
-            let first = text.lines().next().unwrap_or_default();
-            say(first.strip_prefix("error: ").unwrap_or(first));
+            say(&one_line(&e.to_string()));
             ExitCode::from(1)
         }
     }
+}
+
+/// The first line of clap's message, then ` (tip: ...)` from its first `tip:` line, so the
+/// did-you-mean survives. Plain text: `Error`'s `Display` carries no styling.
+fn one_line(rendered: &str) -> String {
+    let mut lines = rendered.lines();
+    let first = lines.next().unwrap_or_default();
+    let mut out = first.strip_prefix("error: ").unwrap_or(first).to_string();
+    if let Some(tip) = lines.find_map(|l| l.trim().strip_prefix("tip:")) {
+        out.push_str(&format!(" (tip:{tip})"));
+    }
+    out
 }
 
 fn run(command: Command) -> ExitCode {
@@ -207,7 +217,7 @@ fn run(command: Command) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{Args, Command, NULL_FLAG, RECORDER_SUBCOMMAND};
+    use super::{Args, Command, NULL_FLAG, RECORDER_SUBCOMMAND, one_line};
     use clap::Parser;
 
     /// The argv the watchdog spawns (seam S8) parses as the hidden recorder in null mode.
@@ -215,5 +225,24 @@ mod tests {
     fn watchdog_argv_parses() {
         let args = Args::try_parse_from(["goalcup", RECORDER_SUBCOMMAND, NULL_FLAG]).unwrap();
         assert!(matches!(args.command, Command::Recorder { null: true }));
+    }
+
+    #[test]
+    fn one_line_keeps_the_tip() {
+        let e = Args::try_parse_from(["goalcup", "start", "--hrness", "x"])
+            .err()
+            .unwrap();
+        let line = one_line(&e.to_string());
+        assert!(line.contains("--harness"), "{line}");
+        assert!(!line.contains('\n'), "{line}");
+    }
+
+    #[test]
+    fn one_line_is_the_first_line_plus_the_tip() {
+        assert_eq!(
+            one_line("error: bad\n\n  tip: try x\n\nUsage"),
+            "bad (tip: try x)"
+        );
+        assert_eq!(one_line("error: bad\n\nUsage: x"), "bad");
     }
 }

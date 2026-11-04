@@ -82,6 +82,26 @@ fn harness_help_names_the_built_in_ids() {
 }
 
 #[test]
+fn internal_flags_are_accepted_but_not_in_the_help() {
+    let homes = Homes::new();
+    for cmd in ["start", "continue"] {
+        let help = String::from_utf8(homes.run(&[cmd, "--help"]).stdout).unwrap();
+        for flag in ["--test", "--connector", "--hosts"] {
+            assert!(!help.contains(flag), "{cmd} --help shows {flag}: {help}");
+        }
+    }
+}
+
+#[test]
+fn a_typo_d_flag_is_one_line_with_the_did_you_mean() {
+    let out = Homes::new().run(&["start", "--hrness", "x"]);
+    assert_eq!(out.status.code(), Some(1));
+    one_error_line(&out);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--harness"), "stderr: {err}");
+}
+
+#[test]
 fn cut_commands_and_unknown_flags_exit_1_never_2() {
     let homes = Homes::new();
     let cases: [&[&str]; 9] = [
