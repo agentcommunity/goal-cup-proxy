@@ -79,8 +79,7 @@ After 1.0:
 
 ## After the merge to main
 
-- The history purge: `docs/archive/`, `docs/research/`, the dated plans, `docs/RESEARCH-TARGET.md`
-  and `docs/LOCAL-RESEARCH-HANDOFF.md` (PRD-15), keeping `results/2026-10-30-two-hour-run.md`,
+- The history purge: `docs/archive/`, `docs/research/`, the dated plans (PRD-15), keeping `results/2026-10-30-two-hour-run.md`,
   `2026-10-vercel-gateway.md`, `VERCEL-COMPAT.md` and `m2-report-format.md` in `docs/research/`.
 - The DECISIONS rewrite to 24 entries with a retired-numbers table (PRD-15). Each "This supersedes"
   line names every old entry its status rows point to (D3, D9, D37, D40, D43, D45, D46, D52, D53

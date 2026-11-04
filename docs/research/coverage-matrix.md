@@ -3,8 +3,8 @@
 Status: 22 October 2026. The first table is the 19 October batch; the 22 October local test day is
 in its own table below it. These are measured cells, not a statement that every shipped harness
 has completed research validation. Raw recordings, account identifiers and detailed source
-references remain private. The [research target](../RESEARCH-TARGET.md) defines acceptance;
-the [local handoff](../LOCAL-RESEARCH-HANDOFF.md) defines the experiment limits.
+references remain private. The [research target](../archive/RESEARCH-TARGET.md) defines acceptance;
+the [local handoff](../archive/LOCAL-RESEARCH-HANDOFF.md) defines the experiment limits.
 
 Capture integrity, useful model activity, stored-byte retrieval and decoding are separate
 results. A lifecycle PASS or signed upload ACK establishes neither a model reply nor retrieval.
