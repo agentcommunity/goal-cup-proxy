@@ -12,7 +12,7 @@ use serde_json::json;
 fn asked(ago: i64, stop: bool) -> Result<String, String> {
     let at = goalcup_format::dump::wall(T0.saturating_add_signed(-ago) * 1_000_000_000);
     let word = json!({"stop": stop, "reason": null, "seconds_left": 7200, "asked_at": at});
-    line(Some(&upload(json!({"server_word": word}))), false, T0)
+    line(Some(&upload(json!({"server_word": word}))), false, None, T0)
 }
 
 #[test]
@@ -28,6 +28,17 @@ fn a_null_word_or_one_older_than_11_minutes_is_unknown() {
     assert!(asked(660, false).is_ok());
     assert!(asked(661, false).is_err());
     assert!(asked(-661, false).is_err());
-    assert!(line(Some(&upload(json!({}))), false, T0).is_err());
-    assert!(line(None, true, T0).is_err());
+    assert!(line(Some(&upload(json!({}))), false, None, T0).is_err());
+    assert!(line(None, true, None, T0).is_err());
+}
+
+#[test]
+fn without_a_fresh_word_the_run_deadline_answers() {
+    let ahead = line(None, false, Some(T0 + 7200), T0).expect("deadline");
+    assert!(ahead.contains("stops on"), "{ahead}");
+    assert_eq!(
+        line(None, false, Some(T0 - 5), T0),
+        Ok(goalcup::cli::text::TIME_IS_UP.to_owned())
+    );
+    assert!(line(None, false, None, T0).is_err());
 }
