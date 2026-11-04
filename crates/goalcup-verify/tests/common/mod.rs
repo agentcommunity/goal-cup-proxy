@@ -128,7 +128,8 @@ impl Tally {
     }
 
     fn add(&mut self, k: &'static str, v: u64) {
-        *self.n.entry(k).or_default() += v;
+        let n = self.n.entry(k).or_default();
+        *n = n.saturating_add(v);
     }
 
     fn model_request(&mut self, host: String, whole: bool) {

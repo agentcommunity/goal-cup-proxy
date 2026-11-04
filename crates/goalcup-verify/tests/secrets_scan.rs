@@ -288,6 +288,14 @@ fn a_mask_with_off_near_u64_max_does_not_panic() {
 }
 
 #[test]
+fn two_huge_fail_closed_masks_do_not_overflow_the_total() {
+    let masks = [[0, u64::MAX, 2], [5, u64::MAX, 2]];
+    let (code, _, v) = lens("mask-huge", &[b"clean".to_vec()], &masks);
+    assert_ne!(code, 3);
+    assert_eq!(v["mask_bytes"]["fail_closed"], json!(u64::MAX), "{v}");
+}
+
+#[test]
 fn secrets_nothing_is_joined_across_a_gap() {
     let (k, shape) = (known(), format!("sk-{}", "Ab1".repeat(8)));
     let (a, b) = k.split_at(9);

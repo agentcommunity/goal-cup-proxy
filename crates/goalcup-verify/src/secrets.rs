@@ -307,7 +307,7 @@ impl Scan {
         let kind = kinds.get(rule as usize).cloned();
         let kind = kind.unwrap_or_else(|| format!("other({rule})"));
         if kind == "fail_closed" {
-            self.fail_closed += len;
+            self.fail_closed = self.fail_closed.saturating_add(len);
         } else if len > 16 << 10 {
             self.big.push(json!({"kind": kind, "in": at, "len": len}));
         }
