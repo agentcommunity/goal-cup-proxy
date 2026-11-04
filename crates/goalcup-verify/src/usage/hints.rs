@@ -126,7 +126,7 @@ pub(super) fn usage(connector: Option<&str>) -> Option<&'static Usage> {
         let all = goalcup_format::connectors::CONNECTORS.iter();
         all.filter_map(|(_, text)| parse(text).ok()).collect()
     });
-    USAGE.get(connector?)
+    USAGE.get(goalcup_format::connectors::current_id(connector?))
 }
 
 /// True when `name` fits `pat`: equal, or with one `*` standing for any run of characters.

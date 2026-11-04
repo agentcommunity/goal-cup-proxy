@@ -1,9 +1,10 @@
-# Factory Droid 0.251.0, checked against docs.factory.ai (CLI settings, BYOK overview) and the 0.251.0 binary.
+# Factory Droid, checked against docs.factory.ai (CLI settings, BYOK overview) and the binary.
 # FACTORY_HOME_OVERRIDE (read in the binary, not in the docs) moves ~/.factory and nothing else, so HOME stays
 # the participant's. There is no `droid daemon stop`: a daemon or desktop app started outside goalcup keeps its env.
 id = "droid-cli"
 name = "Factory Droid"
 program = "droid"
+checked = "0.251.0"
 resume = ["--resume", "--last"]
 home = { FACTORY_HOME_OVERRIDE = "{home}" }
 env = { FACTORY_DROID_AUTO_UPDATE_ENABLED = "false" }

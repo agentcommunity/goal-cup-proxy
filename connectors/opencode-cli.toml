@@ -1,11 +1,31 @@
-# OpenCode 1.19.5, checked against opencode.ai/docs (cli, config, permissions, network) and the 1.19.5 package.
-# OpenCode 2 is opencode2-cli: same program and folders, told apart by the version prefix.
+# OpenCode, checked against opencode.ai/v2/docs (cli, config, providers) and the npm @opencode/cli package for
+# 2.x, and against opencode.ai/docs (cli, config, permissions, network) and the package for 1.x (the row below).
+# --standalone runs a private server instead of the shared background service, which keeps its own environment.
+# Approvals stay on in 2.x: OpenCode 2 has no settings row for them (see docs/harnesses/opencode-cli.md).
 id = "opencode-cli"
 name = "OpenCode"
 program = "opencode"
+checked = "2.2.2"
+args = ["--standalone"]
 resume = ["--continue"]
 home = { XDG_CONFIG_HOME = "{home}/.config", XDG_DATA_HOME = "{home}/.local/share", XDG_STATE_HOME = "{home}/.local/state", XDG_CACHE_HOME = "{home}/.cache" }
 env = { OPENCODE_DISABLE_AUTOUPDATE = "1" }
+first_screen = "OpenCode asks before it runs a tool, and goalcup does not switch that off for OpenCode 2. Approve at the first prompt, or allow for the session if it offers that, to let the run go on."
+host_hints = [
+  { file = "{home}/.config/opencode/*.json", key = "providers.*.settings.baseURL" },
+  { file = "{home}/.config/opencode/*.jsonc", key = "providers.*.settings.baseURL" },
+  { file = "{workspace}/opencode.json*", key = "providers.*.settings.baseURL" },
+]
+secret_files = [
+  "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/opencode.json",
+  "{home}/.config/opencode/opencode.jsonc",
+]
+native = [{ name = "db", root = "{home}/.local/share/opencode", pattern = "opencode*.db*", form = "final" }]
+
+[[versions]]
+match = "1.x"   # checked on 1.19.5
+args = []
+first_screen = ""
 host_hints = [
   { file = "{home}/.config/opencode/*.json", key = "provider.*.options.baseURL" },
   { file = "{home}/.config/opencode/*.jsonc", key = "provider.*.options.baseURL" },
@@ -16,7 +36,6 @@ secret_files = [
   "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/config.json",
   "{home}/.config/opencode/opencode.json", "{home}/.config/opencode/opencode.jsonc",
 ]
-native = [{ name = "db", root = "{home}/.local/share/opencode", pattern = "opencode*.db*", form = "final" }]
 no_prompts = [{ file = "{home}/.config/opencode/opencode.json", key = "permission", value = "allow" }]
 
 [usage]

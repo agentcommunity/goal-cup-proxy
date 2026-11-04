@@ -55,17 +55,14 @@ fn every_connector_file_is_built_in_and_loads_by_its_id() {
 }
 
 #[test]
-fn a_program_name_picks_its_connector_and_an_ambiguous_one_lists_both() {
+fn a_program_name_picks_its_connector() {
     let id = |arg: &str| connector::load(arg, None).unwrap().id;
     assert_eq!(id("claude"), "claude-code-cli");
     assert_eq!(id("codex"), "codex-cli");
     assert_eq!(id("claude-code-cli"), "claude-code-cli");
-    let both = connector::load("opencode", None).unwrap_err().to_string();
-    assert!(
-        both.contains("opencode-cli") && both.contains("opencode2-cli"),
-        "{both}"
-    );
-    assert!(!both.contains("claude-code-cli"), "{both}");
+    // OpenCode 1 and 2 are one connector; the old 2.x id still loads it.
+    assert_eq!(id("opencode"), "opencode-cli");
+    assert_eq!(id("opencode2-cli"), "opencode-cli");
 }
 
 #[test]

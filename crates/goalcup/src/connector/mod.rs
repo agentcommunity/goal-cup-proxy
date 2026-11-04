@@ -228,7 +228,7 @@ pub fn load(id_or_path: &str, hosts_file: Option<&Path>) -> Result<Connector, Co
         c.source = ConnectorSource::File;
         c
     } else {
-        let id = resolve_id(id_or_path)?;
+        let id = resolve_id(goalcup_format::connectors::current_id(id_or_path))?;
         let (_, text) = builtin::CONNECTORS.iter().find(|(i, _)| *i == id).unwrap();
         schema::parse(text.as_bytes(), &format!("connectors/{id}.toml"))?
     };

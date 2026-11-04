@@ -426,3 +426,38 @@ fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
     let log = std::fs::read_to_string(&log).unwrap_or_default();
     assert!(log.contains("version_unread"), "{log}");
 }
+
+/// A run started on 1.0 as `opencode2-cli` continues as `opencode-cli`, the one OpenCode connector.
+#[test]
+fn an_opencode2_run_continues_as_opencode() {
+    let worker = FakeWorker::start();
+    next_part(&worker);
+    let mut w = World::new(Some(worker.url()));
+    let bin = w.t.home().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("opencode");
+    std::fs::write(&fake, "#!/bin/sh\necho opencode v2.2.2\n").unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    w.part(1, false, Some(World::sealed(json!({"model_requests": 1}))));
+    let mut sj: Value = serde_json::from_slice(&w.server_json()).unwrap();
+    sj["connector"] = json!({"id": "opencode2-cli", "name": "OpenCode", "source": "builtin"});
+    put(&w.run_dir(), "server.json", &sj);
+    let a = Args {
+        run: None,
+        connector: None,
+        hosts: None,
+    };
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let vars = [("PATH".to_owned(), path)].into();
+    let ready = prepare(&a, &w.gc(), &w.project, &vars, &mut Vec::new())
+        .unwrap_or_else(|s| panic!("{}", s.text));
+    assert_eq!(ready.plan.connector.id, "opencode-cli");
+    assert_eq!(
+        ready.plan.harness_version.as_deref(),
+        Some("opencode v2.2.2")
+    );
+}

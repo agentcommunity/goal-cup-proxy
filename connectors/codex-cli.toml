@@ -1,7 +1,8 @@
-# Codex 0.165.0: values checked against the vendor's docs on 30 Oct 2026.
+# Codex: values checked against the vendor's docs on 30 Oct 2026.
 id = "codex-cli"
 name = "Codex"
 program = "codex"
+checked = "0.165.0"
 args = ["--no-daemon", "-C", "{workspace}"]
 resume = ["resume", "--last"]
 home = { CODEX_HOME = "{home}", CODEX_SQLITE_HOME = "{home}" }

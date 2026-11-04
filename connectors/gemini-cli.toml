@@ -1,8 +1,9 @@
-# Gemini CLI 0.66.0, checked against geminicli.com docs (reference/configuration, cli/session-management) and
-# the 0.66.0 package. GEMINI_CLI_HOME stands in for the home folder, so its files sit under {home}/.gemini.
+# Gemini CLI, checked against geminicli.com docs (reference/configuration, cli/session-management) and
+# the package. GEMINI_CLI_HOME stands in for the home folder, so its files sit under {home}/.gemini.
 id = "gemini-cli"
 name = "Gemini CLI"
 program = "gemini"
+checked = "0.66.0"
 resume = ["--resume", "latest"]
 home = { GEMINI_CLI_HOME = "{home}" }
 host_hints = [

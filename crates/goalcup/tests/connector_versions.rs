@@ -118,3 +118,61 @@ fn every_builtin_row_is_reached_by_a_fixture_line() {
         }
     }
 }
+
+#[test]
+fn checked_is_set_where_a_header_named_a_build() {
+    let mut got: Vec<(String, String)> = Vec::new();
+    for (id, _) in connector::builtin::CONNECTORS {
+        if let Some(v) = connector::load(id, None).unwrap().checked {
+            got.push((id.trim_end_matches("-cli").to_string(), v));
+        }
+    }
+    let want = "amp 0.0.1793275344-g17bf52, claude-code 2.1.312, cline 3.0.74, codex 0.165.0, \
+                crush 0.99.0, droid 0.251.0, gemini 0.66.0, goose 1.57.0, hermes 0.22.5, \
+                kilo 7.8.25, kimi-code 2.4.1, openclaw 2026.10.9, opencode 2.2.2, qwen 0.26.4";
+    let got: Vec<String> = got.iter().map(|(id, v)| format!("{id} {v}")).collect();
+    assert_eq!(got.join(", "), want);
+}
+
+/// Every key a launch reads, for comparing two connectors.
+fn keys(c: &Connector) -> String {
+    format!(
+        "{:?}",
+        (
+            (&c.args, &c.resume, &c.home, &c.env, &c.ca_env, &c.unset),
+            (&c.host_hints, &c.secret_files, &c.native, &c.no_prompts),
+            (&c.update_off, &c.first_screen, &c.before, &c.after),
+            (&c.mask, &c.usage),
+        )
+    )
+}
+
+/// The one OpenCode connector gives each version the keys its own 1.0 connector had.
+#[test]
+fn opencode_fold_keeps_each_version_s_keys() {
+    let fixture = |f: &str| {
+        let path = format!(
+            "{}/tests/fixtures/opencode-1.0/{f}",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        schema::parse(&std::fs::read(path).unwrap(), f).unwrap()
+    };
+    let k = connector::load("opencode-cli", None).unwrap();
+    for (line, old, row) in [
+        ("1.19.5", "opencode-cli.toml", Some("1.x")),
+        ("opencode v2.2.2", "opencode2-cli.toml", None),
+        ("opencode v3.0.0", "opencode2-cli.toml", None),
+    ] {
+        let (e, got) = k.for_version(v(line).as_ref());
+        assert_eq!(keys(&e), keys(&fixture(old)), "{line}");
+        assert_eq!(got.as_deref(), row, "{line}");
+    }
+    assert_eq!(
+        keys(&k.for_version(None).0),
+        keys(&fixture("opencode2-cli.toml"))
+    );
+    assert_eq!(
+        connector::load("opencode2-cli", None).unwrap().id,
+        "opencode-cli"
+    );
+}

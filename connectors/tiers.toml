@@ -84,12 +84,6 @@ version = ""
 os = ""
 reason = "no full direct row"
 
-[opencode2-cli]
-tier = "not verified"
-version = ""
-os = ""
-reason = "no full direct row"
-
 [qwen-cli]
 tier = "not verified"
 version = ""

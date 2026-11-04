@@ -5,7 +5,7 @@
 # Measured in a build box 31 Oct 2026: opencode-ai@1.19.5 installs under its own prefix and prints 1.19.5.
 # Read from docs and the audit facts sheet, not run against a live harness: the auth.json shape, the model ids, the TUI.
 #
-# OpenCode 1 and 2 are both the program `opencode` (connectors/opencode-cli.toml and opencode2-cli.toml differ by version).
+# OpenCode 1 and 2 are both the program `opencode` (connectors/opencode-cli.toml, with a 1.x row).
 # Each major lives in $HOME/.opencode/<version>; `~/.local/bin/opencode` is a link to one of them (the image PATH reaches
 # it, and goalcup finds `opencode` there). version_cmd points the link at this file's version first, so every run
 # starts the major its file pins; where the image layout is absent (a run by hand), it only prints the version.
