@@ -7,6 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::time::SystemTime;
 
+use goalcup::cli::text;
 use goalcup::connector::{self, Env, LaunchPlan, Refusal};
 
 const PROXY_AND_CA: &[&str] = &[
@@ -147,16 +148,15 @@ fn no_secret_value_is_read_in_the_default_build() {
     }
 }
 
-/// The plan's version and refusal for a connector whose program, on `PATH`, runs `body`.
-fn probe(d: &Path, body: &str) -> (Option<String>, Option<Refusal>) {
+/// The plan for a connector whose program, on `PATH`, runs `body`.
+fn probe(d: &Path, body: &str) -> LaunchPlan {
     const FAKE: &str = "id = \"fake-cli\"\nname = \"F\"\nprogram = \"fakev\"\nversion = \"2.\"";
     let (program, file) = (d.join("fakev"), d.join("fake-cli.toml"));
     std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(&file, FAKE).unwrap();
     let c = connector::load(file.to_str().unwrap(), None).unwrap();
-    let plan = connector::plan(&c, &env(d, &[]), &d.join("home"));
-    (plan.harness_version, plan.refusal)
+    connector::plan(&c, &env(d, &[]), &d.join("home"))
 }
 
 #[test]
@@ -175,14 +175,72 @@ fn a_held_home_refuses_and_the_version_probe_never_holds_the_start() {
     assert!(!second.lock.is_held() && !yaml.exists());
     drop((first, second));
     assert!(finished("hermes-cli", &e, d).lock.is_held());
-    let (version, refusal) = probe(d, "echo; echo '  fakeharness v2.1.0  '");
-    assert_eq!(version.as_deref(), Some("fakeharness v2.1.0"));
-    assert_eq!(refusal, None);
-    for line in ["echo fakeharness 1.9.0", "echo fakeharness 1.2.0"] {
-        let refusal = probe(d, line).1;
-        assert!(matches!(refusal, Some(Refusal::VersionMismatch { .. })));
-    }
-    assert_eq!(probe(d, "sleep 30"), (None, None));
+    let plan = probe(d, "echo; echo '  fakeharness v2.1.0  '");
+    let version = plan.harness_version.as_deref();
+    assert_eq!(
+        (version, &plan.refusal),
+        (Some("fakeharness v2.1.0"), &None)
+    );
+    drop(plan);
+    let plan = probe(d, "echo fakeharness 1.9.0");
+    assert_eq!(plan.refusal, None);
+    let say = "fakev 1.9.0 is not the version this connector was written for (2.x). goalcup records it the same way; goalcup status says if model requests are missing.";
+    assert_eq!(plan.version_notes, vec![say]);
+    drop(plan);
+    let plan = probe(d, "sleep 30");
+    assert_eq!((plan.harness_version, plan.refusal), (None, None));
+}
+
+#[test]
+fn opencode_ids_share_a_program() {
+    let pair = vec![
+        ("opencode-cli", "1.".into()),
+        ("opencode2-cli", "2.".into()),
+    ];
+    assert_eq!(connector::version::same_program("opencode"), pair);
+    assert!(connector::version::same_program("claude").is_empty());
+}
+
+#[test]
+fn a_wrong_opencode_pick_names_the_other_connector() {
+    let fake_on = |d: &Path, body: &str, resume: bool| {
+        let program = d.join("opencode");
+        std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        finished(
+            "opencode-cli",
+            &Env {
+                resume,
+                ..env(d, &[])
+            },
+            d,
+        )
+    };
+    let fake = |d: &Path, body: &str| fake_on(d, body, false);
+    let dir = tempfile::tempdir().unwrap();
+    let refusal = fake(dir.path(), "echo opencode v2.2.2").refusal.unwrap();
+    let want = Refusal::VersionMismatch {
+        program: "opencode".into(),
+        want: "1.".into(),
+        got: "2.2.2".into(),
+        sibling: "opencode2-cli".into(),
+    };
+    assert_eq!(refusal, want);
+    assert_eq!(
+        text::refusal(&refusal),
+        "opencode --version shows 2.2.2; this connector is for opencode 1.x. Run: goalcup setup --harness opencode2-cli"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let plan = fake(dir.path(), "echo boom; exit 1");
+    assert_eq!(plan.refusal, None);
+    let say = "goalcup could not read opencode --version, so it could not check this is opencode 1.x. If it is 2.x, run: goalcup setup --harness opencode2-cli";
+    assert_eq!(plan.version_notes, vec![say]);
+    // A run being continued keeps its connector: the 2.x pick is a note, never a refusal.
+    let dir = tempfile::tempdir().unwrap();
+    let plan = fake_on(dir.path(), "echo opencode v2.2.2", true);
+    assert_eq!(plan.refusal, None);
+    let say = "opencode 2.2.2 is not the version this connector was written for (1.x). goalcup records it the same way; goalcup status says if model requests are missing.";
+    assert_eq!(plan.version_notes, vec![say]);
 }
 
 #[test]

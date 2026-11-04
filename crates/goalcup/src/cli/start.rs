@@ -433,15 +433,19 @@ fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<V
 struct Row {
     tier: String,
     version: String,
+    /// Where it was verified, as the pad's `os_id` (`darwin-arm64`); absent or `""` is unknown.
+    #[serde(default)]
+    os: String,
 }
 
 /// Section 6: the tier line of the connector, from `tiers.toml`.
 fn tier_line(name: &str, probed: Option<&str>, id: &str) -> String {
     let mut rows: BTreeMap<String, Row> = toml::from_str(TIERS).unwrap_or_default();
     let row = rows.remove(id).unwrap_or_default();
-    let number = |t: &&str| t.starts_with(|c: char| c.is_ascii_digit());
-    let version = probed.and_then(|v| v.split_whitespace().find(number));
-    text::tier_line(name, version, &row.tier, &row.version)
+    let version = probed.and_then(connector::version::parse).map(|v| v.text);
+    let verified = connector::version::parse(&row.version).map_or(row.version.clone(), |v| v.text);
+    let os = std::env::consts::OS;
+    text::tier_line(name, version.as_deref(), &row.tier, &verified, &row.os, os)
 }
 
 pub(super) fn wall_ms() -> u64 {
@@ -465,5 +469,59 @@ mod tests {
     fn tiers_file_parses() {
         let rows = toml::from_str::<std::collections::BTreeMap<String, super::Row>>(super::TIERS);
         assert!(rows.is_ok_and(|r| !r.is_empty()));
+    }
+
+    // Harness names are stand-ins: rule_code bans real ones in core code.
+    #[test]
+    fn tier_line_reads_v_prefix_and_trailing_dot() {
+        let line = super::tier_line(
+            "Fakev",
+            Some("Fakev Agent v0.22.6 (2026.9.24)"),
+            "fakev-cli",
+        );
+        assert!(line.starts_with("Fakev 0.22.6: "), "{line}");
+        let line = super::tier_line("Fakec", Some("Fakec CLI 1.0.105."), "fakec-cli");
+        assert!(line.starts_with("Fakec 1.0.105: "), "{line}");
+    }
+
+    #[test]
+    fn tier_line_says_build_and_os() {
+        use crate::cli::text::tier_line;
+        let row = |v, host| tier_line("Fakev", v, "verified", "0.22.6", "darwin-arm64", host);
+        assert_eq!(
+            row(Some("0.22.6"), "macos"),
+            "Fakev 0.22.6: verified with goalcup on 0.22.6 (macOS)."
+        );
+        assert_eq!(
+            row(Some("0.22.7"), "macos"),
+            "Fakev 0.22.7: not verified on 0.22.7; verified with goalcup on 0.22.6 (macOS). goalcup records it the same way; goalcup status says if model requests are missing."
+        );
+        assert_eq!(
+            row(Some("0.22.6"), "linux"),
+            "Fakev 0.22.6: verified with goalcup on 0.22.6 (macOS), not on Linux. goalcup records it the same way; goalcup status says if model requests are missing."
+        );
+        assert_eq!(
+            row(None, "macos"),
+            "Fakev: verified with goalcup on 0.22.6 (macOS); the version here could not be read, so goalcup cannot say it is that build."
+        );
+        assert_eq!(
+            tier_line(
+                "Fake Code",
+                Some("2.1.312"),
+                "verified",
+                "2.1.312",
+                "",
+                "linux"
+            ),
+            "Fake Code 2.1.312: verified with goalcup on 2.1.312."
+        );
+        assert_eq!(
+            tier_line("Fakev", Some("0.22.6"), "not verified", "", "", "linux"),
+            "Fakev 0.22.6: not verified. goalcup records what reaches it; goalcup status says if model requests are missing."
+        );
+        assert_eq!(
+            tier_line("Fakev", None, "not supported", "", "", "linux"),
+            "Fakev: not supported. goalcup records its session files and the connections it can see, not its model calls."
+        );
     }
 }

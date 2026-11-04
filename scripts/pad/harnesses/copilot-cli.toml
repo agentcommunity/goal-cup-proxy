@@ -12,8 +12,7 @@
 # gives them for another model; ours is unmeasured) and pre_keys. No page read describes the first-run folder
 # trust prompt; the Enter below takes its first (yes) choice if it appears and is a no-op on an empty prompt if it does not.
 version = "1.0.105"
-# `copilot --version` prints "GitHub Copilot CLI 1.0.105." with a full stop; the sed keeps pad-run's version match exact.
-version_cmd = 'copilot --version | sed "s/\.$//"'
+version_cmd = "copilot --version"
 install = "npm i -g @github/copilot@1.0.105"
 key_kind = "deepseek"
 # The key reaches Copilot as COPILOT_PROVIDER_API_KEY in the launch shell, never in providers.json.

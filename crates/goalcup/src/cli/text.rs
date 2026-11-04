@@ -176,9 +176,15 @@ pub fn refusal(r: &Refusal) -> String {
             "\"{}\" sets {key}, which routes around the recorder. Remove it, then run this again.",
             file.display()
         ),
-        Refusal::VersionMismatch { program, want } => format!(
-            "{program} --version does not show {want}, the version goalcup works with. Install \
-             that one, then run this again."
+        Refusal::VersionMismatch {
+            program,
+            want,
+            got,
+            sibling,
+        } => format!(
+            "{program} --version shows {got}; this connector is for {program} {}. Run: goalcup \
+             setup --harness {sibling}",
+            crate::connector::version::show(want)
         ),
     }
 }
@@ -1155,17 +1161,41 @@ pub fn upload_to(host: Option<&str>) -> String {
     }
 }
 
-pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) -> String {
+/// `os` is the tiers row's (`darwin-arm64`), `host_os` is `std::env::consts::OS`; `""` names none.
+pub fn tier_line(
+    name: &str,
+    version: Option<&str>,
+    tier: &str,
+    verified: &str,
+    os: &str,
+    host_os: &str,
+) -> String {
+    let label = |os: &str| match os.split('-').next().unwrap_or_default() {
+        "darwin" | "macos" => "macOS".to_owned(),
+        "linux" => "Linux".to_owned(),
+        other => other.to_owned(),
+    };
+    let (os, host) = (label(os), label(host_os));
+    let on = if os.is_empty() {
+        verified.to_owned()
+    } else {
+        format!("{verified} ({os})")
+    };
+    let same =
+        "goalcup records it the same way; goalcup status says if model requests are missing.";
     let who = version.map_or_else(|| name.to_owned(), |v| format!("{name} {v}"));
-    match tier {
-        "verified" if version.is_some_and(|v| v != verified) => {
-            format!(
-                "{who}: verified with goalcup on {verified}, not on {}.",
-                version.unwrap_or_default()
-            )
+    match (tier, version) {
+        ("verified", None) => format!(
+            "{name}: verified with goalcup on {on}; the version here could not be read, so goalcup cannot say it is that build."
+        ),
+        ("verified", Some(v)) if v != verified => {
+            format!("{who}: not verified on {v}; verified with goalcup on {on}. {same}")
         }
-        "verified" => format!("{who}: verified with goalcup on {verified}."),
-        "not supported" => format!(
+        ("verified", _) if !os.is_empty() && !host.is_empty() && os != host => {
+            format!("{who}: verified with goalcup on {on}, not on {host}. {same}")
+        }
+        ("verified", _) => format!("{who}: verified with goalcup on {on}."),
+        ("not supported", _) => format!(
             "{name}: not supported. goalcup records its session files and the connections it can see, not its model calls."
         ),
         _ => format!(

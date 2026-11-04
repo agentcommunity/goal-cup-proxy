@@ -143,13 +143,14 @@ pub(crate) fn resolve_program(program: &str, vars: &BTreeMap<String, String>) ->
         .unwrap_or_else(|| PathBuf::from(program))
 }
 
-/// The first non-empty line of `program --version` run with exactly `vars`; `None` on a spawn
-/// failure, a failed exit, 5 s without an exit, or no output. Never logged.
+/// The first non-empty line of `program --version` run with exactly `vars`, from stdout, else from
+/// stderr. A stderr line, or any line on a failed exit, counts only if its first word is the
+/// program's file name (any case) and it holds a version. `None` on a spawn failure, 5 s without an exit, or no such line. Never logged.
 pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -> Option<String> {
     let mut command = Command::new(program);
     command.arg("--version").env_clear().envs(vars);
     command.process_group(0).stdin(Stdio::null());
-    command.stderr(Stdio::null()).stdout(Stdio::piped());
+    command.stderr(Stdio::piped()).stdout(Stdio::piped());
     let mut child = command.spawn().ok()?;
     let deadline = Instant::now() + Duration::from_secs(5);
     while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
@@ -161,13 +162,28 @@ pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -
         let _ = child.wait();
         return None;
     };
-    let mut out = child.stdout.take()?;
-    // SAFETY: `fcntl` on a descriptor `out` owns. Non-blocking: a left-behind child cannot hang us.
-    unsafe { libc::fcntl(out.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
-    let mut text = String::new();
-    let _ = out.read_to_string(&mut text);
-    let line = text.lines().map(str::trim).find(|line| !line.is_empty());
-    line.filter(|_| status.success()).map(str::to_owned)
+    fn first_line(mut pipe: impl Read + AsRawFd) -> Option<String> {
+        // SAFETY: `fcntl` on a descriptor `pipe` owns. Non-blocking: a left-behind child cannot
+        // hang us.
+        unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
+        let mut text = String::new();
+        let _ = pipe.read_to_string(&mut text);
+        let line = text.lines().map(str::trim).find(|line| !line.is_empty());
+        line.map(str::to_owned)
+    }
+    let out = first_line(child.stdout.take()?);
+    // A stderr line or a failed exit counts only with a version in it: never record a stray error.
+    let checked = out.is_none() || !status.success();
+    let line = out.or_else(|| first_line(child.stderr.take()?))?;
+    // The first word must be the program's file name (any case): "hermes: needs Python 3.11.4"
+    // and "warning: node 2.0.1" name some other version.
+    let name = program.file_name().and_then(|n| n.to_str()).unwrap_or("/");
+    let named = line
+        .split_whitespace()
+        .next()
+        .is_some_and(|w| w.eq_ignore_ascii_case(name));
+    let held = named && super::version::parse(&line).is_some();
+    (!checked || held).then_some(line)
 }
 
 /// Writes `no_prompts` or `update_off` rows into the home; a row not written comes back skipped.
