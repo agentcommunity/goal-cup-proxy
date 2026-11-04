@@ -1,5 +1,5 @@
 # core-claude-code-signin.toml: Claude Code direct and dodger (case all skips gateway) on the owner's Claude sign-in, no API key (gateway rows: core-claude-code.toml).
-# Sign in once: GOALCUP_HOME=~/gc-signin/home goalcup setup --harness claude-code-cli  
+# Sign in once: GOALCUP_HOME=~/gc-signin/home goalcup setup --harness claude-code-cli
 # Claude Code on macOS keys its Keychain login by the config dir path, so this path must not change.
 harness = "claude-code-cli"
 key = "none"
