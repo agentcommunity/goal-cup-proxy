@@ -147,3 +147,28 @@ fn only_admin_trusted_system_keychain_certificates_count() {
         <key>trustVersion</key><integer>1</integer></dict></plist>";
     assert!(admin_trusted(empty).is_empty());
 }
+
+#[test]
+fn odd_proxy_urls_and_trust_lists_never_panic_or_leak() {
+    let up = |url: &str| Egress::from_vars(&vars(&[("HTTPS_PROXY", url)]), vec![]);
+    let e = up("http://h:1/x@y");
+    let p = e.proxy_for("api.openai.com").unwrap();
+    assert_eq!((p.host.as_str(), p.port), ("h", 1));
+    let bare = "CONNECT a:443 HTTP/1.1\r\nHost: a:443\r\n\r\n";
+    assert_eq!(p.connect_head("a", 443), bare);
+    for url in ["http://@h:1", "http://:pw@h"] {
+        assert_eq!(
+            up(url).proxy_for("a").unwrap().connect_head("a", 443),
+            bare,
+            "{url}"
+        );
+    }
+    let v6 = up("http://[::1]:3128");
+    assert!(v6.proxy_for("api.openai.com").is_none());
+    assert!(
+        v6.line()
+            .unwrap()
+            .starts_with("goalcup cannot use the proxy in HTTPS_PROXY")
+    );
+    assert!(admin_trusted("<key>trustList</key></dict><dict>").is_empty());
+}

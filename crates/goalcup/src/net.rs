@@ -55,7 +55,6 @@ pub struct Upstream {
     pub from: &'static str,
     /// `user:pass`, percent-decoded.
     auth: Option<String>,
-    ureq: ureq::Proxy,
 }
 
 impl Egress {
@@ -109,8 +108,10 @@ impl Egress {
         let proxy = self.proxy.as_ref()?;
         let host = host.trim_start_matches('[').trim_end_matches(']');
         let host = host.to_ascii_lowercase();
-        let loopback =
-            host == "localhost" || host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback());
+        let loopback = host == "localhost"
+            || host
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| ip.to_canonical().is_loopback());
         let listed = self.no_proxy.iter().any(|e| {
             e == "*"
                 || host == *e
@@ -168,31 +169,41 @@ impl Upstream {
             Some(_) => return None,
             None => url,
         };
-        let (auth, hostport) = match rest.rsplit_once('@') {
+        let authority = rest.split('/').next().unwrap_or_default();
+        let (auth, hostport) = match authority.rsplit_once('@') {
             Some((auth, hostport)) => (Some(auth), hostport),
-            None => (None, rest),
+            None => (None, authority),
         };
-        let hostport = hostport.split('/').next().unwrap_or_default();
         let (host, port) = match hostport.rsplit_once(':') {
             Some((h, p)) => (h, p.parse().ok()?),
             None => (hostport, 80),
         };
-        if host.is_empty() {
+        // An IPv6 literal is not spoken: ureq cannot parse one.
+        if host.is_empty() || host.contains(['[', ']', ':']) {
             return None;
         }
-        let auth = auth.map(|a| {
+        let auth = auth.and_then(|a| {
             let (user, pass) = a.split_once(':').unwrap_or((a, ""));
-            format!("{}:{}", decode(user), decode(pass))
+            let user = decode(user);
+            (!user.is_empty()).then(|| format!("{user}:{}", decode(pass)))
         });
-        let at = auth.as_ref().map(|a| format!("{a}@")).unwrap_or_default();
-        let ureq = ureq::Proxy::new(format!("http://{at}{host}:{port}")).ok()?;
-        Some(Upstream {
+        let up = Upstream {
             host: host.to_owned(),
             port,
             from,
             auth,
-            ureq,
-        })
+        };
+        ureq::Proxy::new(up.ureq_url()).ok()?;
+        Some(up)
+    }
+
+    fn ureq_url(&self) -> String {
+        let at = self
+            .auth
+            .as_ref()
+            .map(|a| format!("{a}@"))
+            .unwrap_or_default();
+        format!("http://{at}{}:{}", self.host, self.port)
     }
 
     /// The CONNECT request for `host:port`, with `Proxy-Authorization` when there is a user.
@@ -207,9 +218,10 @@ impl Upstream {
         )
     }
 
-    /// The same proxy for `ureq`.
+    /// The same proxy for `ureq`, built on each call. It holds the password: never Debug-print
+    /// the result or an Agent built from it.
     pub fn ureq(&self) -> ureq::Proxy {
-        self.ureq.clone()
+        ureq::Proxy::new(self.ureq_url()).expect("the same URL parsed in Upstream::parse")
     }
 }
 
@@ -259,12 +271,8 @@ pub fn admin_trusted(plist: &str) -> HashSet<String> {
         match name {
             "dict" => depth += 1,
             "dict/" if depth == 0 => break,
-            "/dict" => {
-                depth -= 1;
-                if depth == 0 {
-                    break;
-                }
-            }
+            "/dict" if depth <= 1 => break,
+            "/dict" => depth -= 1,
             "key" => {
                 if depth == 1 && text.len() == 40 && text.bytes().all(|b| b.is_ascii_hexdigit()) {
                     entries.push((text.to_ascii_uppercase(), false));
