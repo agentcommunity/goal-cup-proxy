@@ -312,9 +312,9 @@ class Run:
     def setup(self, _):
         h, s, sec = self.h, self.s, self.sec
         got = re.search(r"(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)", sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]]).stdout)
-        version = got and got.group(1)  # section 3, 0:01: installed equals pinned
-        if version != s["version"]:
-            raise Step("FAIL", "%s %s installed, %s pinned" % (s["harness_id"], version or "none", s["version"]))
+        version = got and got.group(1)  # section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
+        if not version:
+            raise Step("FAIL", "%s not installed" % s["harness_id"])
         self.st.update(harness_version=version, plain_planted=True)
         known, plain = self.plant()
         known += [open(os.path.join(self.keys, name)).read().strip() for name in s["key_files"]]
@@ -322,7 +322,7 @@ class Run:
         write(self.path("known-plain"), plain + "\n")
         text = open(self.path("prompt-source.txt")).read()  # the prompt file pad staged; the harness's subagent word
         write(self.path("prompt.txt"), text.replace("subagent", h.get("subagent_word", "subagent")), 0o644)
-        saw = "%s %s (pinned), project and plants" % (s["harness_id"], version)
+        saw = "%s %s%s, project and plants" % (s["harness_id"], version, " (pinned)" if version == s["version"] else " (pad file: %s)" % s["version"])
         if not tool("goalcup"):
             raise Step("skip", saw + "; " + NO_BUILD)
         r = sh([tool("goalcup"), "setup", "--harness", s["harness_id"], "--yes"], env=self.env)
