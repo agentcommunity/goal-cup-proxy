@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde_json::{Map, Value, json};
 
 use super::hosts::{self, Decision, HostList, Source};
-use super::{Connector, Env, Host, Refusal, launch};
+use super::{CaSettings, Connector, Env, Host, Refusal, SettingRow, launch};
 use crate::native::pattern;
 
 /// Reads one start's hint and refusal files and keeps what PRD-10 shows: each file there but not
@@ -117,7 +117,7 @@ impl Reader<'_> {
 
 /// Whether a URL is `https`, and its host and port, the userinfo dropped first. `None` without a
 /// `://`, or when the authority holds a backslash, a space or a control byte (PRD-17 N1).
-fn authority(value: &str) -> Option<(bool, &str, u16)> {
+pub(super) fn authority(value: &str) -> Option<(bool, &str, u16)> {
     let (scheme, rest) = value.trim().split_once("://")?;
     let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
     let clean = |b: u8| b > b' ' && b != 0x7f && b != b'\\';
@@ -153,21 +153,102 @@ fn read(path: &Path) -> Option<Value> {
     }
 }
 
+/// The rows giving each address the harness uses the run bundle (`ca_settings`): the CA key on
+/// each participant entry holding an address, unless it holds its own CA, and a
+/// `goalcup-trust-*` entry for every other address used; when the file names none, one for each
+/// `fallback` address. An address is an `https` URL whose host `hosts` decrypts, so a host left
+/// to the OS trust store (local, private, never) keeps it.
+pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<SettingRow> {
+    let doc = read(Path::new(&launch::fill(&t.file, home, Path::new("")))).unwrap_or_default();
+    let address = |v: &Value| {
+        let url = v.as_str()?.trim();
+        let (https, host, _) = authority(url)?;
+        let decrypted = matches!(hosts.decide(host), Decision::Listed { .. });
+        (https && hosts::check(host, Source::Config).is_ok() && decrypted).then(|| url.to_string())
+    };
+    let same = |url: &str| url.trim_end_matches('/').to_ascii_lowercase();
+    let row = |key: String, value: &str| SettingRow {
+        file: t.file.clone(),
+        key,
+        value: value.to_string(),
+    };
+    let (mut rows, mut have) = (Vec::new(), Vec::new());
+    for pattern in &t.entries {
+        let parts = pattern.split('.').count();
+        for (path, value) in at_paths(&doc, pattern) {
+            let ours = path.split('.').any(|p| p.starts_with("goalcup-"));
+            // A key holding a `.` would not write back to the same entry.
+            let (Some(url), false, true) = (address(value), ours, path.split('.').count() == parts)
+            else {
+                continue;
+            };
+            have.push(same(&url));
+            let ca = format!("{}.{}", path.rsplit_once('.').unwrap().0, t.key);
+            let mut own = at(&doc, &ca).into_iter().filter_map(Value::as_str);
+            let own = own.any(|v| !v.trim().is_empty() && v != t.value);
+            rows.extend((!own).then(|| row(ca, &t.value)));
+        }
+    }
+    let mut used: Vec<String> = t
+        .uses
+        .iter()
+        .flat_map(|k| at(&doc, k))
+        .filter_map(address)
+        .collect();
+    if have.is_empty() && used.is_empty() {
+        used = t
+            .fallback
+            .iter()
+            .filter_map(|u| address(&Value::from(&**u)))
+            .collect();
+    }
+    for url in used {
+        if have.contains(&same(&url)) {
+            continue;
+        }
+        have.push(same(&url));
+        let rest = url
+            .split_once("://")
+            .map_or(&*url, |r| r.1)
+            .to_ascii_lowercase();
+        let name: Vec<&str> = rest
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|p| !p.is_empty())
+            .collect();
+        let name = name.join("-");
+        let key = t.add.replace('*', &format!("goalcup-trust-{name}"));
+        let ca = format!("{}.{}", key.rsplit_once('.').unwrap().0, t.key);
+        rows.extend([row(key, &url), row(ca, &t.value)]);
+    }
+    rows
+}
+
 /// The values at a dotted key; a segment may be or hold a `*` glob (any key or index, `*_URL`).
 fn at<'a>(doc: &'a Value, key: &str) -> Vec<&'a Value> {
-    let mut found = vec![doc];
+    at_paths(doc, key).into_iter().map(|(_, v)| v).collect()
+}
+
+/// `at`, each value with its dotted path (a list index as its number).
+fn at_paths<'a>(doc: &'a Value, key: &str) -> Vec<(String, &'a Value)> {
+    let mut found = vec![(String::new(), doc)];
     for seg in key.split('.') {
         let glob = pattern::parse(seg).ok();
         // The glob matches one path component, so a `/` in a key is not a separator to it.
         let one = |k: &str| PathBuf::from(k.replace('/', "\u{2215}"));
         let fits = |k: &str| k == seg || glob.as_ref().is_some_and(|g| g.matches(&one(k)));
         let mut next = Vec::new();
-        for value in found {
+        for (path, value) in found {
+            let join = |k: &str| match path.is_empty() {
+                true => k.to_string(),
+                false => format!("{path}.{k}"),
+            };
             match value {
-                Value::Object(map) => next.extend(map.iter().filter(|e| fits(e.0)).map(|e| e.1)),
+                Value::Object(map) => {
+                    next.extend(map.iter().filter(|e| fits(e.0)).map(|e| (join(e.0), e.1)))
+                }
                 Value::Array(items) => {
-                    let items = items.iter().enumerate();
-                    next.extend(items.filter(|e| fits(&e.0.to_string())).map(|e| e.1));
+                    let items = items.iter().enumerate().map(|(i, v)| (i.to_string(), v));
+                    next.extend(items.filter(|e| fits(&e.0)).map(|e| (join(&e.0), e.1)));
                 }
                 _ => {}
             }

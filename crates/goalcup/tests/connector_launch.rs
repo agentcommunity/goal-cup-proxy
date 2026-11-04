@@ -322,3 +322,123 @@ fn with_home_swapped_a_login_shell_finds_goalcup() {
     drop(connector::plan(&c, &e, &home));
     assert_eq!(std::fs::read_to_string(&profile).unwrap(), "# mine\n");
 }
+
+/// A connector whose `ca_settings` reads `{home}/config.yaml` as Hermes's does, and one plan of it
+/// on `home` holding `config` (none when `None`); the plan is dropped, so the home is free again.
+fn trusted(d: &Path, config: Option<&str>) -> (LaunchPlan, String) {
+    let file = d.join("trust-cli.toml");
+    let toml = "id = \"trust-cli\"\nname = \"T\"\nprogram = \"true\"\n\
+        host_hints = [{ file = \"{home}/config.yaml\", key = \"model.base_url\" }, \
+        { file = \"{home}/config.yaml\", key = \"providers.*.base_url\" }]\n[ca_settings]\n\
+        file = \"{home}/config.yaml\"\n\
+        entries = [\"custom_providers.*.base_url\", \"providers.*.base_url\"]\n\
+        uses = [\"model.base_url\"]\nadd = \"providers.*.base_url\"\nkey = \"ssl_ca_cert\"\n\
+        value = \"${env:SSL_CERT_FILE}\"\n\
+        fallback = [\"https://api.deepseek.com/v1\", \"https://openrouter.ai/api/v1\"]\n";
+    std::fs::write(&file, toml).unwrap();
+    let c = connector::load(file.to_str().unwrap(), None).unwrap();
+    let home = d.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    if let Some(text) = config {
+        std::fs::write(home.join("config.yaml"), text).unwrap();
+    }
+    let plan = connector::plan(&c, &env(d, &[]), &home);
+    let text = std::fs::read_to_string(home.join("config.yaml")).unwrap_or_default();
+    (plan, text)
+}
+
+const CA: &str = "    ssl_ca_cert: \"${env:SSL_CERT_FILE}\"\n";
+
+#[test]
+fn trust_rows_fall_back_to_the_routes_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (plan, text) = trusted(dir.path(), None);
+    for (name, url) in [
+        ("api-deepseek-com-v1", "https://api.deepseek.com/v1"),
+        ("openrouter-ai-api-v1", "https://openrouter.ai/api/v1"),
+    ] {
+        let entry = format!("  goalcup-trust-{name}:\n    base_url: \"{url}\"\n{CA}");
+        assert!(text.contains(&entry), "{text}");
+    }
+    assert!(
+        plan.log.iter().all(|l| !l.contains("ca_settings")),
+        "{:?}",
+        plan.log
+    );
+    drop(plan);
+    // The second start writes nothing: the bytes are equal.
+    let (_, again) = trusted(dir.path(), Some(&text));
+    assert_eq!(again, text);
+}
+
+#[test]
+fn a_custom_endpoint_entry_gets_the_bundle_and_is_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    // As Hermes's setup saves a custom endpoint: a list item at its key's indent.
+    let config = "model:\n  provider: custom\n  base_url: https://llm.example.net/v1\n\
+        custom_providers:\n- name: mine\n  base_url: https://llm.example.net/v1\n  model: m\n";
+    let (plan, text) = trusted(dir.path(), Some(config));
+    let want = "custom_providers:\n- name: mine\n  base_url: https://llm.example.net/v1\n  model: m\n  \
+        ssl_ca_cert: \"${env:SSL_CERT_FILE}\"\n";
+    assert!(text.ends_with(want), "{text}");
+    assert!(
+        !text.contains("goalcup-trust"),
+        "no second entry, no fallback: {text}"
+    );
+    // Not on the shared list, still decrypted and recorded as a config host.
+    let decided = plan.hosts.decide("llm.example.net");
+    assert!(
+        matches!(decided, connector::Decision::Listed { .. }),
+        "{decided:?}"
+    );
+}
+
+#[test]
+fn a_custom_base_url_without_an_entry_gets_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = "model:\n  provider: custom\n  base_url: https://llm.example.net/v1\n\
+        providers:\n  mine:\n    base_url: https://other.example.org/v1\n    ssl_ca_cert: /mine.pem\n  \
+        blank:\n    base_url: https://other.example.org/v2\n    ssl_ca_cert: \"\"\n";
+    let (_, text) = trusted(dir.path(), Some(config));
+    let entry = format!(
+        "  goalcup-trust-llm-example-net-v1:\n    base_url: \"https://llm.example.net/v1\"\n{CA}"
+    );
+    assert!(text.contains(&entry), "{text}");
+    // A participant entry with its own CA keeps it.
+    assert!(
+        text.contains(
+            "  mine:\n    base_url: https://other.example.org/v1\n    ssl_ca_cert: /mine.pem\n"
+        ),
+        "{text}"
+    );
+    // An empty CA is not the participant's own: it gets the bundle.
+    assert!(
+        text.contains(&format!(
+            "  blank:\n    base_url: https://other.example.org/v2\n{CA}"
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("deepseek"), "no fallback: {text}");
+}
+
+#[test]
+fn trust_rows_skip_a_flow_map_and_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let (plan, text) = trusted(dir.path(), Some("providers: {}\n"));
+    let skipped = |l: &String| l.starts_with("ca_settings not written: ");
+    assert!(plan.log.iter().any(skipped), "{:?}", plan.log);
+    assert_eq!(text, "providers: {}\n");
+    assert!(plan.refusal.is_none());
+}
+
+#[test]
+fn a_host_left_undecrypted_keeps_the_os_trust() {
+    let dir = tempfile::tempdir().unwrap();
+    // A custom_providers entry no host hint names: goalcup does not decrypt it, so writes nothing.
+    let config = "custom_providers:\n- name: lan\n  base_url: https://lan.example.net/v1\n";
+    let (_, text) = trusted(dir.path(), Some(config));
+    assert!(
+        !text.contains("lan.example.net/v1\n  ssl_ca_cert"),
+        "{text}"
+    );
+}

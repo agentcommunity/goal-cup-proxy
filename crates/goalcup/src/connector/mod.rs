@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 pub use hosts::{Decision, Host, HostList, Kind, Skipped, Source};
 pub use launch::{HomeLock, write_settings};
-pub use schema::{Connector, FieldValue, MaskPattern, MaskRule, SettingRow};
+pub use schema::{CaSettings, Connector, FieldValue, MaskPattern, MaskRule, SettingRow};
 
 /// What the plan reads besides the connector, gathered by PRD-10.
 #[derive(Debug, Clone)]
@@ -220,20 +220,42 @@ pub fn resolve_id(arg: &str) -> Result<&'static str, ConnectorError> {
 /// A built-in connector by id, or a connector file (seam S16) when the argument holds a `/` or
 /// ends `.toml`. The hosts come from `hosts_file`, else the built-in list.
 pub fn load(id_or_path: &str, hosts_file: Option<&Path>) -> Result<Connector, ConnectorError> {
+    let shared = HostList::from_file(builtin::HOSTS.as_bytes(), "connectors/model-hosts.toml")?;
     let hosts = match hosts_file {
         Some(path) => HostList::from_file(&read(path)?, &path.display().to_string())?,
-        None => HostList::from_file(builtin::HOSTS.as_bytes(), "connectors/model-hosts.toml")?,
+        None => shared.clone(),
     };
-    let mut connector = if id_or_path.contains('/') || id_or_path.ends_with(".toml") {
+    let (mut connector, file) = if id_or_path.contains('/') || id_or_path.ends_with(".toml") {
         let path = Path::new(id_or_path);
-        let mut c = schema::parse(&read(path)?, &path.display().to_string())?;
+        let file = path.display().to_string();
+        let mut c = schema::parse(&read(path)?, &file)?;
         c.source = ConnectorSource::File;
-        c
+        (c, file)
     } else {
         let id = resolve_id(id_or_path)?;
         let (_, text) = builtin::CONNECTORS.iter().find(|(i, _)| *i == id).unwrap();
-        schema::parse(text.as_bytes(), &format!("connectors/{id}.toml"))?
+        let file = format!("connectors/{id}.toml");
+        (schema::parse(text.as_bytes(), &file)?, file)
     };
+    // A fallback trust address names a built-in shared-list host over https, nothing else.
+    let fallback = connector.ca_settings.iter().flat_map(|t| t.fallback.iter());
+    for (i, url) in fallback.enumerate() {
+        let shared = |host| {
+            matches!(
+                shared.decide(host),
+                Decision::Listed {
+                    source: Source::Shared,
+                    ..
+                }
+            )
+        };
+        if !hints::authority(url).is_some_and(|(https, host, _)| https && shared(host)) {
+            return Err(ConnectorError::ModelAddress {
+                file,
+                key: format!("ca_settings.fallback[{i}]"),
+            });
+        }
+    }
     connector.hosts = hosts;
     Ok(connector)
 }
@@ -340,6 +362,11 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     if free {
         let skipped = write_settings(home, &connector.update_off).into_iter();
         log.extend(skipped.map(|s| format!("update_off not written: {}", s.reason)));
+        if let Some(t) = &connector.ca_settings {
+            let rows = hints::trust_rows(t, home, &hosts);
+            let skipped = write_settings(home, &rows).into_iter();
+            log.extend(skipped.map(|s| format!("ca_settings not written: {}", s.reason)));
+        }
     }
     // Where `home` sets `HOME`, a login shell would lose the handed `PATH` (PRD-17 P11).
     let profile = connector.home.get("HOME").zip(harness_env.get("PATH"));

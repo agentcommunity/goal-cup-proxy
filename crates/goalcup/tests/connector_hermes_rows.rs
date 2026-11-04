@@ -55,3 +55,63 @@ fn hermes_end_note_matches_the_verifier_text() {
         Some("Subagents are shown by their task logs, not tied to individual calls.")
     );
 }
+
+/// Hermes's built-in routes, the trust fallback (plugins/model-providers/*/__init__.py, checked
+/// at v0.22.5 and v0.22.7).
+const ROUTES: [&str; 9] = [
+    "https://api.deepseek.com/v1",
+    "https://ai-gateway.vercel.sh/v1",
+    "https://openrouter.ai/api/v1",
+    "https://inference-api.nousresearch.com/v1",
+    "https://api.x.ai/v1",
+    "https://api.z.ai/api/paas/v4",
+    "https://api.fireworks.ai/inference/v1",
+    "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+];
+
+#[test]
+fn hermes_trust_gives_every_address_the_run_bundle_and_records_it() {
+    let c = connector::load("hermes-cli", None).unwrap();
+    let t = c.ca_settings.as_ref().unwrap();
+    assert_eq!(t.fallback, ROUTES);
+    assert_eq!(
+        (t.key.as_str(), t.value.as_str()),
+        ("ssl_ca_cert", "${env:SSL_CERT_FILE}")
+    );
+    assert_eq!(t.file, "{home}/config.yaml");
+    // Every address given the bundle is also a host hint, so its calls are decrypted and recorded.
+    let hinted = |k: &String| {
+        let k = k.replace("goalcup-trust", "*");
+        c.host_hints.iter().any(|h| h.file == t.file && h.key == k)
+    };
+    for key in t.entries.iter().chain(&t.uses).chain([&t.add]) {
+        assert!(hinted(key), "{key} is not a host hint");
+    }
+}
+
+#[test]
+fn hermes_trust_on_a_fresh_home_names_every_route_once() {
+    let d = tempfile::tempdir().unwrap();
+    let c = connector::load("hermes-cli", None).unwrap();
+    let env = connector::Env {
+        vars: [("PATH".to_string(), "/nowhere".to_string())].into(),
+        workspace: d.path().join("workspace"),
+        resume: false,
+        run_start: std::time::SystemTime::now(),
+        goalcup_home: d.path().join("goalcup"),
+        server_host: "ingest.example.org".into(),
+    };
+    let home = d.path().join("home");
+    drop(connector::plan(&c, &env, &home));
+    let text = fs::read_to_string(home.join("config.yaml")).unwrap();
+    let urls: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("    base_url: \""))
+        .map(|l| l.trim_end_matches('"'))
+        .collect();
+    assert_eq!(urls, ROUTES, "{text}");
+    assert_eq!(text.matches("  goalcup-trust-").count(), 9, "{text}");
+    let ca = "    ssl_ca_cert: \"${env:SSL_CERT_FILE}\"\n";
+    assert_eq!(text.matches(ca).count(), 9, "{text}");
+}

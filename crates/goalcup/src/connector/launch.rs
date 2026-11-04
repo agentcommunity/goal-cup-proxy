@@ -300,15 +300,41 @@ fn set(mut doc: Value, parts: &[&str], leaf: Value) -> Result<Option<Value>, &'s
     Ok((!same).then_some(doc))
 }
 
-/// Sets `parts` in block YAML: replaces the key's line, else adds the rest under its parent.
+/// Sets `parts` in block YAML: replaces the key's line, else adds the rest under its parent. A
+/// number part is an existing item of a block list (`- ` at its key's indent or deeper).
 fn yaml_set(text: &str, parts: &[&str], leaf: &str) -> Result<String, &'static str> {
     let indent = |line: &str| {
         let body = line.trim_start_matches(' ');
         (!body.is_empty() && !body.starts_with('#')).then_some(line.len() - body.len())
     };
+    let dash = |line: &str| {
+        matches!(
+            line.trim_start_matches(' ').as_bytes(),
+            [b'-'] | [b'-', b' ', ..]
+        )
+    };
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    // Each list item entered has its `-` blanked while its keys are looked up, then put back.
+    let mut dashes: Vec<(usize, usize)> = Vec::new();
     let (mut from, mut end, mut pad) = (0, lines.len(), 0);
     for (n, part) in parts.iter().enumerate() {
+        let is_item = |i: &usize| indent(&lines[*i]) == Some(pad) && dash(&lines[*i]);
+        if let Ok(k) = part.parse::<usize>() {
+            let i = (from..end)
+                .filter(is_item)
+                .nth(k)
+                .ok_or("no such list item")?;
+            let next = (i + 1..end).find(|&j| indent(&lines[j]).is_some_and(|d| d <= pad));
+            let next = next.unwrap_or(end);
+            // Blank and comment lines after the item belong to what follows it.
+            let next = (i + 1..next).rev().find(|&j| indent(&lines[j]).is_some());
+            let next = next.map_or(i + 1, |j| j + 1);
+            lines[i].replace_range(pad..=pad, " ");
+            dashes.push((i, pad));
+            let child = (i..next).find_map(|j| indent(&lines[j]));
+            (from, end, pad) = (i, next, child.unwrap_or(pad + 2));
+            continue;
+        }
         let entry = |line: &str| {
             let (_, _, rest) = yaml_key(line).filter(|(_, k, _)| k == *part)?;
             Some(rest.trim().to_owned())
@@ -321,7 +347,10 @@ fn yaml_set(text: &str, parts: &[&str], leaf: &str) -> Result<String, &'static s
             }
             break;
         };
-        let block = (i + 1..end).find(|&j| indent(&lines[j]).is_some_and(|d| d <= pad));
+        let ends = |j: &usize| {
+            indent(&lines[*j]).is_some_and(|d| d < pad || d == pad && !dash(&lines[*j]))
+        };
+        let block = (i + 1..end).find(ends);
         let block = block.unwrap_or(end);
         // Blank and comment lines after the block belong to what follows it.
         let block = (i + 1..block).rev().find(|&j| indent(&lines[j]).is_some());
@@ -334,7 +363,14 @@ fn yaml_set(text: &str, parts: &[&str], leaf: &str) -> Result<String, &'static s
             return Err("a key part is not a block mapping");
         }
         let child = (i + 1..block).find_map(|j| indent(&lines[j]));
+        let list = (i + 1..block).any(|j| indent(&lines[j]) == child && dash(&lines[j]));
+        if list && parts[n + 1].parse::<usize>().is_err() {
+            return Err("a key part is not a block mapping");
+        }
         (from, end, pad) = (i + 1, block, child.unwrap_or(pad + 2));
+    }
+    for (i, at) in dashes {
+        lines[i].replace_range(at..=at, "-");
     }
     Ok(lines.join("\n") + "\n")
 }

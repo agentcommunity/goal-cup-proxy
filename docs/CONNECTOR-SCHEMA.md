@@ -38,6 +38,7 @@ is the participant's project folder.
 | `first_screen` | string | none | One line printed just before the harness opens: a first-run question to expect |
 | `no_prompts` | list of `{file, key, value}` | `[]` | Settings `goalcup setup` writes into the isolated home after its one question, so the harness never stops to ask approval |
 | `update_off` | list of `{file, key, value}` | `[]` | An auto-update switch that exists only as a setting. Written into the isolated home with no question, again at every `goalcup start` and `continue`. Where an env switch exists, it goes in `env` |
+| `ca_settings` | table `{file, entries, uses, add, key, value, fallback}` | none | Trust per model address, written at every `goalcup start` and `continue`, never by setup. Each `https` address in `file` (not local) gets `key = value` beside it: at each `entries` key (one `*` part for the entry; an entry already holding another CA value keeps it), and for each other address at a `uses` key on a new entry, `add` with its `*` as `goalcup-trust-<address>`. When `file` names no address, the new entries are for the `fallback` addresses: each `https` on a shared-list host. `value` is never an address |
 | `skills_dir` | template | none | Where the goal-cup skill is installed, under `{home}`. Absent: no skill is installed |
 
 A key is dotted (`env.HTTPS_PROXY`); in a hint or refusal key a part may hold `*`, matching any key
@@ -106,7 +107,8 @@ A parse error names the file and the line; a rule error names the file and the k
 
 - **No model address.** goalcup never sets a model base URL. A connector is refused when an `env`
   name contains `BASE_URL`, `API_BASE`, `ENDPOINT`, `_HOST` or `PROXY` (any case), or when an
-  `env`, `no_prompts` or `update_off` value contains `://`. This check runs first, so `HTTPS_PROXY`
+  `env`, `no_prompts` or `update_off` value, or the `ca_settings` value, contains `://`. The one
+  exception: a `ca_settings` `fallback` address names a shared-list host over `https`. This check runs first, so `HTTPS_PROXY`
   in `env` gets this error.
 - `env` names no variable the code owns: the proxy and CA variables it removes and sets
   (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` in both cases, `NODE_EXTRA_CA_CERTS`,
