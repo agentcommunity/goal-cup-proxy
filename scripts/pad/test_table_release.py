@@ -149,6 +149,26 @@ class Agreement(Repo):
         self.assertIn("exec h2-parallel.sh verdict PASS: missing", self.check(self.repo(rows))[1])
 
 
+class PadOnlyRows(Repo):
+    def tier(self, rows):
+        with mock.patch.object(table, "harness_lines", return_value=["[gateway]"]):
+            return table.tier_for("hermes-cli", rows)
+
+    def test_pad_only_row_never_counts(self):
+        rows = green_rows()
+        i = next(i for i, r in enumerate(rows) if r["connector"] == "hermes-cli" and r["case"] == "direct")
+        rows[i] = dict(rows[i], pad_only=["x", "y"])
+        tier = self.tier(rows)
+        self.assertEqual(tier[0], "not verified")
+        self.assertEqual(tier[3], "direct pad-only config: x; y")
+        self.assertIn("hermes-cli direct full: result PASS, pad-only config", self.check(self.repo(rows))[1])
+
+    def test_legacy_row_without_key_counts(self):
+        rows = hermes_rows()
+        self.assertTrue(all("pad_only" not in r for r in rows))
+        self.assertEqual(self.tier(rows)[0], "verified")
+
+
 class TiersDiff(Repo):
     DIFFERS = "connectors/tiers.toml differs from the rows; run scripts/pad/table and commit it"
     NOTE = '[gateway]\ntier_note = "%s"\n'

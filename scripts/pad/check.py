@@ -931,7 +931,7 @@ def evaluate(folder):
     got = [r.v[c] for c in CHECKS] + ([fault] if fault else [])
     row = {k: meta.get(k) for k in ("connector", "harness_version", "case", "mode", "prompt", "variant", "where",
                                     "server", "image", "run", "entry", "started", "minutes")}
-    row.update(os=meta.get("os"), goalcup=meta.get("goalcup"), pad_trusted_at=trusted_at(REPO, meta.get("pad_commit")), checks={c: r.v[c] for c in CHECKS}, faults=fault, why=r.why,
+    row.update(os=meta.get("os"), goalcup=meta.get("goalcup"), pad_trusted_at=trusted_at(REPO, meta.get("pad_commit")), pad_only=meta.get("pad_only") or [], checks={c: r.v[c] for c in CHECKS}, faults=fault, why=r.why,
                exec={s: verdict(folder, s) for _, s in watchers(meta) if s not in JUDGED}, notes=owner_notes(r),
                result="FAIL" if "FAIL" in got else "PASS" if set(got) == {"PASS"} else "INCONCLUSIVE", facts=facts(r))
     return row

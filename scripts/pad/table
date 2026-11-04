@@ -92,7 +92,8 @@ def tier_for(cid, rows, lines=None):
     reasons = []
     for _, r in got:
         if r and passed(r) and not counts(r):
-            reasons.append((2, "%s masked upstream, not confirmed by the owner" % r.get("case")))
+            reasons.append((2, "%s masked upstream, not confirmed by the owner" % r.get("case") if g(r.get("facts"), "masked_upstream")
+                            else "%s pad-only config: %s" % (r.get("case"), "; ".join(map(str, r["pad_only"])))))
         elif r and not counts(r):
             bad = next((c for c in CHECKS if g(r.get("checks"), c) != "PASS"), "result")
             why = [str(w) for w in r.get("why") or [r.get("result")]]
@@ -163,7 +164,7 @@ def release_check(commit):
 
     def need(name, want, ok=counts,
              say=lambda r: "result %s%s" % (r.get("result"), ", C3 passed as masked upstream (owner has not confirmed)"
-                                            if g(r.get("facts"), "masked_upstream") else "")):
+                                            if g(r.get("facts"), "masked_upstream") else ", pad-only config" if r.get("pad_only") else "")):
         r = latest(rows, want)
         if r is not None and ok(r):
             return used.append((name, r))
