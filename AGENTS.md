@@ -70,7 +70,7 @@ what it needs: [README](README.md#the-gate).
 - **Never write into `~/.claude`, `~/.codex`, `~/.hermes` or any app-wide config.** Goal Cup Proxy
   makes isolated homes. A test that launches a harness uses a private `HOME`.
 - **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, any
-  `spikes/*/out/` (until PRD-13 deletes `spikes/`), or any `target/`, a key, or a real run's record.
+  `target/`, a key, or a real run's record.
   A committed fixture is masked and reviewed by eye.
 - **Record raw, interpret later.** The recorder captures bytes. The verifier and the usage reader
   judge them. Do not put rule logic in the recorder (D3).
