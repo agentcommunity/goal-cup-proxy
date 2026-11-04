@@ -52,10 +52,7 @@ for py in python3.11 python3; do
         break
     fi
 done
-if [ -z "$py311" ] && command -v dnf >/dev/null 2>&1 && sudo -n dnf install -y -q python3.11 >/dev/null 2>&1; then
-    py311=python3.11
-fi
-[ -n "$py311" ] || missing="$missing python3.11"
+[ -n "$py311" ] || missing="$missing python3.11(install it, for example: sudo dnf install python3.11)"
 [ -z "$missing" ] || { echo "gate.sh: missing:$missing"; fail; }
 
 # One cargo job at a time in one build box (the gate and the pad's rebuild step).
