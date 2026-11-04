@@ -14,6 +14,7 @@ use goalcup::cli::EntryFacts;
 use goalcup::cli::approve::Stop;
 use goalcup::cli::continue_run::{Args, prepare, resume_from_files};
 use goalcup::cli::start::Ready;
+use goalcup::cli::text;
 use goalcup::pipeline::status::Mode;
 use serde_json::{Value, json};
 
@@ -281,6 +282,50 @@ fn a_run_whose_time_is_up_is_not_continued() {
     assert_eq!(stop.code, 1);
     assert_eq!(w.server_json(), before);
     assert_eq!(w.folders(), 1);
+}
+
+/// What `continue` prints for a run of `mode` naming `repo` whose start was stopped with Ctrl-C
+/// after the open (no part folder, no `first-message.txt`), or whose part recorded `written`.
+/// A built-in connector on an empty PATH: nothing real runs and no clipboard tool is found.
+fn shown(mode: &str, repo: Option<&str>, written: Option<Value>) -> String {
+    let mut w = World::new(None);
+    w.part(1, false, written.clone().map(World::sealed));
+    if written.is_none() {
+        std::fs::remove_dir_all(w.run_dir().join(e(1))).unwrap();
+    }
+    std::fs::write(w.project.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+    let mut sj: Value = serde_json::from_slice(&w.server_json()).unwrap();
+    sj["mode"] = json!(mode);
+    sj["repo"] = json!(repo);
+    sj["connector"] = json!({"id": "codex-cli", "name": "Codex", "source": "builtin"});
+    put(&w.run_dir(), "server.json", &sj);
+    let bin = w.t.home().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let vars = [("PATH".to_owned(), bin.display().to_string())].into();
+    let a = Args {
+        run: None,
+        connector: None,
+        hosts: None,
+    };
+    let mut out = Vec::new();
+    prepare(&a, &w.gc(), &w.project, &vars, &mut out).unwrap_or_else(|s| panic!("{}", s.text));
+    String::from_utf8(out).unwrap()
+}
+
+#[test]
+fn the_push_lines_come_back_after_a_ctrl_c_after_the_open() {
+    let said = shown("competition", Some("a/b"), None);
+    assert!(said.contains(text::PUSH_FRAME), "{said}");
+    assert!(said.contains("https://github.com/a/b"), "{said}");
+    let said = shown("practice", None, None);
+    assert!(!said.contains(text::PUSH_FRAME), "{said}");
+    // A resumed session has already seen them.
+    let said = shown(
+        "competition",
+        Some("a/b"),
+        Some(json!({"model_requests": 2})),
+    );
+    assert!(!said.contains(text::PUSH_FRAME), "{said}");
 }
 
 /// An unreadable harness version goes up on the continue call as the string "unknown", never null.

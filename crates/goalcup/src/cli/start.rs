@@ -411,32 +411,45 @@ pub(super) fn start_facts(
 /// Section 8: the push block and the prompt, written to `first-message.txt` and put on the
 /// clipboard; the lines the launch block shows for them.
 fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<Vec<String>, Stop> {
-    let block = a.repo.map(|repo| {
-        let token = c.project.join(".env.local");
-        let url = format!("https://github.com/{repo}");
-        push::block(
-            &url,
-            "Goal Cup",
-            text::SUPPORT_ADDRESS,
-            ".env.local",
-            &token,
-        )
-    });
     let Some(prompt) = prompt else {
-        let Some(block) = block else {
-            return Ok(vec![]);
-        };
-        push::clipboard::copy(&block.join("\n"), &c.vars);
-        let mut lines = vec![text::PUSH_FRAME.to_owned()];
-        lines.extend(block.iter().map(|l| format!("  {l}")));
-        return Ok(lines);
+        return Ok(a
+            .repo
+            .map(|repo| push_only(repo, &c.project, &c.vars))
+            .unwrap_or_default());
     };
+    let block = a.repo.map(|repo| push_block(repo, &c.project));
     let dir = super::run_dir(&c.home, run);
     let file = dir.join("first-message.txt");
     let message = push::write_first_message(&dir, block.as_deref(), prompt)
         .map_err(|e| Stop { text: e, code: 3 })?;
     let copied = push::clipboard::copy(&message, &c.vars);
     Ok(vec![text::first_message(&file, copied)])
+}
+
+fn push_block(repo: &str, project: &Path) -> Vec<String> {
+    let token = project.join(".env.local");
+    let url = format!("https://github.com/{repo}");
+    push::block(
+        &url,
+        "Goal Cup",
+        text::SUPPORT_ADDRESS,
+        ".env.local",
+        &token,
+    )
+}
+
+/// The push lines alone, with no prompt: put on the clipboard, and the lines the launch block
+/// shows for them.
+pub(super) fn push_only(
+    repo: &str,
+    project: &Path,
+    vars: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let block = push_block(repo, project);
+    push::clipboard::copy(&block.join("\n"), vars);
+    let mut lines = vec![text::PUSH_FRAME.to_owned()];
+    lines.extend(block.iter().map(|l| format!("  {l}")));
+    lines
 }
 
 /// One row of `tiers.toml`; the file also holds a reason, which is not shown.

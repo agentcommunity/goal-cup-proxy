@@ -287,7 +287,13 @@ pub fn prepare(
         lines.extend((a != b).then(|| text::updated(&name, a, b)));
     }
     lines.extend(connector.first_screen.clone());
-    lines.extend(first_message(&found.run_dir, resumed, vars));
+    lines.extend(first_message(
+        &found.run_dir,
+        resumed,
+        sj.repo.as_deref(),
+        project,
+        vars,
+    ));
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(server.host()));
     lines.extend(plan.version_notes.clone());
@@ -320,14 +326,28 @@ pub fn prepare(
     })
 }
 
-/// A new session has not seen the first message: it is on the clipboard again.
-fn first_message(run_dir: &Path, resumed: bool, vars: &BTreeMap<String, String>) -> Option<String> {
+/// A new session has not seen the first message: it is on the clipboard again. A start stopped
+/// before it wrote one (Ctrl-C after the open, or no prompt) still owes the push lines.
+fn first_message(
+    run_dir: &Path,
+    resumed: bool,
+    repo: Option<&str>,
+    project: &Path,
+    vars: &BTreeMap<String, String>,
+) -> Vec<String> {
+    if resumed {
+        return vec![];
+    }
     let file = run_dir.join("first-message.txt");
-    let message = std::fs::read_to_string(&file).ok().filter(|_| !resumed)?;
-    Some(text::first_message(
-        &file,
-        push::clipboard::copy(&message, vars),
-    ))
+    match std::fs::read_to_string(&file) {
+        Ok(message) => vec![text::first_message(
+            &file,
+            push::clipboard::copy(&message, vars),
+        )],
+        Err(_) => repo
+            .map(|r| start::push_only(r, project, vars))
+            .unwrap_or_default(),
+    }
 }
 
 #[derive(Deserialize)]
