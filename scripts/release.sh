@@ -103,6 +103,7 @@ restore() {
     git checkout -q "$start"
 }
 trap restore EXIT
+trap 'exit 1' HUP INT TERM # dash runs the EXIT trap only on exit
 # The first `version = "..."` line is the workspace's (under [workspace.package]).
 awk -v v="$new" '!done && /^version = "/ { print "version = \"" v "\""; done = 1; next } { print }' \
     Cargo.toml >Cargo.toml.new

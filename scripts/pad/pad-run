@@ -330,19 +330,15 @@ class Run:
         if r.returncode or not homes:  # S15 prints the isolated home's path
             raise Step("FAIL", "goalcup setup exit %d, %d home paths printed" % (r.returncode, len(homes)))
         home = self.st["home"] = homes[-1]
-        for name, src in sec.get("files", {}).items():  # provider config, as a participant writes it
-            old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""  # keep goalcup setup's no_prompts rows
-            write(os.path.join(home, name), merge_config(name, old, fill(open(os.path.join(PAD, "harnesses", src)).read(), home, self.project)), 0o644)
         extra = sec.get("pad_only", [])  # config no participant writes: merged, and the row never counts (table)
         if extra:
             import harness_version  # lane F's module, loaded only when a section names a version
-        self.st["pad_only"] = []
-        for e in extra:
-            if harness_version.matches(version, e["match"]):
-                self.st["pad_only"].append(e["why"])
-                for name, src in e["files"].items():
-                    old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""
-                    write(os.path.join(home, name), merge_config(name, old, fill(open(os.path.join(PAD, "harnesses", src)).read(), home, self.project)), 0o644)
+        extra = [e for e in extra if harness_version.matches(version, e["match"])]
+        self.st["pad_only"] = [e["why"] for e in extra]
+        for files in [sec.get("files", {})] + [e["files"] for e in extra]:  # provider config, as a participant writes it
+            for name, src in files.items():
+                old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""  # keep goalcup setup's no_prompts rows
+                write(os.path.join(home, name), merge_config(name, old, fill(open(os.path.join(PAD, "harnesses", src)).read(), home, self.project)), 0o644)
         get = lambda k: sec.get(k, h.get(k))  # noqa: E731
         key, route = (os.path.join(self.keys, s["route_key"]), get("key_route")) if s["route_key"] else (None, None)  # section 6
         self.st.update(key_route=route, key_env=get("key_env"), key_path=key)

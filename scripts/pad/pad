@@ -177,7 +177,10 @@ def extract(tar, dest):
 
 def stage_pad(dest, repo=REPO):
     """The tracked pad files (not rows, fixtures, runs or tests) copied under `dest`; their paths relative to `repo`."""
-    out = call(["git", "-C", repo, "ls-files", "-z", "--", "scripts/pad"]).stdout.split("\0")
+    got = call(["git", "-C", repo, "ls-files", "-z", "--", "scripts/pad"])
+    if got.returncode:
+        raise Refused("git ls-files failed in %s; the box gets tracked pad files only" % repo)
+    out = got.stdout.split("\0")
     keep = [p for p in out if p and not p.startswith(("scripts/pad/rows/", "scripts/pad/fixtures/", "scripts/pad/runs/"))
             and not os.path.basename(p).startswith("test_")]
     for p in keep:
@@ -1124,6 +1127,7 @@ def main(argv):
             print("%s: not verified: %s" % (s["harness"], harness.get("not_verified") or "no key"))
             return 3  # nothing proven: the INCONCLUSIVE exit, never "every row PASS"
         apply_kill_minutes(s, harness)
+        server_url(s["server"], s)  # a missing or non-staging address is a usage error before any box
         pad = row_pad(s, pad)
         if not (harness.get("version") and harness.get("version_cmd")):
             raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])

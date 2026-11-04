@@ -71,9 +71,11 @@ NO_TIER_ROW = {("claude-code-cli", "gateway")}  # the owner's 3 Nov exemption: n
 RELEASE_OS = "darwin-arm64"  # the release check's system for release_versions
 
 def release_versions(lines):
-    """`release_versions = ["<v>", ...]` in a harness file: the versions a release needs verified ([] if absent)."""
-    m = next(filter(None, map(re.compile(r"release_versions\s*=\s*\[(.*)\]").fullmatch, lines)), None)
-    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
+    """`release_versions = ["<v>", ...]` (one line) in a harness file: the versions a release needs verified; [] if
+    absent, None if the key is there but unreadable (the release check then refuses, never falls back)."""
+    said = [ln for ln in lines if ln.startswith("release_versions")]
+    m = re.fullmatch(r'release_versions\s*=\s*\[((?:\s*"[^"]+"\s*,?)*)\]\s*(#.*)?', said[0]) if said else None
+    return (re.findall(r'"([^"]+)"', m.group(1)) or None if m else None) if said else []
 
 def has_gateway(cid, rows, lines=None):
     # gateway is n/a, and does not block, when the harness file has no [gateway] table (no documented route).
@@ -176,7 +178,11 @@ def release_check(commit):
             return used.append((name, r))
         items.append("%s: %s" % (name, "missing" if r is None else say(r)))
     for cid in CORE:  # release_versions in the harness file (owner, 4 Nov): each listed version on RELEASE_OS
-        for v in release_versions(harness_lines(cid, sha)) or [None]:  # no key: the latest rows, any version
+        lines = harness_lines(cid, sha)
+        vs = release_versions(lines)
+        if not lines or vs is None:
+            items.append("scripts/pad/harnesses/%s.toml %s at %s" % (cid, "release_versions unreadable (one line: [\"<v>\", ...])" if lines else "missing", sha))
+        for v in vs or [None]:  # no key: the latest rows, any version
             for case in [c for c in CASES if (cid, c) not in NO_TIER_ROW]:
                 want = tier_row((cid,), case)
                 need("%s %s full%s" % (cid, case, " %s on %s" % (v, RELEASE_OS) if v else ""), want if v is None else

@@ -49,8 +49,9 @@ def mkrepo(tmp, rows, tiers_text=None, harness=None):
     if rows is not None:
         files[table.ROWS_REL] = "".join(json.dumps({k: v.replace("+BASE", "+" + base) if k == "goalcup" else v for k, v in r.items()}) + "\n"
                                         for r in rows)
-    for cid, text in (harness or {}).items():
-        files["scripts/pad/harnesses/%s.toml" % cid] = text
+    for cid, text in dict({c: "[gateway]\n" for c in table.CORE}, **(harness or {})).items():  # a CORE file is required
+        if text is not None:
+            files["scripts/pad/harnesses/%s.toml" % cid] = text
     sha = commit(root, files or {"README": "x\n"}, "rows")
     if tiers_text is None and rows is not None:
         with mock.patch.object(table, "ROOT", root):
@@ -250,6 +251,19 @@ class ReleaseVersions(Repo):
                  for r in rows if r["connector"] == "hermes-cli"]
         code, out = self.check(self.repo(rows, harness={"hermes-cli": self.HERMES}))
         self.assertIn("hermes-cli gateway full 0.22.6 on darwin-arm64: missing", out)
+
+    def test_unreadable_key_refuses(self):
+        for text in ('release_versions = [\n"0.22.6",\n]\n', 'release_versions = []\n', 'release_versions = "0.22.6"\n'):
+            code, out = self.check(self.repo(green_rows(), harness={"hermes-cli": text + "[gateway]\n"}))
+            self.assertEqual(code, 1, text)
+            self.assertIn("hermes-cli.toml release_versions unreadable", out)
+
+    def test_trailing_comment_is_read(self):
+        self.assertEqual(table.release_versions(['release_versions = ["0.22.5", "0.22.6"]  # owner']), ["0.22.5", "0.22.6"])
+
+    def test_missing_core_harness_file_refuses(self):
+        code, out = self.check(self.repo(green_rows(), harness={"hermes-cli": None}))
+        self.assertIn("scripts/pad/harnesses/hermes-cli.toml missing at", out)
 
     def test_the_hermes_file_requires_0_22_6(self):
         self.assertIn("0.22.6", table.release_versions(table.harness_lines("hermes-cli")))

@@ -155,6 +155,18 @@ class RowOverrides(unittest.TestCase):
         self.assertEqual((p["cap_usd"], p["box_vcpus"]), (3, 2))
         self.assertEqual(cases, ["direct", "gateway", "dodger"])
 
+    def test_staging_without_address_is_usage_before_any_run(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        f = os.path.join(d, "s.toml")
+        with open(f, "w") as fh:
+            fh.write('harness = "codex-cli"\nkey = "openai"\nmode = "full"\n')
+        env = {k: x for k, x in os.environ.items() if k != "PAD_STAGING_URL"}
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(pad, "run_all", side_effect=AssertionError("ran")), \
+                mock.patch("sys.stderr", err):
+            self.assertEqual(pad.main(["pad", f]), 2)
+        self.assertIn("PAD_STAGING_URL", err.getvalue())
+
     def test_mini_template_loads(self):
         s = pad.load_settings(pad.read_toml(os.path.join(HERE, "runs", "mini.toml")), pad.read_toml(os.path.join(HERE, "pad.toml")))
         self.assertEqual((s["mode"], s["minutes"], s["server"], s["steps"], s["cap_usd"]), ("micro", 10, "staging", ["keep-going"], 3))
@@ -1580,6 +1592,11 @@ class StagePad(unittest.TestCase):
             self.assertEqual(pad.stage_pad(dest, repo), ["scripts/pad/pad-run"])
             self.assertTrue(os.path.isfile(os.path.join(dest, "scripts/pad/pad-run")))
             self.assertFalse(os.path.exists(os.path.join(dest, "scripts/pad/notes.txt")))
+
+    def test_not_a_git_checkout_refuses(self):
+        with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as dest:
+            with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": os.path.dirname(repo)}), self.assertRaises(pad.Refused):
+                pad.stage_pad(dest, repo)
 
 
 if __name__ == "__main__":
