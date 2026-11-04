@@ -11,12 +11,14 @@
 //!   crash recovery.
 //! - [`read`]: streaming reader over part files or a fetched concatenation, [`read::read_index`].
 //! - [`dump`]: one JSON line per record (`goalcup-verify dump`).
+//! - [`shared`]: the masker's left guard and the host pattern match, shared by both binaries.
 
 pub mod codec;
 pub mod dump;
 pub mod link;
 pub mod part;
 pub mod read;
+pub mod shared;
 
 pub use codec::Record;
 pub use part::{Durable, Now, PartOptions, PartWriter, Recover, Recovered};

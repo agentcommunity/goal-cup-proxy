@@ -25,10 +25,10 @@ impl Rng {
     }
 }
 
-/// Every data row of `src/mask/shapes.tsv` (seam S12) as its raw tab-separated fields, read
+/// Every data row of `connectors/shapes.tsv` (seam S12) as its raw tab-separated fields, read
 /// on its own the way the verifier reads it.
 pub fn shape_rows() -> Vec<Vec<&'static str>> {
-    include_str!("../../src/mask/shapes.tsv")
+    include_str!("../../../../connectors/shapes.tsv")
         .lines()
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .map(|line| line.split('\t').collect())
