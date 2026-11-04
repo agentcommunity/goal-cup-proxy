@@ -330,3 +330,32 @@ fn watchdog_recover_seal_says_the_harness_was_left() {
     d.harness.kill().unwrap();
     d.harness.wait().unwrap();
 }
+
+/// Review focus 5: the recovered watchdog holds the harness home lock (`flock`, a second open
+/// in this process conflicts) until it ends, so a `goalcup start` of the same harness is refused.
+#[test]
+fn watchdog_recover_holds_the_home_lock() {
+    let mut d = setup(false);
+    let got = watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
+    assert!(got.is_ok(), "{got:?}");
+    let homes = d.tmp.path().join("g/homes");
+    std::fs::create_dir_all(&homes).unwrap();
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(homes.join("fake.goalcup.lock"))
+        .unwrap();
+    assert!(matches!(
+        f.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+
+    d.harness.kill().unwrap();
+    d.harness.wait().unwrap();
+    until("the seal", || {
+        read_json::<Value>(&status_json(&d.entry_dir)).filter(|s| !s["seal"].is_null())
+    });
+    until("the lock freed", || f.try_lock().ok());
+}

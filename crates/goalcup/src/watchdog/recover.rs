@@ -8,6 +8,7 @@ use super::{
 };
 use crate::cli::log::{Fact, line};
 use crate::cli::{self, read_json, status_json};
+use crate::connector::HomeLock;
 use crate::pipeline::fds::{self, Target};
 use crate::proxy::ca::{RUN_CA_FILE, RunCa};
 use std::fs::{self, TryLockError};
@@ -142,6 +143,15 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     catch_seal();
     if write_pid(&dir.join("rec")).is_err() {
         line(&dir, "watchdog_pid_failed", &[]);
+    }
+    // Held to the end, so a `goalcup start` of this harness is refused. `Err`: a start took it in
+    // the gap after cli/recover.rs dropped its own.
+    let (home, id) = (dir.ancestors().nth(3), facts.connector["id"].as_str());
+    let lock = home
+        .zip(id)
+        .map(|(h, id)| HomeLock::take(&cli::isolated_home(h, id)));
+    if let Some(Err(_)) = lock {
+        line(&dir, "home_locked", &[]);
     }
     let exe = std::env::current_exe().unwrap_or_default();
     let recorder_pid = Arc::new(Mutex::new(0));
