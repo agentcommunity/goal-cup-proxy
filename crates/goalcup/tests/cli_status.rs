@@ -354,6 +354,21 @@ fn every_problem_line_says_what_to_do() {
     ];
     let mut seen = 0;
     for state in states {
+        // No wildcard: a new State fails to compile here until it is added to the list above.
+        match state {
+            S::Recover { .. }
+            | S::Continue { .. }
+            | S::Over { .. }
+            | S::Stale { .. }
+            | S::Null { .. }
+            | S::NotAnswering { .. }
+            | S::Losing { .. }
+            | S::WriterSlow { .. }
+            | S::OffRestarting { .. }
+            | S::Restarting { .. }
+            | S::Sealed { .. }
+            | S::Recording => {}
+        }
         let line = text::state_line(&state, RUN);
         if !line.starts_with(text::PROBLEM) {
             continue;
