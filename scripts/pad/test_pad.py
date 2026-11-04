@@ -15,6 +15,7 @@ import tarfile
 import tempfile
 import threading
 import time
+import types
 import unittest
 import urllib.parse
 from unittest import mock
@@ -1504,6 +1505,39 @@ class CleanupListCoversIndexBox(unittest.TestCase):
         res, saw, _ = self.cleanup("stopped")
         self.assertEqual(res, "ok", saw)
         self.assertIn("list shows no live box", saw)
+
+
+class ExtractRefuses(unittest.TestCase):
+    def test_no_data_filter(self):
+        with mock.patch.object(pad, "tarfile", types.SimpleNamespace(open=tarfile.open)):
+            self.assertRaises(pad.Refused, pad.extract, "x.tar", "dest")
+
+
+class QueueAtomic(unittest.TestCase):
+    def test_replace_is_used(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "row.json"), "w") as f:
+                json.dump({"facts": {"provider_errors": {"429": 9}, "wire_requests": 10}}, f)
+            path = os.path.join(d, "queue.json")
+            with mock.patch.object(pad.os, "replace", wraps=os.replace) as rep:
+                pad.downgrade_if_429("deepseek", d, d)
+            rep.assert_called_once_with(path + ".tmp", path)
+            with open(path) as f:
+                self.assertEqual(json.load(f), {"downgraded": ["deepseek"]})
+
+
+class StagePad(unittest.TestCase):
+    def test_untracked_and_rows_stay_out(self):
+        with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as dest:
+            for name in ("pad-run", "rows/pad-rows.jsonl", "test_x.py", "notes.txt"):
+                p = os.path.join(repo, "scripts/pad", name)
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                open(p, "w").close()
+            subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+            subprocess.run(["git", "-C", repo, "add", "scripts/pad/pad-run", "scripts/pad/rows", "scripts/pad/test_x.py"], check=True)
+            self.assertEqual(pad.stage_pad(dest, repo), ["scripts/pad/pad-run"])
+            self.assertTrue(os.path.isfile(os.path.join(dest, "scripts/pad/pad-run")))
+            self.assertFalse(os.path.exists(os.path.join(dest, "scripts/pad/notes.txt")))
 
 
 if __name__ == "__main__":

@@ -151,9 +151,22 @@ def call(argv, timeout=None, env=None):
 
 
 def extract(tar, dest):
-    """A box tar unpacked under `dest` with the data filter where Python has it (no path out of `dest`, no device files)."""
+    """A box tar unpacked under `dest` with the data filter (no path out of `dest`, no device files); no filter, no unpack."""
+    if not hasattr(tarfile, "data_filter"):
+        raise Refused("python has no tar data filter (3.11.4 or later needed)")
     with tarfile.open(tar) as t:
-        t.extractall(dest, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+        t.extractall(dest, filter="data")
+
+
+def stage_pad(dest, repo=REPO):
+    """The tracked pad files (not rows, fixtures, runs or tests) copied under `dest`; their paths relative to `repo`."""
+    out = call(["git", "-C", repo, "ls-files", "-z", "--", "scripts/pad"]).stdout.split("\0")
+    keep = [p for p in out if p and not p.startswith(("scripts/pad/rows/", "scripts/pad/fixtures/", "scripts/pad/runs/"))
+            and not os.path.basename(p).startswith("test_")]
+    for p in keep:
+        os.makedirs(os.path.dirname(os.path.join(dest, p)), exist_ok=True)
+        shutil.copy2(os.path.join(repo, p), os.path.join(dest, p))
+    return keep
 
 
 def fetch_block(path, tag):
@@ -194,7 +207,7 @@ exit $rc
 """
 REC_TAR = """d=$(ls -d ~/run/gc/home/runs/*/%s | head -n 1)
 [ -d "$d/rec" ] || exit 3
-tar cf ~/rec-kept-%s.tar --exclude=run-ca.key -C "$d" rec
+tar cf ~/rec-kept-%s.tar --exclude=run-ca.key --exclude=rec/goalcup -C "$d" rec
 """
 
 
@@ -258,8 +271,9 @@ def downgrade_if_429(name, folder, out_root):
             fcntl.flock(lock, fcntl.LOCK_EX)
             doc = read_json(path)
             doc["downgraded"] = sorted(set(doc.get("downgraded", [])) | {name})
-            with open(path, "w") as f:
+            with open(path + ".tmp", "w") as f:
                 json.dump(doc, f)
+            os.replace(path + ".tmp", path)
 
 
 def check_key_file(path, repo=REPO):
@@ -681,7 +695,9 @@ class Run:
             build = os.path.join(REPO, s.get("build") or self.pad.get("build", "pad-out/build"))
             self.build = build
             bins = [b for b in ("goalcup", "goalcup-verify") if os.path.isfile(os.path.join(build, b))]  # none: "no goalcup build"
-            for verb, args in [("push-dir", (HERE, "~/pad")), ("push-dir", (stage, "~/run"))] + [
+            padstage = os.path.join(self.tmp, "pad-stage")
+            stage_pad(padstage)
+            for verb, args in [("push-dir", (os.path.join(padstage, "scripts", "pad"), "~/pad")), ("push-dir", (stage, "~/run"))] + [
                     ("put", ("~/bin/" + b, "--file", os.path.join(build, b), "--mode", "755")) for b in bins]:
                 r = self.sbx(verb, self.name, *args, limit=left())
                 if r.returncode:
@@ -914,7 +930,7 @@ class Run:
                     srcs = glob.glob(os.path.join(self.box_dir or "", "gc", "home", "runs", "*", entry, "rec"))
                     if not srcs:
                         raise Refused("no rec folder")
-                    shutil.copytree(srcs[0], os.path.join(dest, "rec"), ignore=shutil.ignore_patterns("run-ca.key"))
+                    shutil.copytree(srcs[0], os.path.join(dest, "rec"), ignore=lambda d, names: [n for n in names if n == "run-ca.key" or (n == "goalcup" and d == srcs[0])])
                 else:
                     fd, script = tempfile.mkstemp(suffix=".sh", dir=self.tmp)
                     with os.fdopen(fd, "w") as f:
