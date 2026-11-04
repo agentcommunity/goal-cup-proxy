@@ -11,11 +11,14 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 const MIN: u64 = 60_000_000_000;
-/// A harness call may reach the wire this long after the harness logged it.
+/// A call's wire leg may land this long before or after the harness logged it: the call pairing
+/// (usage/mod.rs) assumes wire before harness, the cumulative rule after; both are tolerated.
 const LAG: u64 = 2 * MIN;
 const WIRE_ENDED: u64 = 10 * MIN;
-/// `wire_keeps_up` also compares the legs in each window of this length.
-const WINDOW: u64 = 10 * MIN;
+/// `wire_keeps_up` also compares the legs in each window of this length. 30 min, not the plan's
+/// 10: the wire side is widened by the lag both ways, and over 10 min that slack hid a steady
+/// loss of up to about a quarter of the calls.
+const WINDOW: u64 = 30 * MIN;
 const NOT_READ: &str = "the harness's own log is not read";
 const UNREAD: &str = "could not read the harness's own log";
 
@@ -242,6 +245,8 @@ impl Sweep {
             let hw = (h.partition_point(|&x| x < end) - j) as u64;
             let before = w.partition_point(|&x| x < t.saturating_sub(LAG)) as u64;
             let ww = upto(end.saturating_add(LAG)) - before;
+            // Not into `top` below the tolerance: a window's small shortfall is edge noise, not
+            // a count of harness calls with no recording.
             s.mark(t, hw, hw.saturating_sub(ww));
         }
         s

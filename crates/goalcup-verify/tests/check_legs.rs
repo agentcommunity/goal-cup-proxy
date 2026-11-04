@@ -149,6 +149,20 @@ fn early_wire_only_calls_do_not_hide_later_lost_calls() {
 }
 
 #[test]
+fn a_moderate_mid_run_loss_after_early_surplus_is_caught() {
+    // 400 wire-only calls first, then 1080 harness calls 10 s apart; one in four of the middle
+    // third never reaches the wire. The early surplus covers the 90 lost calls cumulatively.
+    let early = (0..400).map(|i| (Leg::Wire, i));
+    let calls = (0..1080u64).flat_map(|i| {
+        let h = 600 + i * 10;
+        let lost = (360..720).contains(&i) && i % 4 == 0;
+        [Some((Leg::Native, h)), (!lost).then_some((Leg::Wire, h))]
+    });
+    let t = timed(early.chain(calls.flatten()));
+    assert_ne!(go(&t, None, K[0]), "pass");
+}
+
+#[test]
 fn a_clean_run_with_a_few_wire_only_calls_passes() {
     // Three wire-only calls at minute 0, then calls 3 s apart as (first second, calls, wire late
     // by, wire early by). The burst at 14:30 straddles the 10 minute window from the call at 5:00,
