@@ -13,7 +13,7 @@ use goalcup::pipeline::{Call, Calls, GapReason, Mono, Recorder, StreamKind};
 use goalcup::proxy::ProxyHandle;
 use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::connect::fingerprint_hex16;
-use goalcup::proxy::hosts::{Hosts, REFUSAL_EXPIRY};
+use goalcup::proxy::hosts::{Hosts, REFUSAL_EXPIRY, SILENT_STRIKES};
 use goalcup::proxy::tls::{Offer, Tls, upstream_offer};
 use proxy_fixtures::{client_trusting, conns, get, proxy, serve_null, through};
 use rustls::ClientConnection;
@@ -485,18 +485,25 @@ async fn a_stalled_client_handshake_ends_and_teaches_nothing() {
         ("GOALCUP_TEST_HANDSHAKE_MS", "200".into()),
     ];
     let (_h, addr, calls, ca) = proxy(HOST_FILE, &env);
-    let mut hello = Vec::new();
     let config = client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]);
-    let mut tls = ClientConnection::new(config, name("api.openai.com")).unwrap();
-    tls.write_tls(&mut hello).unwrap();
-    let mut s = through(addr, TARGET).await;
-    s.write_all(&hello).await.unwrap();
-    let five = std::time::Duration::from_secs(5);
-    let (sid, ..) = common::within_async(five, conns(&calls, 1)).await.remove(0);
-    let alert = Some(json!({"alert": false}));
-    assert_eq!(gaps_of(&calls, sid), [(GapReason::TlsRefused, alert)]);
+    // As many stalls as silent closes would need to teach the pair, each after our flight.
+    for n in 1..=SILENT_STRIKES as usize {
+        let mut hello = Vec::new();
+        let mut tls = ClientConnection::new(config.clone(), name("api.openai.com")).unwrap();
+        tls.write_tls(&mut hello).unwrap();
+        let mut s = through(addr, TARGET).await;
+        s.write_all(&hello).await.unwrap();
+        let mut flight = [0u8; 1];
+        s.read_exact(&mut flight).await.unwrap();
+        let five = std::time::Duration::from_secs(5);
+        let (sid, ..) = common::within_async(five, conns(&calls, n))
+            .await
+            .remove(n - 1);
+        let alert = Some(json!({"alert": false}));
+        assert_eq!(gaps_of(&calls, sid), [(GapReason::TlsRefused, alert)]);
+        drop(s);
+    }
     assert!(ca_refused(&calls).is_empty());
-    drop(s);
 }
 
 /// cr-proxy-3 through `serve`: three clients that read our flight and close without an alert teach

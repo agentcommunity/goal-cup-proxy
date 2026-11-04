@@ -346,9 +346,11 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
     // tunnel, so the harness meets the real server itself. A stalled handshake is untrusted too.
     let connector = b.tls.client(offer).map(tokio_rustls::TlsConnector::from);
     let upstream_tls = match (connector, ServerName::try_from(name.clone())) {
-        (Some(c), Ok(server_name)) => tokio::time::timeout(b.handshake, c.connect(server_name, up))
-            .await
-            .unwrap_or_else(|_| Err(io::ErrorKind::TimedOut.into())),
+        (Some(c), Ok(server_name)) => {
+            let connect = c.connect(server_name, up);
+            (tokio::time::timeout(b.handshake, connect).await)
+                .unwrap_or_else(|_| Err(io::ErrorKind::TimedOut.into()))
+        }
         _ => Err(io::Error::other("no upstream TLS for this name")),
     };
     let fresh = (target, is_listed);
