@@ -49,6 +49,10 @@ pub struct Connector {
     /// reads it.
     pub usage: toml::Table,
 
+    /// Trust written into the isolated home at every start and continue, never by setup: each
+    /// address the harness uses gets the run bundle.
+    pub ca_settings: Option<CaSettings>,
+
     /// Built in or a file. Set by `load`.
     #[serde(skip)]
     pub source: ConnectorSource,
@@ -66,6 +70,28 @@ pub struct Connector {
 pub struct VersionNote {
     pub versions: Vec<String>,
     pub say: String,
+}
+
+/// Where a harness reads trust per model address: entries keyed by an address, each with a CA
+/// key (docs/CONNECTOR-SCHEMA.md). Each address the harness uses gets `value` at `key`: on the
+/// participant's entry that holds it, else on a new `goalcup-trust-*` entry made from `add`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaSettings {
+    /// The config file, under `{home}`.
+    pub file: String,
+    /// The address keys of the participant's entries, dotted, one `*` for the entry.
+    pub entries: Vec<String>,
+    /// Keys holding another address the harness calls.
+    pub uses: Vec<String>,
+    /// The address key of a new entry; its `*` becomes `goalcup-trust-<address>`.
+    pub add: String,
+    /// The CA key, beside the address key.
+    pub key: String,
+    /// The CA value, never an address.
+    pub value: String,
+    /// The addresses given the run bundle when the file names none: `https`, shared-list hosts.
+    pub fallback: Vec<String>,
 }
 
 /// Before launch, a non-empty value at any of `keys` in `file` refuses the start.
@@ -322,6 +348,20 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
             }
             files.push((format!("{list}[{i}].file"), &row.file, 1));
         }
+    }
+
+    if let Some(t) = &c.ca_settings {
+        if t.value.contains("://") {
+            return Err(address("ca_settings.value".into()));
+        }
+        let one_star = |k: &String| k.split('.').filter(|p| *p == "*").count() == 1;
+        if !t.entries.iter().chain([&t.add]).all(one_star) || t.key.contains(['.', '*']) {
+            return Err(invalid(
+                "ca_settings".into(),
+                "entries and add hold one `*` part each; key is one plain part",
+            ));
+        }
+        files.push(("ca_settings.file".into(), &t.file, 1));
     }
 
     // Variables the code sets stay the code's.
