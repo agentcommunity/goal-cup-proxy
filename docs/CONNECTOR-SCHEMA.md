@@ -53,12 +53,12 @@ not written is a log line, not a refusal.
 ## The usage table
 
 `[usage]` says where a harness keeps its threads. The recorder accepts it and never reads it;
-`goalcup-verify usage` does. Every key is optional, and an unknown key is refused. A connector
-without the table is wire only.
+`goalcup-verify usage` does. Every key is optional. A built-in table with an unknown key or a broken rule fails the gate; at
+run time it reads as none. A connector without the table is wire only.
 
 | Key | Type | What it says |
 |---|---|---|
-| `readers` | list of `{row, file, reader}` | The reader of a `native` row's files. `reader` is `codex-rollout`, `claude-transcript`, `claude-meta`, `hermes-db`, `hermes-task`, `hermes-manifest`, `gemini-chat`, `qwen-chat` or `kimi-wire`. The first row that fits wins |
+| `readers` | list of `{row, file, reader}` | The reader of a `native` row's files. `reader` is `codex-rollout`, `claude-transcript`, `claude-meta`, `hermes-db`, `hermes-task`, `hermes-manifest`, `gemini-chat`, `qwen-chat` or `kimi-wire`. The first row that fits wins, before `thread_db` |
 | `thread` | string list | Where a wire request names its thread: a request header name (any case), or a `/`-led JSON pointer into a WebSocket `response.create`. The first key present wins |
 | `parent` | string list | Where a wire request names its parent thread, as `thread` |
 | `join` | `"thread"`, `"reply-id"` or `"time"` | How native calls join the wire: by the request's thread (`thread` must not be empty), by the reply's request id, or by time |
@@ -66,8 +66,8 @@ without the table is wire only.
 | `thread_db` | `{row, file, table, id, parent, xxh3}` | A session database copy read for parent links only: its table, id and parent columns, and whether the wire names a session by the xxh3-64 of its id |
 
 A `file` is a file name with at most one `*`. Rows are not checked against `native`, so a row of an
-earlier build still reads. `usage` is not allowed in a `[[versions]]` row: a release that changes
-its thread headers gets a second `thread` entry instead.
+earlier build still reads. `usage` never varies by harness version: a release that changes its
+thread headers gets a second `thread` entry.
 
 A harness that writes a session format already read, or names its threads in request headers,
 needs data only. A new session format needs a reader in goalcup-verify, a core PR. The verifier

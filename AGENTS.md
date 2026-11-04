@@ -33,7 +33,7 @@ Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), t
 | `crates/goalcup-format` | The record format (GCR1): records, links, part writer, reader, dump. No async, no TLS. Spec: [RECORD-FORMAT](docs/RECORD-FORMAT.md). |
 | `crates/goalcup` | `goalcup`: the eight commands, the watchdog, the recorder process (proxy, session-file reader, masking, writer, uploader) and the connector loader. |
 | `crates/goalcup-verify` | `goalcup-verify`: `check`, `dump`, `secrets`, `usage`. Every judgement about the bytes lives here. |
-| `connectors/` | One `<id>.toml` per harness, `model-hosts.toml` (the one host list) and `tiers.toml` (written by the test pad). Data, compiled into both binaries. |
+| `connectors/` | One `<id>.toml` per harness, `model-hosts.toml` (the one host list) and `tiers.toml` (written by the test pad). Data: the connector files are compiled into both binaries, the two list files into `goalcup`. |
 | `server/worker` | The upload server, a Cloudflare Worker. It stores bytes and interprets nothing. |
 | `scripts/` | The gate, release, `fetch-run.sh` and the test pad (`scripts/pad/`): [scripts/README.md](scripts/README.md). |
 | `skills/` | `goal-cup` (copied into the harness home) and `adding-a-capture-harness` (contributors). |

@@ -42,9 +42,9 @@ Rules that never bend:
    `key = "<your key name>"`, `connector = "connectors/<id>.toml"`, `where = "here"` and
    `prompt = "smoke"` (it keeps `server = "off"`). `connector` loads your new file into the
    shipped binary, so nothing is rebuilt. A `[usage]` table is the exception: the verifier reads
-   it only from a built-in connector, so rebuild the pad's build (`pad-out/build`) from your
-   checkout. Then run `scripts/pad/pad <that file>`. Read the table
-   and `report.txt` under `pad-out/`. Fix the connector until checks C1 to C3 and C6 pass and
+   it only from a built-in connector, so put a release build of your checkout (`goalcup` and
+   `goalcup-verify`) in the pad's build folder (`pad-out/build`). Then run
+   `scripts/pad/pad <that file>`. Read the table and `report.txt` under `pad-out/`. Fix the connector until checks C1 to C3 and C6 pass and
    C4's local half passes. The record is the proof; no log reader is needed.
 4. **Optional: attach a native sample.** If the harness keeps session files and the row says
    `local_log: none`, attach the masked native streams of the run to the pull request:
