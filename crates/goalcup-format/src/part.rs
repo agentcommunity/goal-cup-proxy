@@ -582,6 +582,14 @@ fn idx_path(part: &Path) -> PathBuf {
 /// Renames a part file and its index to `<name>.orphan`, or `.orphan.1` and up when an earlier
 /// crash left that name: no reader lists them, nothing uploads or deletes them.
 fn set_aside(part: &Path) -> io::Result<()> {
+    set_aside_by(part, |a, b| fs::rename(a, b))
+}
+
+/// [`set_aside`] with its rename given, so a test can stop it between the two.
+fn set_aside_by(
+    part: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
     let idx = idx_path(part);
     let to = |p: &Path, n: u32| {
         let mut s = p.as_os_str().to_owned();
@@ -596,11 +604,13 @@ fn set_aside(part: &Path) -> io::Result<()> {
     while to(part, n).try_exists()? || to(&idx, n).try_exists()? {
         n += 1;
     }
-    fs::rename(part, to(part, n))?;
-    match fs::rename(&idx, to(&idx, n)) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
-        _ => Ok(()),
+    // The index first: a crash between the two leaves a part file without one, which the next
+    // recovery sets aside; never an index whose part file is gone.
+    match rename(&idx, &to(&idx, n)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
     }
+    rename(part, &to(part, n))
 }
 
 /// Shortens a file to at most `len` bytes; a missing file stays missing.
@@ -623,4 +633,36 @@ fn keep_lines(p: &Path, n: usize) -> io::Result<()> {
         .nth(n - 1)
         .map_or(text.len(), |(i, _)| i + 1);
     cut(p, end as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A crash between the two renames never leaves an index without its part file: that stale
+    /// index would make the next `start_part`'s `create_new` fail on every boot. A part file
+    /// left without its index is set aside by the next recovery.
+    #[test]
+    fn set_aside_stopped_halfway_leaves_no_index_behind() {
+        let d = std::env::temp_dir().join(format!("goalcup-set-aside-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let part = d.join(part_name(0));
+        fs::write(&part, b"part").unwrap();
+        fs::write(idx_path(&part), b"").unwrap();
+        let mut first = true;
+        let crash = |a: &Path, b: &Path| {
+            if std::mem::take(&mut first) {
+                fs::rename(a, b)
+            } else {
+                Err(io::Error::other("killed"))
+            }
+        };
+        assert!(set_aside_by(&part, crash).is_err());
+        assert!(!idx_path(&part).exists(), "a stale index is left");
+        assert!(part.exists());
+        set_aside(&part).unwrap();
+        assert!(!part.exists());
+        fs::remove_dir_all(&d).unwrap();
+    }
 }

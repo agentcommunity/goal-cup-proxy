@@ -218,7 +218,8 @@ the seal's LINK.
 - **Recovery** after a crash: drop index lines past the part file's length (and, after a reboot,
   past `cursors.json`); set aside a part file with no index line left: it and its index are renamed
   `rec-<n>.gcr.zst.orphan` and `rec-<n>.idx.orphan` (`.orphan.1` and up when an earlier crash left
-  that name), which no reader lists and nothing uploads or deletes; cut the last part file at its
+  that name; the index is renamed first, so a crash between the two leaves a part file without
+  an index, set aside next time), which no reader lists and nothing uploads or deletes; cut the last part file at its
   last line's `c_end`. If that line is `L`, close the frame by hand with the 3 bytes `01 00 00`
   (`ZSTD_END_BLOCK`, an empty last raw block). Then add a recovery frame: the dead boot's COUNT
   (unless an earlier recovery frame holds it), a `recorder_down` GAP, the `seal` event when the dead
