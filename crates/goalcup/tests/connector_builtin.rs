@@ -35,7 +35,11 @@ fn every_connector_file_is_built_in_and_loads_by_its_id() {
     assert_eq!(
         builtin::CONNECTORS.len(),
         ids.len(),
-        "connector/builtin.rs must list every connectors/*.toml file"
+        "the connectors/*.toml glob and the file list disagree"
+    );
+    assert_eq!(
+        builtin::CONNECTORS.iter().map(|c| c.0).collect::<Vec<_>>(),
+        ids
     );
     for id in &ids {
         let c = connector::load(id, None).unwrap_or_else(|e| panic!("{id}: {e}"));
@@ -101,6 +105,11 @@ fn load_text(text: &str) -> Result<connector::Connector, connector::ConnectorErr
 fn a_connector_file_loads_from_disk() {
     let c = load_text("id = \"test-cli\"\nname = \"Test\"\nprogram = \"test\"\n").unwrap();
     assert_eq!(c.source, connector::ConnectorSource::File);
+}
+
+#[test]
+fn a_usage_table_loads() {
+    load_text("id = \"test-cli\"\nname = \"Test\"\nprogram = \"test\"\n[usage]\nthread = [\"x-session-id\"]\njoin = \"thread\"\n").unwrap();
 }
 
 #[test]

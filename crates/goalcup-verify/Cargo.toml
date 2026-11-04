@@ -22,6 +22,7 @@ goalcup-format = { path = "../goalcup-format" }
 zstd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+toml.workspace = true
 sha2.workspace = true
 clap.workspace = true
 regex.workspace = true

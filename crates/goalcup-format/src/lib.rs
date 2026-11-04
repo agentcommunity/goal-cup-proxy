@@ -14,6 +14,7 @@
 //! - [`shared`]: the masker's left guard and the host pattern match, shared by both binaries.
 
 pub mod codec;
+pub mod connectors;
 pub mod dump;
 pub mod link;
 pub mod part;

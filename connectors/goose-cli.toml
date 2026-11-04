@@ -25,3 +25,9 @@ hint_env = [
 secret_files = ["{home}/config/secrets.yaml"]
 native = [{ name = "sessions", root = "{home}/data/sessions", pattern = "sessions.db*", form = "final" }]
 first_screen = "If Goose asks about usage data or a provider, answer now, before you type your prompt."
+
+[usage]
+# Goose 1.57.0 (session_manager.rs): sessions(id, parent_session_id); its agent-session-id header is the id itself.
+thread = ["agent-session-id"]
+join = "thread"
+thread_db = { row = "sessions", file = "sessions.db*", table = "sessions", id = "id", parent = "parent_session_id", xxh3 = false }

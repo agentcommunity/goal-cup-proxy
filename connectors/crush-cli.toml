@@ -19,3 +19,10 @@ secret_files = [
 ]
 native = [{ name = "db", root = "{workspace}/.crush", pattern = "crush.db*", form = "final" }]
 first_screen = "Crush may offer to create an AGENTS.md for this folder first. Answer or dismiss that screen, then type your prompt. Crush asks before it runs a tool, and goalcup does not switch that off for Crush; pick Allow for session at the first prompt if you want it to run on."
+
+[usage]
+# Crush 0.99.0 (internal/db/migrations, session.HashID): sessions(id, parent_session_id); its
+# X-Session-Id header is the xxh3-64 of the id.
+thread = ["x-session-id"]
+join = "thread"
+thread_db = { row = "db", file = "crush.db*", table = "sessions", id = "id", parent = "parent_session_id", xxh3 = true }

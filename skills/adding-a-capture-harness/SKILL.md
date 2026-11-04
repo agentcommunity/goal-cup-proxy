@@ -17,7 +17,7 @@ Rules that never bend:
   runs the harness in an isolated home.
 - Never put a key or token in a file, argv, log, facts sheet, PR or chat, and never open a key
   file. Give the pad a key name; it reads the value from the environment.
-- Never commit `pad-out/`, `target/` or `spikes/*/out/`.
+- Never commit `pad-out/` or `target/`.
 
 ## The five steps
 
@@ -26,9 +26,11 @@ Rules that never bend:
    [docs/harnesses/README.md](../../docs/harnesses/README.md)). Then write `connectors/<id>.toml`:
    one flat file, data only. Every key and the rule that refuses it:
    [docs/CONNECTOR-SCHEMA.md](../../docs/CONNECTOR-SCHEMA.md). Copy a neighbour such as
-   `connectors/hermes-cli.toml`. A maintainer adds the one line in
-   `crates/goalcup/src/connector/builtin.rs` when the PR merges. A version with a known problem
-   gets a `[[version_notes]]` row (`versions`, `say`): said at start, recorded, never a refusal.
+   `connectors/hermes-cli.toml`; the build picks the file up, so no other file names it. Where
+   the harness names its threads in request headers, or writes a session format already read, a
+   `[usage]` table says so ([the usage table](../../docs/CONNECTOR-SCHEMA.md#the-usage-table)).
+   A version with a known problem gets a `[[version_notes]]` row (`versions`, `say`): said at
+   start, recorded, never a refusal.
 2. **Write `scripts/pad/harnesses/<id>.toml`**, from
    [templates/pad-harness.toml](templates/pad-harness.toml): the pinned version and how to
    install exactly that version, how the key reaches the harness (`login`, `file` or `env`, as
@@ -39,8 +41,10 @@ Rules that never bend:
 3. **Run it.** Copy `scripts/pad/runs/micro.toml` and set `harness = "<id>"`,
    `key = "<your key name>"`, `connector = "connectors/<id>.toml"`, `where = "here"` and
    `prompt = "smoke"` (it keeps `server = "off"`). `connector` loads your new file into the
-   shipped binary, so nothing is rebuilt. Then run `scripts/pad/pad <that file>`. Read the table
-   and `report.txt` under `pad-out/`. Fix the connector until checks C1 to C3 and C6 pass and
+   shipped binary, so nothing is rebuilt. A `[usage]` table is the exception: the verifier reads
+   it only from a built-in connector, so put a release build of your checkout (`goalcup` and
+   `goalcup-verify`) in the pad's build folder (`pad-out/build`). Then run
+   `scripts/pad/pad <that file>`. Read the table and `report.txt` under `pad-out/`. Fix the connector until checks C1 to C3 and C6 pass and
    C4's local half passes. The record is the proof; no log reader is needed.
 4. **Optional: attach a native sample.** If the harness keeps session files and the row says
    `local_log: none`, attach the masked native streams of the run to the pull request:

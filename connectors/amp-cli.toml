@@ -10,3 +10,8 @@ secret_files = ["{home}/.local/share/amp/secrets.json", "{home}/.local/share/amp
 native = [{ name = "thread-metadata", root = "{home}/.cache/amp/logs/threads", pattern = "T-*.log" }]
 mask = [{ kind = "amp_ws_token", json_field = "wsToken", value = "string" }]
 first_screen = "If Amp asks you to sign in, do it now, before you type your prompt."
+
+[usage]
+# Threads come from the thread socket (/actors/gateway/threadActor/), with no native leg to join.
+join = "time"
+thread_rpc = true

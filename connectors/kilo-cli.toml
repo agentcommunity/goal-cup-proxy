@@ -23,3 +23,8 @@ secret_files = [
 native = [{ name = "db", root = "{home}/.local/share/kilo", pattern = "kilo*.db*", form = "final" }]
 # opencode.json is merged after kilo.json and kilo.jsonc, so this setting wins over Kilo's own global writes.
 no_prompts = [{ file = "{home}/.config/kilo/opencode.json", key = "permission", value = "allow" }]
+
+[usage]
+thread = ["x-session-id"]
+parent = ["x-parent-session-id"]
+join = "thread"

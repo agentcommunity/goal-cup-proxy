@@ -42,3 +42,12 @@ update_off = [{ file = "{home}/config.yaml", key = "updates.check", value = "fal
 [[version_notes]]
 versions = ["0.22.6"]
 say = "Hermes 0.22.6 cannot reach its model through goalcup (NousResearch/hermes-agent#148241). Use Hermes 0.22.5 until a fixed release."
+
+[usage]
+# `state` is a native row of earlier builds, kept so their records still read.
+readers = [
+  { row = "state", file = "state.db*", reader = "hermes-db" },
+  { row = "delegation", file = "task-*.log", reader = "hermes-task" },
+  { row = "delegation-manifest", file = "manifest.json", reader = "hermes-manifest" },
+]
+join = "time"

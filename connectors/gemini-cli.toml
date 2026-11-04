@@ -17,3 +17,8 @@ hint_env = ["GOOGLE_GEMINI_BASE_URL", "CODE_ASSIST_ENDPOINT"]
 secret_files = ["{home}/.gemini/.env", "{home}/.gemini/oauth_creds.json"]
 native = [{ name = "chats", root = "{home}/.gemini/tmp", pattern = "**/chats/**/*.jsonl" }]
 update_off = [{ file = "{home}/.gemini/settings.json", key = "general.enableAutoUpdate", value = "false" }]
+
+[usage]
+readers = [{ row = "chats", file = "*.jsonl", reader = "gemini-chat" }]
+# A chat call's `tokens` equal the reply's `usageMetadata`; a utility call no chat holds stays wire only.
+join = "time"

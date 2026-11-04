@@ -33,3 +33,11 @@ no_prompts = [
   { file = "{home}/settings.json", key = "skipDangerousModePermissionPrompt", value = "true" },
 ]
 skills_dir = "{home}/skills"
+
+[usage]
+readers = [
+  { row = "transcripts", file = "*.jsonl", reader = "claude-transcript" },
+  { row = "meta", file = "*.meta.json", reader = "claude-meta" },
+]
+# The native requestId equals the reply's request-id header.
+join = "reply-id"
