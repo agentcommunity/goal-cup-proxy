@@ -6,6 +6,7 @@ pub mod continue_run;
 pub mod finish;
 pub mod folder;
 pub mod log;
+pub mod notes;
 pub mod push;
 pub mod recover;
 pub mod seal;

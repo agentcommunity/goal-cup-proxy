@@ -209,7 +209,7 @@ pub fn prepare(
                 "previous_entry_id": last, "connector_id": connector.id,
                 "connector_sha256": connector.sha256, "workspace": project.to_string_lossy(),
                 "session_id": start::session_id(), "harness_version": approve::wire_version(plan.harness_version.as_deref()),
-                "proxy_version": env!("CARGO_PKG_VERSION"),
+                "proxy_version": env!("CARGO_PKG_VERSION"), "os": std::env::consts::OS,
             });
             let client = ServerClient::new(base, Some(Token::new(secret)));
             let path = format!("/v1/runs/{}/continue", found.run);
@@ -237,6 +237,7 @@ pub fn prepare(
                     code: 3,
                 });
             }
+            got.notes.print(out);
             let ns = got.seconds_left.saturating_mul(1_000_000_000);
             let left = Mono(Mono::now().ns().saturating_add(ns));
             (got.entry_id, got.segment, Some(left))
@@ -335,4 +336,6 @@ struct Next {
     entry_id: String,
     segment: u32,
     seconds_left: u64,
+    #[serde(default)]
+    notes: super::notes::Notes,
 }
