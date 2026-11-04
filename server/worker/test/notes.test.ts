@@ -32,8 +32,8 @@ test("validAdvisories refuses ESC, bidi, 201 chars, a sixth key, version 'v1'", 
   assert.equal(validAdvisories([ok, { ...ok, note: "x".repeat(NOTE_MAX_CHARS) }]), null);
   const bad: unknown[] = [
     [{ ...ok, note: "\u001b[31mred" }],
-    [{ ...ok, note: "a‮b" }],
-    [{ ...ok, note: "a⁧b" }],
+    [{ ...ok, note: "a\u202Eb" }],
+    [{ ...ok, note: "a\u2067b" }],
     [{ ...ok, note: "x".repeat(NOTE_MAX_CHARS + 1) }],
     [{ ...ok, note: "" }],
     [{ ...ok, extra: "x" }],

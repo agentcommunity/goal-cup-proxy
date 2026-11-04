@@ -49,7 +49,7 @@ export function validAdvisories(rows: unknown): string | null {
     const { version, note } = row as Advisory;
     if (!/^(\*|\d+(\.\d+)*)$/.test(version)) return `row ${i}: version must be "*" or numbers and dots`;
     if (note.length < 1 || note.length > NOTE_MAX_CHARS) return `row ${i}: note must be 1-${NOTE_MAX_CHARS} characters`;
-    if (/[\p{Cc}‪-‮⁦-⁩]/u.test(note)) return `row ${i}: note has a control or bidi character`;
+    if (/[\p{Cc}\u202A-\u202E\u2066-\u2069]/u.test(note)) return `row ${i}: note has a control or bidi character`;
   }
   return null;
 }
