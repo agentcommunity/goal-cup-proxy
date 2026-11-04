@@ -150,6 +150,12 @@ class InstallTests(unittest.TestCase):
             self.assertFalse((self.home / profile).exists(), profile)
         self.assertEqual([p.name for p in self.home.iterdir()], [".local"])
 
+    def test_fish_gets_fish_add_path(self) -> None:
+        result = self.install(make_release(self.scratch()), SHELL="/opt/homebrew/bin/fish")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("fish_add_path $HOME/.local/bin", result.stdout)
+        self.assertNotIn("export PATH", result.stdout)
+
     def test_wrong_checksum_installs_nothing(self) -> None:
         release = make_release(self.root)
         sums = release / "SHA256SUMS"

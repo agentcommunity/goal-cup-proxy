@@ -229,6 +229,7 @@ path_line() {
     "${HOME:-/nonexistent}"/*) dir="\$HOME${dir#"$HOME"}" ;;
     esac
     case ${SHELL:-} in
+    */fish) say "  fish_add_path $dir" && return 0 ;; # fish 3.2+ keeps it for new shells itself
     */zsh) profile="~/.zshrc" ;;
     # Terminal on macOS starts bash as a login shell, which reads ~/.bash_profile, not ~/.bashrc.
     */bash) [ "$(uname -s)" = Darwin ] && profile="~/.bash_profile" || profile="~/.bashrc" ;;
