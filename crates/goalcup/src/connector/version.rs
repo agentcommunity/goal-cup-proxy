@@ -42,7 +42,8 @@ pub fn parse(line: &str) -> Option<HarnessVersion> {
 fn numbers(s: &str) -> Option<Vec<u64>> {
     s.split('.')
         .map(|n| {
-            (!n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+            n.bytes()
+                .all(|b| b.is_ascii_digit())
                 .then(|| n.parse().ok())
                 .flatten()
         })
@@ -53,7 +54,6 @@ fn numbers(s: &str) -> Option<Vec<u64>> {
 /// prefix such as `1.`, `1.x` or `0.22.6`. An empty spec or an unreadable part never holds.
 pub fn matches(v: &HarnessVersion, spec: &str) -> bool {
     spec.split(',').all(|part| {
-        let part = part.trim();
         let (op, value) = [">=", "<=", ">", "<", "="]
             .iter()
             .find_map(|op| part.strip_prefix(op).map(|rest| (*op, rest)))
@@ -65,18 +65,16 @@ pub fn matches(v: &HarnessVersion, spec: &str) -> bool {
         let Some(want) = numbers(value) else {
             return false;
         };
-        let order = || {
-            (0..v.nums.len().max(want.len()))
-                .map(|i| v.nums.get(i).unwrap_or(&0).cmp(want.get(i).unwrap_or(&0)))
-                .find(|o| o.is_ne())
-                .unwrap_or(Ordering::Equal)
-        };
+        let order = (0..v.nums.len().max(want.len()))
+            .map(|i| v.nums.get(i).unwrap_or(&0).cmp(want.get(i).unwrap_or(&0)))
+            .find(|o| o.is_ne())
+            .unwrap_or(Ordering::Equal);
         match op {
-            ">=" => order().is_ge(),
-            "<=" => order().is_le(),
-            ">" => order().is_gt(),
-            "<" => order().is_lt(),
-            "=" => order().is_eq(),
+            ">=" => order.is_ge(),
+            "<=" => order.is_le(),
+            ">" => order.is_gt(),
+            "<" => order.is_lt(),
+            "=" => order.is_eq(),
             _ => v.nums.starts_with(&want),
         }
     })
@@ -143,6 +141,11 @@ mod tests {
         let v = parse("Hermes Agent v0.22.6 (2026.9.24)").unwrap();
         assert_eq!(v.nums, vec![0, 22, 6]);
         assert_eq!(parse("(8b18b55)"), None);
+        let amp = parse("amp 0.0.1-gabc123").unwrap();
+        assert_eq!(
+            (amp.text.as_str(), amp.nums),
+            ("0.0.1-gabc123", vec![0, 0, 1])
+        );
     }
 
     #[test]
