@@ -1,7 +1,7 @@
 // The Worker's bindings, variables and secrets. See README.md for what each one is.
 
 export interface Env {
-  /** R2 bucket: raw chunks under traces/…; the cron's health marker at cron/health.json (src/notices.ts); (local backend only) state under state/…. */
+  /** R2 bucket: raw chunks under traces/…; the cron's markers at cron/health.json and cron/storage-alert.json (src/notices.ts); (local backend only) state under state/…. */
   TRACES: R2Bucket;
 
   /** Event that new competition runs belong to, e.g. "cup". */
@@ -83,6 +83,12 @@ export interface Env {
   RESEND_API_KEY?: string;
   NOTICE_FROM?: string;
   NOTICE_RECIPIENT_OVERRIDE?: string;
+  /**
+   * The storage alert (src/notices.ts `alertStorage`): when the runs the cron reads hold at least
+   * STORAGE_ALERT_BYTES (0 or unset: off), mail ALERT_EMAIL (a secret) at most once per 6 hours.
+   */
+  ALERT_EMAIL?: string;
+  STORAGE_ALERT_BYTES?: string;
 
   /** Secrets for the Supabase backend. */
   SUPABASE_URL?: string;
