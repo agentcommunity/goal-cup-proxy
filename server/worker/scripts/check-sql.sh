@@ -5,13 +5,16 @@
 #   2. stubs what Supabase and the website provide (the anon, authenticated, service_role and
 #      authenticator roles, auth.users, public.admins, public.email_suppression_list,
 #      public.member_profiles, public.email_tracking, public.email_queue, public.registrations);
-#   3. applies the mirror sql/goal-cup-tracer-upload.sql up to its first pending section, in one
-#      transaction: every website *goal_cup* migration, so each mirrored function has its latest
-#      body (the sign-up gate in open_run included). That is production plus 20261021120400 (terms
-#      version and sign-up switch only), which the base holds though production has not applied it;
+#   3. applies the mirror sql/goal-cup-tracer-upload.sql up to its first pending section (all of it
+#      when sql/pending/ is empty), in one transaction: every website *goal_cup* migration, so each
+#      mirrored function has its latest body (the sign-up gate in open_run included). That is
+#      production plus 20261021120400 (terms version and sign-up switch only), which the base holds
+#      though production has not applied it;
 #   4. checks that the mirror's pending sections are the files in sql/pending/, byte for byte;
 #   5. applies each pending file with the production command (psql -X -1 -v ON_ERROR_STOP=1 -f);
-#   6. smoke-calls the new and the old-signature functions, then stops and deletes everything.
+#   6. smoke-calls the new and the old-signature functions;
+#   7. runs the Worker's scenarios (scripts/sql-scenarios.sql), then 8 sessions at once on one chunk
+#      and on one device pickup; then stops and deletes everything.
 #
 #   sh server/worker/scripts/check-sql.sh
 #
@@ -82,24 +85,27 @@ SQL
 # The pending files, in name order, as the positional parameters (a glob, so a name with a space
 # stays one name).
 set -- "$sql"/pending/*.sql
-if [ ! -e "$1" ]; then
-  echo "check-sql: no file in sql/pending/" >&2
-  exit 2
-fi
-first=$(basename "$1")
-marker="-- ======================== $first ========================"
-awk -v m="$marker" '$0 == m { exit } NR > 1 { print prev } { prev = $0 }' "$mirror" > "$tmp/base.sql"
-for f in "$@"; do
-  printf '\n-- ======================== %s ========================\n' "${f##*/}"
-  cat "$f"
-done > "$tmp/sections.sql"
-if ! cat "$tmp/base.sql" "$tmp/sections.sql" | cmp -s - "$mirror"; then
-  echo "check-sql: the mirror's last sections are not the files in sql/pending/, byte for byte" >&2
-  exit 1
+first=""
+base=$mirror
+if [ -e "$1" ]; then
+  first=$(basename "$1")
+  marker="-- ======================== $first ========================"
+  base=$tmp/base.sql
+  awk -v m="$marker" '$0 == m { exit } NR > 1 { print prev } { prev = $0 }' "$mirror" > "$base"
+  for f in "$@"; do
+    printf '\n-- ======================== %s ========================\n' "${f##*/}"
+    cat "$f"
+  done > "$tmp/sections.sql"
+  if ! cat "$base" "$tmp/sections.sql" | cmp -s - "$mirror"; then
+    echo "check-sql: the mirror's last sections are not the files in sql/pending/, byte for byte" >&2
+    exit 1
+  fi
+else
+  set -- # no pending file: the whole mirror
 fi
 
-pg -1 -f "$tmp/stubs.sql" -f "$tmp/base.sql"
-echo "check-sql: applied the mirror up to $first"
+pg -1 -f "$tmp/stubs.sql" -f "$base"
+echo "check-sql: applied the mirror${first:+ up to $first}"
 for f in "$@"; do
   pg -1 -f "$f"
   echo "check-sql: applied ${f##*/}"
@@ -297,3 +303,33 @@ BEGIN
 END $$;
 SQL
 echo "check-sql: smoke calls passed"
+
+pg -1 -f "$here/scripts/sql-scenarios.sql"
+
+# 8 sessions at once, each holding its row locks a moment; $tmp/$1 gets one answer line per session.
+par() {
+  i=0
+  while [ $i -lt 8 ]; do
+    pg -tA -c BEGIN -c "$2" -c "SELECT pg_sleep(0.1)" -c COMMIT > "$tmp/$1.$i" &
+    i=$((i + 1))
+  done
+  wait
+  grep -hv '^$' "$tmp/$1".* > "$tmp/$1" || true
+}
+want() { # $1 file, $2 line, $3 count
+  n=$(grep -cx "$2" "$tmp/$1" || true)
+  [ "$n" = "$3" ] || { echo "check-sql: parallel $1: $n x '$2', want $3" >&2; exit 1; }
+}
+par commit "SELECT public.goal_cup_upload_commit_chunk('55555555-5555-5555-5555-555555555555', 'r0000000000000071',
+  jsonb_build_object('entry_id', 'e0000000000000071', 'offset', 0, 'length', 10, 'sha256', repeat('0', 64), 'first_seq', 0,
+  'last_seq', 0, 'prev', repeat('0', 64), 'head', repeat('1', 64), 'r2_key', 'k', 'received_at', now(), 'ack', '{}'::jsonb), 10::bigint)"
+want commit committed 1
+want commit conflict 7
+[ "$(pg -tA -c "SELECT goal_cup_tracer.run_json('r0000000000000071') -> 'run' ->> 'chunk_count'")" = 1 ] ||
+  { echo "check-sql: parallel commit: chunk_count is not 1" >&2; exit 1; }
+par poll "SELECT public.goal_cup_upload_poll_device(repeat('7', 64), now()::text) ->> 'result'"
+want poll approved 1
+want poll expired 7
+[ "$(pg -tA -c "SELECT count(*) FROM goal_cup_tracer.run_credentials WHERE member_id = '77777777-7777-7777-7777-777777777777'")" = 1 ] ||
+  { echo "check-sql: parallel poll: not one credential row" >&2; exit 1; }
+echo "check-sql: scenarios passed"

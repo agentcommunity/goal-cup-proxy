@@ -148,7 +148,7 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/context.ts`, `env.ts`, `errors.ts`, `util.ts` | Configuration, bindings, error types, helpers |
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
 | `sql/pending/` | A migration written here first, until it is applied (with a README that says how to land it). Empty since 27 Oct 2026; `git show 32808ff8:server/worker/sql/pending/README.md` is the last such README |
-| `scripts/check-sql.sh` | Applies the mirror and the pending migration to a throwaway local Postgres and smoke-calls the new functions (needs a file in `sql/pending/`: exits 2 while it is empty) |
+| `scripts/check-sql.sh`, `sql-scenarios.sql` | Applies the mirror (and any pending migration) to a throwaway local Postgres, smoke-calls the new functions, runs the Worker's scenarios, and 8 sessions at once on one chunk and one device pickup |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects in the traces and usage buckets ([OPERATING](../../docs/OPERATING.md#test-runs)) |
 | `test/` | `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
 
