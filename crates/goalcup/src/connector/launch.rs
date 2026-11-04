@@ -144,8 +144,8 @@ pub(crate) fn resolve_program(program: &str, vars: &BTreeMap<String, String>) ->
 }
 
 /// The first non-empty line of `program --version` run with exactly `vars`, from stdout, else from
-/// stderr. On a failed exit only a line that names the program (its file name, any case) and holds
-/// a version counts. `None` on a spawn failure, 5 s without an exit, or no such line. Never logged.
+/// stderr. A stderr line counts only if it holds a version; on a failed exit only a line that
+/// also names the program (its file name, any case) counts. `None` on a spawn failure, 5 s without an exit, or no such line. Never logged.
 pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -> Option<String> {
     let mut command = Command::new(program);
     command.arg("--version").env_clear().envs(vars);
@@ -171,15 +171,16 @@ pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -
         let line = text.lines().map(str::trim).find(|line| !line.is_empty());
         line.map(str::to_owned)
     }
-    let line = first_line(child.stdout.take()?).or_else(|| first_line(child.stderr.take()?))?;
-    let named = || {
-        let name = program.file_name().and_then(|n| n.to_str()).unwrap_or("/");
-        let has_name = line
-            .to_ascii_lowercase()
-            .contains(&name.to_ascii_lowercase());
-        has_name && super::version::parse(&line).is_some()
-    };
-    (status.success() || named()).then_some(line)
+    let out = first_line(child.stdout.take()?);
+    // A stderr line or a failed exit counts only with a version in it: never record a stray error.
+    let checked = out.is_none() || !status.success();
+    let line = out.or_else(|| first_line(child.stderr.take()?))?;
+    let name = program.file_name().and_then(|n| n.to_str()).unwrap_or("/");
+    let named = line
+        .to_ascii_lowercase()
+        .contains(&name.to_ascii_lowercase());
+    let held = super::version::parse(&line).is_some() && (status.success() || named);
+    (!checked || held).then_some(line)
 }
 
 /// Writes `no_prompts` or `update_off` rows into the home; a row not written comes back skipped.
