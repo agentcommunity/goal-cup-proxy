@@ -10,8 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PAD_OUT, TIERS = ROOT / "pad-out", ROOT / "connectors" / "tiers.toml"
-ROWS_REL = "docs/plans/2026-10-30-v1.0/pad-rows.jsonl"
-RESULTS = ROOT / "docs" / "plans" / "2026-10-30-v1.0" / "PAD-RESULTS.md"
+ROWS_REL = "scripts/pad/rows/pad-rows.jsonl"
+RESULTS = ROOT / "scripts/pad/rows/PAD-RESULTS.md"
 CASES, CHECKS = ("direct", "gateway", "dodger"), ("C1", "C2", "C3", "C4", "C5", "C6")
 CORE = ("claude-code-cli", "codex-cli", "hermes-cli")
 GUARDED = ["crates/", "server/worker/src/", "connectors/", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
@@ -134,7 +134,7 @@ def release_check(commit):
         return 2
     shown, rows, items, used = git("show", sha + ":" + ROWS_REL), [], [], []
     if shown.returncode:
-        return print("no committed %s at %s" % (ROWS_REL, commit)) or 1
+        return print("no committed %s at %s" % (ROWS_REL, sha)) or 1
     try:
         rows = [r for r in map(json.loads, shown.stdout.splitlines()) if isinstance(r, dict)]
     except ValueError:
