@@ -71,4 +71,4 @@ None needed: auto-approve defaults to `true` for the CLI (`--auto-approve`, [doc
 
 ## Pad result
 
-The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `docs/plans/2026-10-30-v1.0/PAD-RESULTS.md`; this sheet does not copy them.
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `scripts/pad/rows/PAD-RESULTS.md`; this sheet does not copy them.

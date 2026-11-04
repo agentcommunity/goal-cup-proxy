@@ -235,10 +235,9 @@ Every doc, grouped by who reads it.
 | An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [server/worker](server/worker/README.md), [packaging](packaging/README.md) |
 | A contributor | [AGENTS](AGENTS.md), [VISION](VISION.md), [CONTRIBUTING](CONTRIBUTING.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [RECORD-FORMAT](docs/RECORD-FORMAT.md), [DECISIONS](docs/DECISIONS.md), [TODO](TODO.md) |
 | A harness builder | [skill](skills/adding-a-capture-harness/SKILL.md), [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md), [facts sheets](docs/harnesses/README.md), [scripts](scripts/README.md) |
-| Evidence | [the first two-hour run](docs/research/results/2026-10-30-two-hour-run.md) |
+| Evidence | [the first two-hour run](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-30-two-hour-run.md) |
 
-Plans are in `docs/plans/`. Finished work and old narratives are in `docs/archive/` and
-`docs/research/`; do not plan from them.
+Plans, finished work and old narratives are on the [`archive` branch](https://github.com/agentcommunity/goal-cup-proxy/tree/archive); do not plan from them.
 
 ## Support, security and license
 

@@ -1,7 +1,7 @@
 # The record format (GCR1)
 
 This page is for contributors and anyone who wants to read a record by hand. The design and its
-reasons are in [PRD-01](plans/2026-10-30-v1.0/PRD-01-record-format.md) and
+reasons are in [PRD-01](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-01-record-format.md) and
 [D76](DECISIONS.md#d76-the-record-format-is-gcr1-and-the-part-file-is-the-upload-unit). Where this
 page differs from PRD-01 or the code, they are right: `crates/goalcup-format/src` for framing,
 records and links, and the recorder (PRD-02, PRD-05) for counts, gaps, masks and the seal.

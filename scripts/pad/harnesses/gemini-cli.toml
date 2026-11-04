@@ -1,6 +1,6 @@
 # Pad data for Gemini CLI (PRD-12 section 6): test data, never connector data; goalcup never reads it.
 # Vendor pages read 31 Oct 2026: https://github.com/google-gemini/gemini-cli/releases/tag/v0.66.0 and the npm package
-# (docs/plans/2026-10-30-audit/O-harness-access.md H8.1: `npm install -g @google/gemini-cli@0.66.0`),
+# (O-harness-access.md on the archive branch, H8.1: `npm install -g @google/gemini-cli@0.66.0`),
 # https://geminicli.com/docs/get-started/authentication/ (GEMINI_API_KEY, ~/.gemini/.env, "Use Gemini API key"),
 # https://geminicli.com/docs/reference/configuration/ (model.name, security.auth.selectedType, GEMINI_CLI_TRUST_WORKSPACE),
 # https://geminicli.com/docs/cli/trusted-folders/ (the folder trust dialog and GEMINI_CLI_TRUST_WORKSPACE),

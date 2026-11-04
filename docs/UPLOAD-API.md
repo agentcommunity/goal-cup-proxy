@@ -593,7 +593,7 @@ start of the event and for a test run on its own. The owner accepted this (21 Oc
 run's record still uploads normally within the run's length plus the 24-hour close window.
 
 The words of each email are in the database (`goal_cup_tracer.notice_text`, owned by the website);
-`docs/research/NOTIFICATIONS.md` lists every message a participant gets, by email and in the
+`docs/NOTIFICATIONS.md` lists every message a participant gets, by email and in the
 terminal, with its trigger and the one thing to do. `silence` never says the run stopped (the
 server cannot know) and never advises `goalcup start` (a new start replaces the run).
 

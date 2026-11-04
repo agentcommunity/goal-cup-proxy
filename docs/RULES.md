@@ -151,7 +151,7 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
   and `ssh` reads `~/.ssh` whatever `HOME` says. In a test on 26 Oct 2026 the agent used the
   tester's own SSH key unprompted, so it can push to any repository that key reaches. Give the key
   a passphrase or a per-use confirmation, or run in a Docker container
-  ([results](research/results/2026-10-26-mac-retest.md)). The commit the server records at the
+  ([results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-26-mac-retest.md)). The commit the server records at the
   deadline is what is judged.
 - Prepared capabilities may help the agent work. A prebuilt product, substantial product code or an
   existing application may not be smuggled in as "context". The judged result must be a fresh build.

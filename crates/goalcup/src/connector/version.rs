@@ -1,6 +1,6 @@
 //! One harness version parser: `parse` reads a `--version` line, `matches` checks it against a
 //! connector's version spec. The grammar is pinned in
-//! docs/superpowers/plans/2026-11-04-v1-fixes/F-version-core.md; scripts/pad/harness_version.py
+//! F-version-core.md on the archive branch; scripts/pad/harness_version.py
 //! is its twin.
 
 use std::cmp::Ordering;

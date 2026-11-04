@@ -15,8 +15,8 @@ Less code is better. Cut before you add. Ready one week before the start window 
 
 Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), then
 [DECISIONS](docs/DECISIONS.md) from "Owner decisions in force". While the 1.0 build runs, also the
-[ledger](docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md), which wins over every PRD, then the
-[PRD index](docs/plans/2026-10-30-v1.0/PRD-00-index.md).
+[ledger](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md), which wins over every PRD, then the
+[PRD index](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md).
 
 ## Map
 
@@ -29,7 +29,7 @@ Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), t
 | `server/worker` | The upload server, a Cloudflare Worker. It stores bytes and interprets nothing. |
 | `scripts/` | The gate, release, `fetch-run.sh`, the test pad (`scripts/pad/`) and its canary (`scripts/pad/canary`, new harness builds): [scripts/README.md](scripts/README.md). |
 | `skills/` | `goal-cup` (copied into the harness home) and `adding-a-capture-harness` (contributors). |
-| `docs/` | By reader: the [docs map](README.md#docs-map). Plans: `docs/plans/`. History: `docs/archive/`, `docs/research/`. |
+| `docs/` | By reader: the [docs map](README.md#docs-map). Plans and history: the `archive` branch. |
 | `packaging/` | Release packaging and `install.sh`. |
 
 The dependency rule: the recorder never links the verifier, and the verifier never links the

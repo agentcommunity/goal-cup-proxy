@@ -5,7 +5,7 @@ The open list for goalcup 1.0. Decisions live in [DECISIONS](docs/DECISIONS.md).
 
 ## Open owner questions
 
-The twelve questions are in [PRD-00](docs/plans/2026-10-30-v1.0/PRD-00-index.md#owner-questions).
+The twelve questions are in [PRD-00](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md#owner-questions).
 The build uses each default below until the owner answers.
 
 1. Server and data. Default: no website database change; usage stats in R2, for organizers only.
@@ -22,7 +22,7 @@ The build uses each default below until the owner answers.
 11. Rate-limit headers. Default: no exemption from the name rule.
 12. One test-only build feature. Default: keep it, never in a release build.
 
-- O1 ([ledger section 9](docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md#9-open)), staging and the
+- O1 ([ledger section 9](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md#9-open)), staging and the
   website database. Default: shared; no migrations, read-only use.
 - O2, Copilot CLI and a subscription. Default: try the key; "not verified" if it fails.
 
@@ -38,25 +38,25 @@ The build uses each default below until the owner answers.
   first built and tested by the release workflow at the owner's release (PRD-14 G5, after the merge).
   Windows (WSL2) is untested.
 - Unmasked memory (held bytes, the run CA key) can still reach disk through swap on Linux
-  ([PRD-00](docs/plans/2026-10-30-v1.0/PRD-00-index.md#architecture)).
+  ([PRD-00](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md#architecture)).
 - The `zstd` command line tool may stop short on a live entry; read one with `goalcup-verify dump`
   ([RECORD-FORMAT](docs/RECORD-FORMAT.md#compression-chunks-and-crash-recovery)).
 - H-28: usage objects in the record carry plan, credit and billing data. They must be stripped
   before any research export, which comes after the event (D26); nothing does it yet.
 - H-29: a key the model echoes split across stream pieces is written unmasked
-  ([PRD-05](docs/plans/2026-10-30-v1.0/PRD-05-masking.md#risks-and-blind-spots)).
+  ([PRD-05](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-05-masking.md#risks-and-blind-spots)).
 - F-07: a guarded key prefix right after a `-` inside a base64url run masks the rest of the run,
   failing closed past 16 KiB, up to the end of the message
-  ([PRD-05](docs/plans/2026-10-30-v1.0/PRD-05-masking.md#risks-and-blind-spots), question 10).
+  ([PRD-05](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-05-masking.md#risks-and-blind-spots), question 10).
 - PRD-11 hand-off: repoint the harness facts sheets in `docs/harnesses/` from
   [HARNESS-SETUP](docs/HARNESS-SETUP.md) to the [participant's guide](docs/PARTICIPANT-GUIDE.md#3-set-up),
-  then move HARNESS-SETUP to `docs/archive/`. Until then it is a temporary duplicate and still
+  then delete HARNESS-SETUP. Until then it is a temporary duplicate and still
   describes the removed MCP command (D84).
 
 ## Release 1.0 (one freeze, one release-row run, before the event)
 
-Coverage: [TEST-COVERAGE](docs/plans/2026-10-30-v1.0/TEST-COVERAGE.md). Findings:
-[MAC-LEARNINGS](docs/plans/2026-10-30-v1.0/MAC-LEARNINGS.md).
+Coverage: [TEST-COVERAGE](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/TEST-COVERAGE.md). Findings:
+[MAC-LEARNINGS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/MAC-LEARNINGS.md).
 
 Before release:
 - 🔴 Freeze; release rows on the frozen head (Claude Code, Codex, Hermes), then `scripts/pad/table --release-check`. Hermes needs 0.22.5 and 0.22.6 both verified on macOS arm64 (only 0.22.6 has rows today).
@@ -78,9 +78,6 @@ After 1.0:
 
 ## After the merge to main
 
-- The history purge: `docs/archive/`, `docs/research/`, the dated plans (PRD-15), keeping
-  `results/2026-10-30-two-hour-run.md`, `2026-10-vercel-gateway.md`, `VERCEL-COMPAT.md` and
-  `m2-report-format.md` in `docs/research/`.
 - The DECISIONS rewrite to 24 entries with a retired-numbers table (PRD-15). Each "This supersedes"
   line names every old entry its status rows point to (D3, D9, D37, D40, D43, D45, D46, D52, D53
   and D71 are not named today); D75, D76, D80, D81 and D84 go back to short prose.

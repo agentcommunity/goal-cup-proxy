@@ -204,4 +204,4 @@ The seven points, the real-run proof for each and the guard tests that hold it a
 ## 10. Lessons
 
 What earlier runs taught, and why some designs were dropped, is in
-[LESSONS.md](plans/2026-10-30-v1.0/LESSONS.md).
+[LESSONS.md](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/LESSONS.md).

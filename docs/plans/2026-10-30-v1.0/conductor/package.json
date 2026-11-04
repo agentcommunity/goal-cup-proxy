@@ -1,8 +1,0 @@
-{
-  "name": "gc-conductor",
-  "private": true,
-  "type": "module",
-  "dependencies": {
-    "@vercel/sandbox": "3.9.1"
-  }
-}

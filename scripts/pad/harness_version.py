@@ -1,5 +1,5 @@
 """One harness version parser, the twin of crates/goalcup/src/connector/version.rs (grammar pinned in
-docs/superpowers/plans/2026-11-04-v1-fixes/F-version-core.md): `parse` reads a `--version` line, `matches` checks a
+F-version-core.md on the archive branch): `parse` reads a `--version` line, `matches` checks a
 parsed version against a connector's version spec."""
 from __future__ import annotations
 

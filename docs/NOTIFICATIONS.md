@@ -8,7 +8,7 @@ The terminal and `goalcup status` lines are shown for comparison: they are goalc
 the participant's computer, and they should say the same thing as the email. Sources:
 `server/worker/src/notices.ts` (when an email is queued), `goal_cup_tracer.notice_text` in
 `server/worker/sql/` (the words), `crates/goalcup-cli/src/participant.rs` (the terminal words),
-and `docs/research/PARTICIPANT-REVIEW-2026-10-21.md` (A1, A3, A6, A7).
+and `PARTICIPANT-REVIEW-2026-10-21.md` on the `archive` branch (A1, A3, A6, A7).
 
 ## Rules for every message
 

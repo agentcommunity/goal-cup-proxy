@@ -191,7 +191,7 @@ steps in this order: a token for one repository needs the repository to exist fi
    **Your SSH key is not covered.** The agent is you, and `ssh` reads `~/.ssh` whatever `HOME` says;
    in a test the agent used the tester's key within two minutes. Give your key a passphrase, use an
    SSH agent that asks before each use, or run in a container
-   ([results](research/results/2026-10-26-mac-retest.md)).
+   ([results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-26-mac-retest.md)).
 3. **Make the project folder.** A new folder that holds only a `.gitignore` and a `.env.local` (a
    macOS `.DS_Store` is allowed). First the folder and the `.gitignore`:
 
