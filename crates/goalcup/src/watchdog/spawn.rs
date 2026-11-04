@@ -30,12 +30,16 @@ const BACKLOG: i32 = 4_096;
 
 /// Links `exe` to `rec/goalcup` (a copy, mode kept, where a link fails: another volume), so
 /// every boot of the run starts the binary the run started with, whatever an install puts at
-/// `exe` meanwhile. A tmp a crash left goes first: a copy onto a link to `exe` would empty `exe`.
+/// `exe` meanwhile. Never a copy onto a tmp that exists (a crash's, or a second pin's): it may be
+/// a link to `exe`, and the copy would empty `exe`.
 pub fn pin_exe(exe: &Path, rec: &Path) -> io::Result<PathBuf> {
     let (tmp, pinned) = (rec.join("goalcup.tmp"), rec.join(super::EXE_FILE));
     let _ = std::fs::remove_file(&tmp);
     let done = std::fs::hard_link(exe, &tmp)
-        .or_else(|_| std::fs::copy(exe, &tmp).map(drop))
+        .or_else(|e| match e.kind() {
+            io::ErrorKind::AlreadyExists => Err(e),
+            _ => std::fs::copy(exe, &tmp).map(drop),
+        })
         .and_then(|()| std::fs::rename(&tmp, &pinned));
     if done.is_err() {
         let _ = std::fs::remove_file(&tmp);
