@@ -345,3 +345,46 @@ class MaskValues(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SignedInHome(unittest.TestCase):
+    """A subscription sign-in: goalcup_home is the pad's GOALCUP_HOME and is never wiped; key none has no key route; model_host overrides."""
+    PADCFG = {"keys": {}}
+    ROW = {"harness": "codex-cli", "key": "none", "mode": "micro", "where": "here"}
+
+    def test_goalcup_home_needs_where_here(self):
+        for row in (dict(self.ROW, where="sandbox", goalcup_home="/x/home"), dict(self.ROW, goalcup_home="home")):
+            with self.assertRaises(pad.Usage):
+                pad.load_settings(row, self.PADCFG)
+        self.assertEqual(pad.load_settings(dict(self.ROW, goalcup_home="/x/home"), self.PADCFG)["goalcup_home"], "/x/home")
+
+    def test_goalcup_home_is_used_and_never_removed(self):
+        run, home = (self.enterContext(tempfile.TemporaryDirectory()) for _ in range(2))
+        harness_home = os.path.join(home, "harness")
+        os.mkdir(harness_home)
+        for name, doc in (("settings.json", '{"goalcup_home": "%s", "harness": {}}' % home), ("state.json", '{"home": "%s"}' % harness_home)):
+            with open(os.path.join(run, name), "w") as f:
+                f.write(doc)
+        r = padrun.Run(run, "wipe")
+        self.assertEqual(r.env["GOALCUP_HOME"], home)
+        r.wipe_secrets(known=True, home=True)
+        self.assertTrue(os.path.isdir(harness_home))
+
+    def test_key_none_has_no_key_route_and_no_gateway(self):
+        s = pad.load_settings(dict(self.ROW, case="all"), self.PADCFG)
+        self.assertEqual(pad.case_list(s, {"gateway": {}})[0], ["direct", "dodger"])
+        self.assertEqual(pad.Run(s, "direct", self.PADCFG, {}, self.enterContext(tempfile.TemporaryDirectory())).key_names(), [])
+        with self.assertRaises(pad.Usage):
+            pad.load_settings(dict(self.ROW, case="gateway"), self.PADCFG)
+
+    def test_model_host_reaches_the_run_and_its_meta(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        f = os.path.join(d, "s.toml")
+        with open(f, "w") as fh:
+            fh.write('harness = "codex-cli"\nkey = "none"\nmode = "micro"\nwhere = "here"\nmodel_host = "chatgpt.com"\n')
+        seen = []
+        with mock.patch.object(pad, "run_all", lambda s, p, h, o, c: seen.append(h) or [("PASS", "")]):
+            pad.main(["pad", f])
+        self.assertEqual(seen[0]["model_host"], "chatgpt.com")
+        run = pad.Run(pad.load_settings(dict(self.ROW), self.PADCFG), "dodger", self.PADCFG, seen[0], d)
+        self.assertEqual(run.harness["model_host"], "chatgpt.com")  # meta.json: harness.get("model_host")

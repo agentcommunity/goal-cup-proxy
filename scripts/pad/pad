@@ -47,7 +47,7 @@ LIMITS = {"setup": 5, "pre": 3, "start": 3, "wait-calls": 4, "look": 1, "wait-re
           "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
 KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
         "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going", "keep_going_count",
-        "cap_usd", "box_extra_minutes", "box_vcpus"}
+        "cap_usd", "box_extra_minutes", "box_vcpus", "goalcup_home", "model_host", "pre_keys"}
 OVERRIDES = ("cap_usd", "box_extra_minutes", "box_vcpus")  # a row may replace these pad.toml values for itself
 FAULTS, SPAN = pc.FAULTS, pc.SPAN  # section 3.1: kind to the minutes it lasts by default; the kinds that take +<minutes>
 # pad-run's box steps: the faults of section 3.1, the watcher steps, and the mode's own
@@ -337,6 +337,14 @@ def load_settings(raw, pad):
         raise Usage("server is off, local or staging (there is no server address setting)")
     if s["where"] not in ("sandbox", "here"):
         raise Usage("where is sandbox or here")
+    if "goalcup_home" in s and (s["where"] != "here" or not isinstance(s["goalcup_home"], str) or not os.path.isabs(s["goalcup_home"])):
+        raise Usage("goalcup_home is an absolute path, and only with where = \"here\"")  # the signed-in home, kept as is
+    if "model_host" in s and not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(s["model_host"])):
+        raise Usage("model_host is a host name")
+    if "pre_keys" in s and not (isinstance(s["pre_keys"], list) and all(isinstance(k, str) for k in s["pre_keys"])):
+        raise Usage("pre_keys is a list of strings")  # a signed-in home shows fewer first screens
+    if s["key"] == "none" and s["case"] == "gateway":
+        raise Usage("key none runs the direct or dodger case; a gateway row has its own settings file and key")
     if s["server"] == "local" and s["where"] == "sandbox":
         raise Usage("local server in a sandbox comes in a later slice")
     for k in ("key", "gateway_key"):
@@ -625,6 +633,10 @@ class Run:
             for name in names + ["push"] * os.path.lexists(os.path.expanduser("~/.pad-keys/push")):
                 (check_push_token if name == "push" else check_key_file)(os.path.expanduser("~/.pad-keys/" + name))
             os.mkdir(os.path.join(stage, "keys"), 0o700)
+            if s.get("build"):  # the build runs here too, never whatever goalcup is first on PATH
+                if not os.path.isfile(os.path.join(REPO, s["build"], "goalcup")):
+                    raise Refused("no goalcup in build %s" % s["build"])
+                self.build = os.path.join(REPO, s["build"])
             for name in names:
                 with open(os.path.expanduser("~/.pad-keys/" + name), "rb") as a, \
                         os.fdopen(os.open(os.path.join(stage, "keys", name), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "wb") as b:
@@ -706,7 +718,7 @@ class Run:
                 time.sleep(EXEC_RETRY_WAIT)
         else:
             r = call(argv or [sys.executable, os.path.join(HERE, "pad-run"), self.box_dir] + step.split(), timeout=limit,
-                     env=env_without())  # here is the box, and check.py needs no organizer secret either
+                     env=dict(env_without(), **({"PAD_BIN": self.build} if self.build else {})))  # here is the box, and check.py needs no organizer secret either
         got = [ln[len(tag) + 1:] for ln in (r.stdout or "").splitlines() if ln.startswith(tag + " ")]
         d = json.loads(got[-1]) if got else {"result": "error", "saw": said("%s: no %s line" % (step, tag), r)}
         self.meta.update({k: d[k] for k in ("entry", "run", "new_entry") if d.get(k)})
@@ -1051,6 +1063,7 @@ class Run:
 def case_list(s, harness):
     """-> (cases to run, gateway n/a). Section 2: a harness with no documented gateway route gets n/a, never a made-up config."""
     cases = ["direct", "gateway", "dodger"] if s["case"] == "all" else [s["case"]]
+    cases = [c for c in cases if not (s["key"] == "none" and c == "gateway")]  # no key: no gateway row, no n/a line
     na = "gateway" in cases and "gateway" not in harness
     return [c for c in cases if not (na and c == "gateway")], na
 
@@ -1069,6 +1082,7 @@ def main(argv):
         pad = read_toml(os.path.join(HERE, "pad.toml"))
         s = load_settings(read_toml(argv[1]), pad)
         harness = read_toml(os.path.join(HERE, "harnesses", s["harness"] + ".toml"))  # a missing one is an OSError
+        harness = dict(harness, model_host=s.get("model_host", harness.get("model_host")))  # a sign-in calls another host
         if harness.get("key_kind") == "none" or harness.get("not_verified"):  # Amp, Droid: no key to give it; a row with a stated reason: nothing to run (no box, no case)
             print("%s: not verified: %s" % (s["harness"], harness.get("not_verified") or "no key"))
             return 3  # nothing proven: the INCONCLUSIVE exit, never "every row PASS"

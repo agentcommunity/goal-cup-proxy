@@ -26,8 +26,8 @@ model = "claude-haiku-5-5"
 env = { ANTHROPIC_MODEL = "claude-haiku-5-5", ANTHROPIC_DEFAULT_HAIKU_MODEL = "claude-haiku-5-5", ANTHROPIC_DEFAULT_SONNET_MODEL = "claude-haiku-5-5", ANTHROPIC_DEFAULT_OPUS_MODEL = "claude-haiku-5-5" }
 
 [gateway]
-model = "anthropic/claude-haiku-5.5"
-env = { ANTHROPIC_MODEL = "anthropic/claude-haiku-5.5", ANTHROPIC_DEFAULT_HAIKU_MODEL = "anthropic/claude-haiku-5.5", ANTHROPIC_DEFAULT_SONNET_MODEL = "anthropic/claude-haiku-5.5", ANTHROPIC_DEFAULT_OPUS_MODEL = "anthropic/claude-haiku-5.5" }
+model = "deepseek/deepseek-v4.1-flash"
+env = { ANTHROPIC_MODEL = "deepseek/deepseek-v4.1-flash", ANTHROPIC_DEFAULT_HAIKU_MODEL = "deepseek/deepseek-v4.1-flash", ANTHROPIC_DEFAULT_SONNET_MODEL = "deepseek/deepseek-v4.1-flash", ANTHROPIC_DEFAULT_OPUS_MODEL = "deepseek/deepseek-v4.1-flash" }
 files = { "settings.json" = "gateway/claude-code-settings.json" }
 key_route = "env"
 key_env = "ANTHROPIC_AUTH_TOKEN"

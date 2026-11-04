@@ -23,7 +23,7 @@ model = "gpt-6.1-sol"
 files = { "config.toml" = "direct/codex-config.toml" }
 
 [gateway]
-model = "anthropic/claude-haiku-5.5"
+model = "deepseek/deepseek-v4.1-flash"
 files = { "config.toml" = "gateway/codex-config.toml" }
 # Only this line in {home}/.env: Codex's .env overwrites HTTPS_PROXY, NO_PROXY and SSL_CERT_FILE.
 key_route = "file"
