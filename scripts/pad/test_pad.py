@@ -13,7 +13,9 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
+import types
 import unittest
 import urllib.parse
 from unittest import mock
@@ -51,6 +53,48 @@ def key_file(folder, mode=0o600, value=SENTINEL):
         f.write(value)
     os.chmod(path, mode)
     return path
+
+
+def setUpModule():  # tests that walk a staging run get a fake address; nothing here is a real host
+    patcher = mock.patch.dict(os.environ, {"PAD_STAGING_URL": "https://fake-staging.invalid"})
+    patcher.start()
+    unittest.addModuleCleanup(patcher.stop)
+
+
+class StagingUrl(unittest.TestCase):
+    def url(self, v):
+        env = {k: x for k, x in os.environ.items() if k != "PAD_STAGING_URL"}
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.dict(os.environ, {"PAD_STAGING_URL": v} if v else {}):
+            return pad.staging_url()
+
+    def test_unset_refuses(self):
+        with self.assertRaises(pad.Usage):
+            self.url("")
+
+    def test_production_looking_host_refused(self):
+        with self.assertRaises(pad.Usage):
+            self.url("https://goalcup-ingest.example.workers.dev")
+
+    def test_staging_host_accepted(self):
+        self.assertEqual(self.url("https://goalcup-ingest-staging.example.workers.dev"), "https://goalcup-ingest-staging.example.workers.dev")
+
+    def test_unset_names_the_setting(self):
+        with self.assertRaisesRegex(pad.Usage, "PAD_STAGING_URL.*staging_url"):
+            self.url("")
+
+    def test_settings_file_value_wins(self):
+        with mock.patch.dict(os.environ, {"PAD_STAGING_URL": "https://other-staging.example.dev"}):
+            self.assertEqual(pad.staging_url({"staging_url": "https://pad-staging.example.dev/x?y"}), "https://pad-staging.example.dev")
+
+    def test_userinfo_does_not_hide_the_host(self):
+        with self.assertRaises(pad.Usage):
+            self.url("https://staging@goalcup-ingest.example.workers.dev")
+
+    def test_local_and_off_need_no_variable(self):
+        env = {k: x for k, x in os.environ.items() if k != "PAD_STAGING_URL"}
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertEqual(pad.server_url("local"), "http://127.0.0.1:8787")
+            self.assertIsNone(pad.server_url("off"))
 
 
 class KeyFiles(unittest.TestCase):
@@ -111,6 +155,18 @@ class RowOverrides(unittest.TestCase):
         self.assertEqual((p["cap_usd"], p["box_vcpus"]), (3, 2))
         self.assertEqual(cases, ["direct", "gateway", "dodger"])
 
+    def test_staging_without_address_is_usage_before_any_run(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        f = os.path.join(d, "s.toml")
+        with open(f, "w") as fh:
+            fh.write('harness = "codex-cli"\nkey = "openai"\nmode = "full"\n')
+        env = {k: x for k, x in os.environ.items() if k != "PAD_STAGING_URL"}
+        err = io.StringIO()
+        with mock.patch.dict(os.environ, env, clear=True), mock.patch.object(pad, "run_all", side_effect=AssertionError("ran")), \
+                mock.patch("sys.stderr", err):
+            self.assertEqual(pad.main(["pad", f]), 2)
+        self.assertIn("PAD_STAGING_URL", err.getvalue())
+
     def test_mini_template_loads(self):
         s = pad.load_settings(pad.read_toml(os.path.join(HERE, "runs", "mini.toml")), pad.read_toml(os.path.join(HERE, "pad.toml")))
         self.assertEqual((s["mode"], s["minutes"], s["server"], s["steps"], s["cap_usd"]), ("micro", 10, "staging", ["keep-going"], 3))
@@ -130,7 +186,7 @@ class NotVerified(unittest.TestCase):
     def test_table_shows_the_reason_over_old_rows(self):
         tbl = load("padtable", "table")
         row = {"connector": "amp-cli", "case": "direct", "mode": "full", "result": "FAIL"}
-        self.assertEqual(tbl.tier_for("amp-cli", [row]), ("not verified", "", "no key"))
+        self.assertEqual(tbl.tier_for("amp-cli", [row]), ("not verified", "", "", "no key"))
 
 
 class CrushPermissions(unittest.TestCase):
@@ -143,7 +199,7 @@ class CrushPermissions(unittest.TestCase):
         allow = [ln for ln in lines if ln.startswith("permissions allow ")]
         self.assertEqual(len(allow), 1)
         self.assertIn("bash", allow[0].split())
-        self.assertEqual(load("padtable2", "table").tier_for("crush-cli", []), ("not verified", "", "not yet run on the pad"))
+        self.assertEqual(load("padtable2", "table").tier_for("crush-cli", []), ("not verified", "", "", "not yet run on the pad"))
 
 
 class CrushInitQuestion(unittest.TestCase):
@@ -1360,6 +1416,51 @@ class KeyFileMerge(unittest.TestCase):
                          {"deepseek": {"type": "api", "key": "K"}})
 
 
+class RunAll(unittest.TestCase):
+    def tearDown(self):
+        pad.STOP.clear()
+
+    def go(self, s, cases, walk=None):
+        log, gate = [], threading.Barrier(2)
+
+        class Fake:
+            def __init__(self, s, case, *_):
+                self.case = case
+
+            def walk(self):
+                log.append("s " + self.case)
+                if walk:
+                    walk(self, log, gate)
+                else:
+                    time.sleep(0.05)
+                log.append("e " + self.case)
+                return "PASS", self.case
+
+        with mock.patch.object(pad, "Run", Fake):
+            pad.run_all(s, {}, {}, "/o", cases)
+        return log
+
+    def test_signed_in_home_runs_cases_in_order(self):
+        self.assertEqual(self.go({"goalcup_home": "/h"}, ["direct", "dodger"]), ["s direct", "e direct", "s dodger", "e dodger"])
+
+    def test_without_home_runs_together(self):
+        def meet(run, log, gate):  # both walks must be inside at once, or the barrier breaks
+            gate.wait(5)
+
+        log = self.go({}, ["direct", "dodger"], meet)
+        self.assertEqual(sorted(log[:2]), ["s direct", "s dodger"])
+
+    def test_stop_skips_later_case(self):
+        seen = []
+
+        def walk(run, log, gate):
+            seen.append((run.case, pad.STOP.is_set()))
+            pad.STOP.set()
+
+        self.go({"goalcup_home": "/h"}, ["direct", "dodger"], walk)
+        self.assertEqual(seen, [("direct", False), ("dodger", True)])
+
+
 class SnippetFill(unittest.TestCase):
     def test_fill_leaves_env_references_alone(self):
         t = '{"w": "{workspace}", "h": "{home}/x", "k": "${AI_GATEWAY_API_KEY}", "e": "{env:DEEPSEEK_API_KEY}"}'
@@ -1458,6 +1559,44 @@ class CleanupListCoversIndexBox(unittest.TestCase):
         res, saw, _ = self.cleanup("stopped")
         self.assertEqual(res, "ok", saw)
         self.assertIn("list shows no live box", saw)
+
+
+class ExtractRefuses(unittest.TestCase):
+    def test_no_data_filter(self):
+        with mock.patch.object(pad, "tarfile", types.SimpleNamespace(open=tarfile.open)):
+            self.assertRaises(pad.Refused, pad.extract, "x.tar", "dest")
+
+
+class QueueAtomic(unittest.TestCase):
+    def test_replace_is_used(self):
+        with tempfile.TemporaryDirectory() as d:
+            with open(os.path.join(d, "row.json"), "w") as f:
+                json.dump({"facts": {"provider_errors": {"429": 9}, "wire_requests": 10}}, f)
+            path = os.path.join(d, "queue.json")
+            with mock.patch.object(pad.os, "replace", wraps=os.replace) as rep:
+                pad.downgrade_if_429("deepseek", d, d)
+            rep.assert_called_once_with(path + ".tmp", path)
+            with open(path) as f:
+                self.assertEqual(json.load(f), {"downgraded": ["deepseek"]})
+
+
+class StagePad(unittest.TestCase):
+    def test_untracked_and_rows_stay_out(self):
+        with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as dest:
+            for name in ("pad-run", "rows/pad-rows.jsonl", "test_x.py", "notes.txt"):
+                p = os.path.join(repo, "scripts/pad", name)
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                open(p, "w").close()
+            subprocess.run(["git", "-C", repo, "init", "-q"], check=True)
+            subprocess.run(["git", "-C", repo, "add", "scripts/pad/pad-run", "scripts/pad/rows", "scripts/pad/test_x.py"], check=True)
+            self.assertEqual(pad.stage_pad(dest, repo), ["scripts/pad/pad-run"])
+            self.assertTrue(os.path.isfile(os.path.join(dest, "scripts/pad/pad-run")))
+            self.assertFalse(os.path.exists(os.path.join(dest, "scripts/pad/notes.txt")))
+
+    def test_not_a_git_checkout_refuses(self):
+        with tempfile.TemporaryDirectory() as repo, tempfile.TemporaryDirectory() as dest:
+            with mock.patch.dict(os.environ, {"GIT_CEILING_DIRECTORIES": os.path.dirname(repo)}), self.assertRaises(pad.Refused):
+                pad.stage_pad(dest, repo)
 
 
 if __name__ == "__main__":

@@ -61,6 +61,23 @@ class Fetch(unittest.TestCase):
         self.assertIn("rec not kept: wipe did not finish", saw)
         self.assertFalse([a for a, _ in self.sbx() if a[0] == "get" and "rec-kept" in a[2]])
 
+    def test_rec_goalcup_is_not_copied(self):
+        with tempfile.TemporaryDirectory() as out, tempfile.TemporaryDirectory() as box:
+            r = self.run_for(out)
+            r.s["where"], r.box_dir = "here", box
+            rec = os.path.join(box, "gc", "home", "runs", "t", ENTRY, "rec")
+            os.makedirs(rec)
+            for n in ("x", "goalcup", "run-ca.key"):
+                with open(os.path.join(rec, n), "w") as f:
+                    f.write(n)
+            os.makedirs(os.path.join(r.dir, "verify"))
+            for n in ("secrets", "secrets-out"):
+                with open(os.path.join(r.dir, "verify", n + ".json"), "w") as f:
+                    json.dump({"hits": 0, "known_hits": 0}, f)
+            r.keep_rec()
+            self.assertEqual(sorted(os.listdir(os.path.join(r.dir, "rec-kept", ENTRY, "rec"))), ["x"])
+        self.assertIn("--exclude=rec/goalcup", pad.REC_TAR)
+
     def run_for(self, out, **env):
         s = pad.load_settings(dict(BASE, mode="cycle"), PADCFG)
         r = pad.Run(s, "direct", PADCFG, Walk.HARNESS, out)

@@ -199,9 +199,13 @@ def get_object(key, dest):
         raise ReadFailed(f"wrangler could not read {key} from the local store:\n{said[-2000:]}")
     account = os.environ["CLOUDFLARE_ACCOUNT_ID"]
     url = f"https://api.cloudflare.com/client/v4/accounts/{account}/r2/buckets/{bucket}/objects/{key.replace('/', '%2F')}"
+    def cq(s):  # a curl config string: quoted, with \ " and the control characters escaped
+        for a, b in (("\\", "\\\\"), ('"', '\\"'), ("\n", "\\n"), ("\r", "\\r"), ("\t", "\\t")):
+            s = s.replace(a, b)
+        return f'"{s}"'
     config = (
-        f'url = "{url}"\noutput = "{dest}"\n'
-        f'header = "Authorization: Bearer {os.environ["CLOUDFLARE_API_TOKEN"]}"\n'
+        f'url = {cq(url)}\noutput = {cq(dest)}\n'
+        f'header = {cq("Authorization: Bearer " + os.environ["CLOUDFLARE_API_TOKEN"])}\n'
         'silent\nshow-error\nconnect-timeout = 15\nmax-time = 600\nwrite-out = "%{http_code}"\n'
     )
     # R2 answers 429 (and now and then 5xx) when many reads arrive at once: wait and ask again, up to six

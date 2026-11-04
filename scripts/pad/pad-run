@@ -312,7 +312,7 @@ class Run:
 
     def setup(self, _):
         h, s, sec = self.h, self.s, self.sec
-        r = sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]])
+        r = sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]], env=dict(os.environ, PAD_VERSION=s["version"]))
         version = harness_version.parse(next((l for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()), ""))  # stdout's first line, else stderr's, as goalcup; section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
         if not version:
             raise Step("FAIL", "%s not installed" % s["harness_id"])
@@ -331,9 +331,15 @@ class Run:
         if r.returncode or not homes:  # S15 prints the isolated home's path
             raise Step("FAIL", "goalcup setup exit %d, %d home paths printed" % (r.returncode, len(homes)))
         home = self.st["home"] = homes[-1]
-        for name, src in sec.get("files", {}).items():  # provider config, as a participant writes it
-            old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""  # keep goalcup setup's no_prompts rows
-            write(os.path.join(home, name), merge_config(name, old, fill(open(os.path.join(PAD, "harnesses", src)).read(), home, self.project)), 0o644)
+        extra = sec.get("pad_only", [])  # config no participant writes: merged, and the row never counts (table)
+        if extra:
+            import harness_version  # lane F's module, loaded only when a section names a version
+        extra = [e for e in extra if harness_version.matches(version, e["match"])]
+        self.st["pad_only"] = [e["why"] for e in extra]
+        for files in [sec.get("files", {})] + [e["files"] for e in extra]:  # provider config, as a participant writes it
+            for name, src in files.items():
+                old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""  # keep goalcup setup's no_prompts rows
+                write(os.path.join(home, name), merge_config(name, old, fill(open(os.path.join(PAD, "harnesses", src)).read(), home, self.project)), 0o644)
         get = lambda k: sec.get(k, h.get(k))  # noqa: E731
         key, route = (os.path.join(self.keys, s["route_key"]), get("key_route")) if s["route_key"] else (None, None)  # section 6
         self.st.update(key_route=route, key_env=get("key_env"), key_path=key)
@@ -1121,7 +1127,7 @@ class Run:
             r = sh(["git", "-C", self.project, "rev-list", "--count", self.st["head"] + "..HEAD"])
             self.st["commits_since_start"] = int(r.stdout) if r.returncode == 0 else None
         keys = ("harness_version", "run", "entry", "screen_known", "end_screen_requests", "commits_since_start", "plain_planted",
-                "known_box", "mask_values")
+                "known_box", "mask_values", "pad_only")
         write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
         self.copy_log(e)
         if new:  # the entry goalcup continue started has its own log (the recovery lines)

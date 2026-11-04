@@ -25,9 +25,26 @@ sys.path.insert(0, HERE)
 import check as pc  # noqa: E402  S7 models are read through check.py's SEAM only
 REPO = os.path.dirname(os.path.dirname(HERE))
 SBX = os.path.join(HERE, "sbx.mjs")
-# The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker and loopback, fixed
-# here. There is no server address setting, and production is never one.
-SERVERS = {"staging": "https://goalcup-ingest-staging.b-9a5.workers.dev", "local": "http://127.0.0.1:8787"}
+# The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker (its address is PAD_STAGING_URL or the
+# settings file's staging_url, read only when staging is used, checked to be a staging host) and loopback. Never production.
+SERVERS = {"local": "http://127.0.0.1:8787"}
+
+
+def staging_url(s=None):
+    """The staging Worker address: the settings file's staging_url, else the PAD_STAGING_URL variable. Never in the repo."""
+    u = (s or {}).get("staging_url") or os.environ.get("PAD_STAGING_URL", "")
+    if not u:
+        raise Usage("server = \"staging\" needs PAD_STAGING_URL (environment) or staging_url in the settings file")
+    h = urllib.parse.urlsplit(u)
+    if h.scheme != "https" or "staging" not in (h.hostname or "").split(".")[0]:
+        raise Usage("PAD_STAGING_URL must name the staging Worker (https, a host with 'staging' in its first label)")
+    return "https://" + h.netloc.rpartition("@")[2]
+
+
+def server_url(name, s=None):
+    return staging_url(s) if name == "staging" else SERVERS.get(name)
+
+
 NOT = "server copy not fetched: "
 STAGING_BUCKET = "goalcup-traces-staging"  # fetch-run's bucket for staging; no setting, and never production's
 # Organizer secrets that never enter a box (PRD-12 section 7): they are not even in the environment of the
@@ -47,7 +64,7 @@ LIMITS = {"setup": 5, "pre": 3, "start": 3, "wait-calls": 4, "look": 1, "wait-re
           "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
 KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
         "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going", "keep_going_count",
-        "cap_usd", "box_extra_minutes", "box_vcpus", "goalcup_home", "model_host", "pre_keys"}
+        "cap_usd", "box_extra_minutes", "box_vcpus", "goalcup_home", "model_host", "pre_keys", "staging_url"}
 OVERRIDES = ("cap_usd", "box_extra_minutes", "box_vcpus")  # a row may replace these pad.toml values for itself
 FAULTS, SPAN = pc.FAULTS, pc.SPAN  # section 3.1: kind to the minutes it lasts by default; the kinds that take +<minutes>
 # pad-run's box steps: the faults of section 3.1, the watcher steps, and the mode's own
@@ -151,9 +168,25 @@ def call(argv, timeout=None, env=None):
 
 
 def extract(tar, dest):
-    """A box tar unpacked under `dest` with the data filter where Python has it (no path out of `dest`, no device files)."""
+    """A box tar unpacked under `dest` with the data filter (no path out of `dest`, no device files); no filter, no unpack."""
+    if not hasattr(tarfile, "data_filter"):
+        raise Refused("python has no tar data filter (3.11.4 or later needed)")
     with tarfile.open(tar) as t:
-        t.extractall(dest, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
+        t.extractall(dest, filter="data")
+
+
+def stage_pad(dest, repo=REPO):
+    """The tracked pad files (not rows, fixtures, runs or tests) copied under `dest`; their paths relative to `repo`."""
+    got = call(["git", "-C", repo, "ls-files", "-z", "--", "scripts/pad"])
+    if got.returncode:
+        raise Refused("git ls-files failed in %s; the box gets tracked pad files only" % repo)
+    out = got.stdout.split("\0")
+    keep = [p for p in out if p and not p.startswith(("scripts/pad/rows/", "scripts/pad/fixtures/", "scripts/pad/runs/"))
+            and not os.path.basename(p).startswith("test_")]
+    for p in keep:
+        os.makedirs(os.path.dirname(os.path.join(dest, p)), exist_ok=True)
+        shutil.copy2(os.path.join(repo, p), os.path.join(dest, p))
+    return keep
 
 
 def fetch_block(path, tag):
@@ -194,7 +227,7 @@ exit $rc
 """
 REC_TAR = """d=$(ls -d ~/run/gc/home/runs/*/%s | head -n 1)
 [ -d "$d/rec" ] || exit 3
-tar cf ~/rec-kept-%s.tar --exclude=run-ca.key -C "$d" rec
+tar cf ~/rec-kept-%s.tar --exclude=run-ca.key --exclude=rec/goalcup -C "$d" rec
 """
 
 
@@ -258,8 +291,9 @@ def downgrade_if_429(name, folder, out_root):
             fcntl.flock(lock, fcntl.LOCK_EX)
             doc = read_json(path)
             doc["downgraded"] = sorted(set(doc.get("downgraded", [])) | {name})
-            with open(path, "w") as f:
+            with open(path + ".tmp", "w") as f:
                 json.dump(doc, f)
+            os.replace(path + ".tmp", path)
 
 
 def check_key_file(path, repo=REPO):
@@ -333,12 +367,16 @@ def load_settings(raw, pad):
          **MODES[raw["mode"]], **raw}
     if s["case"] not in ("direct", "gateway", "dodger", "all"):
         raise Usage("case is direct, gateway, dodger or all")
-    if s["server"] != "off" and s["server"] not in SERVERS:
-        raise Usage("server is off, local or staging (there is no server address setting)")
+    if s["server"] != "off" and s["server"] not in (*SERVERS, "staging"):
+        raise Usage("server is off, local or staging")
+    if not isinstance(s.get("staging_url", ""), str):
+        raise Usage("staging_url is a string (https://<staging host>)")
     if s["where"] not in ("sandbox", "here"):
         raise Usage("where is sandbox or here")
-    if "goalcup_home" in s and (s["where"] != "here" or not isinstance(s["goalcup_home"], str) or not os.path.isabs(s["goalcup_home"])):
+    if "goalcup_home" in s and (s["where"] != "here" or not isinstance(s["goalcup_home"], str) or not os.path.isabs(os.path.expanduser(s["goalcup_home"]))):
         raise Usage("goalcup_home is an absolute path, and only with where = \"here\"")  # the signed-in home, kept as is
+    if "goalcup_home" in s:
+        s["goalcup_home"] = os.path.expanduser(s["goalcup_home"])
     if "model_host" in s and not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(s["model_host"])):
         raise Usage("model_host is a host name")
     if "pre_keys" in s and not (isinstance(s["pre_keys"], list) and all(isinstance(k, str) for k in s["pre_keys"])):
@@ -474,13 +512,13 @@ def price(models, rates, key):
     return usd, sorted(unpriced)
 
 
-def approve(server, code):
+def approve(server, code, s=None):
     """Section 3, 0:03: PRD-07's test approval, from this process. The key and the member id are read from the
     APPROVAL variables here at the call, and go into the request only."""
     key, member = map(os.environ.get, APPROVAL)
     if not (key and member):
         return "approval key or member id not set"
-    req = urllib.request.Request(SERVERS[server] + "/v1/device/approve", method="POST", data=json.dumps(
+    req = urllib.request.Request(server_url(server, s) + "/v1/device/approve", method="POST", data=json.dumps(
         {"user_code": code, "member_id": member, "approve": True}).encode(),
         headers={"authorization": "Bearer " + key, "content-type": "application/json", "user-agent": UA})
     try:
@@ -659,7 +697,7 @@ class Run:
             self.hosts_sha = hashlib.sha256(data).hexdigest()
         with open(os.path.join(stage, "settings.json"), "w") as f:  # pad-run's input: names, never a value
             json.dump(dict({k: v for k, v in s.items() if k != "plan"}, harness_id=s["harness"], harness=self.harness,
-                           session=self.name, limits=runner_limits(s), server_url=SERVERS.get(s["server"]),
+                           session=self.name, limits=runner_limits(s), server_url=server_url(s["server"], s),
                            case=self.case, version=s.get("version") or self.harness["version"], key_files=names,
                            route_key=names[-1] if names else None, home_vars=con.get("home") or {},
                            native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in con.get("native", [])],
@@ -681,7 +719,9 @@ class Run:
             build = os.path.join(REPO, s.get("build") or self.pad.get("build", "pad-out/build"))
             self.build = build
             bins = [b for b in ("goalcup", "goalcup-verify") if os.path.isfile(os.path.join(build, b))]  # none: "no goalcup build"
-            for verb, args in [("push-dir", (HERE, "~/pad")), ("push-dir", (stage, "~/run"))] + [
+            padstage = os.path.join(self.tmp, "pad-stage")
+            stage_pad(padstage)
+            for verb, args in [("push-dir", (os.path.join(padstage, "scripts", "pad"), "~/pad")), ("push-dir", (stage, "~/run"))] + [
                     ("put", ("~/bin/" + b, "--file", os.path.join(build, b), "--mode", "755")) for b in bins]:
                 r = self.sbx(verb, self.name, *args, limit=left())
                 if r.returncode:
@@ -755,7 +795,7 @@ class Run:
         result, saw, d = self.box(step, limit + 120)  # pad-run works to `limit`
         if step == "start" and result == "ok" and self.s["server"] != "off":  # off: start pasted too
             self.log("approve " + self.name)  # section 3, 0:03; the device code stays out of the log and the table
-            got = approve(self.s["server"], d.get("code"))
+            got = approve(self.s["server"], d.get("code"), self.s)
             if got != "approved":
                 return "INCONCLUSIVE", got
             result, saw, _ = self.box("paste", limit + 120)
@@ -914,7 +954,7 @@ class Run:
                     srcs = glob.glob(os.path.join(self.box_dir or "", "gc", "home", "runs", "*", entry, "rec"))
                     if not srcs:
                         raise Refused("no rec folder")
-                    shutil.copytree(srcs[0], os.path.join(dest, "rec"), ignore=shutil.ignore_patterns("run-ca.key"))
+                    shutil.copytree(srcs[0], os.path.join(dest, "rec"), ignore=lambda d, names: [n for n in names if n == "run-ca.key" or (n == "goalcup" and d == srcs[0])])
                 else:
                     fd, script = tempfile.mkstemp(suffix=".sh", dir=self.tmp)
                     with os.fdopen(fd, "w") as f:
@@ -1070,7 +1110,7 @@ def case_list(s, harness):
 
 def run_all(s, pad, harness, out_root, cases):
     runs = [Run(s, c, pad, harness, out_root) for c in cases]
-    with concurrent.futures.ThreadPoolExecutor() as ex:  # waits stay signal-interruptible on POSIX, so STOP is still set
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1 if s.get("goalcup_home") else None) as ex:  # one signed-in home: one case at a time; waits stay signal-interruptible on POSIX, so STOP is still set
         return list(ex.map(Run.walk, runs))
 
 
@@ -1087,6 +1127,7 @@ def main(argv):
             print("%s: not verified: %s" % (s["harness"], harness.get("not_verified") or "no key"))
             return 3  # nothing proven: the INCONCLUSIVE exit, never "every row PASS"
         apply_kill_minutes(s, harness)
+        server_url(s["server"], s)  # a missing or non-staging address is a usage error before any box
         pad = row_pad(s, pad)
         if not (harness.get("version") and harness.get("version_cmd")):
             raise Usage("scripts/pad/harnesses/%s.toml needs version and version_cmd" % s["harness"])

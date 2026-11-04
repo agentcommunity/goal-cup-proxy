@@ -9,6 +9,8 @@
 # preset (gateway/hermes-config.yaml) has been run since (gateway smoke gw3, 1 Nov 2026): no telemetry screen, ready text seen, paste landed.
 version = "0.22.5"
 version_cmd = "hermes --version"
+# The versions --release-check needs verified on darwin-arm64 (owner, 4 Nov 2026: 0.22.6 too, not only the pin).
+release_versions = ["0.22.5", "0.22.6"]
 tier_note = "subagents shown by their task logs, not tied to individual calls"
 install = "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/v0.22.5/scripts/install.sh | bash -s -- --skip-setup --skip-browser --skip-computer-use --commit bf0203a794a07aac3ff764972ab9087baa4e4f4e"
 key_kind = "deepseek"

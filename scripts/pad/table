@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The pad's table (PRD-12 section 9).
 
-With no row.json under pad-out/, write the seed connectors/tiers.toml; with rows, also pad-rows.jsonl and
+With no row.json under pad-out/, write connectors/tiers.toml from the committed pad-rows.jsonl (the seed if none); with rows, also pad-rows.jsonl and
 PAD-RESULTS.md. `--release-check <commit>` reads only pad-rows.jsonl as committed at <commit>: exit 0 when the release
 rows hold, 1 naming each missing or differing item, 2 on a usage error. Python 3.9: no tomllib.
 """
@@ -10,8 +10,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PAD_OUT, TIERS = ROOT / "pad-out", ROOT / "connectors" / "tiers.toml"
-ROWS_REL = "docs/plans/2026-10-30-v1.0/pad-rows.jsonl"
-RESULTS = ROOT / "docs" / "plans" / "2026-10-30-v1.0" / "PAD-RESULTS.md"
+ROWS_REL = "scripts/pad/rows/pad-rows.jsonl"
+RESULTS = ROOT / "scripts/pad/rows/PAD-RESULTS.md"
 CASES, CHECKS = ("direct", "gateway", "dodger"), ("C1", "C2", "C3", "C4", "C5", "C6")
 CORE = ("claude-code-cli", "codex-cli", "hermes-cli")
 GUARDED = ["crates/", "server/worker/src/", "connectors/", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
@@ -27,9 +27,9 @@ HEADER = "# Written by scripts/pad/table (PRD-12 section 9). Do not edit by hand
 def toml_str(s): return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 def render_tiers(tiers):
-    """tiers: {connector id: (tier, version, reason)} -> tiers.toml text (PRD-10 T1)."""
-    return HEADER + "\n" + "\n".join("[%s]\ntier = %s\nversion = %s\nreason = %s\n" % (
-        cid, toml_str(t), toml_str(v), toml_str(why)) for cid, (t, v, why) in sorted(tiers.items()))
+    """tiers: {connector id: (tier, version, os, reason)} -> tiers.toml text (PRD-10 T1)."""
+    return HEADER + "\n" + "\n".join("[%s]\ntier = %s\nversion = %s\nos = %s\nreason = %s\n" % (
+        cid, toml_str(t), toml_str(v), toml_str(o), toml_str(why)) for cid, (t, v, o, why) in sorted(tiers.items()))
 
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -49,43 +49,73 @@ def tier_row(cids, case):
     return lambda r: (r.get("connector") in cids and r.get("case") == case and r.get("mode") == "full"
                       and not is_fault(r))
 
-def harness_lines(cid):
-    f = ROOT / "scripts" / "pad" / "harnesses" / (cid + ".toml")
-    return [ln.strip() for ln in f.read_text(encoding="utf-8").splitlines()] if f.is_file() else []
+def harness_lines(cid, sha=None):
+    """The harness file's stripped lines: as committed at sha when given, else the working tree. [] if absent."""
+    rel = "scripts/pad/harnesses/%s.toml" % cid
+    if sha:
+        got = subprocess.run(["git", "-C", str(ROOT), "show", "%s:%s" % (sha, rel)], capture_output=True, text=True)
+        text = got.stdout if not got.returncode else ""
+    else:
+        text = (ROOT / rel).read_text(encoding="utf-8") if (ROOT / rel).is_file() else ""
+    return [ln.strip() for ln in text.splitlines()]
 
-def has_gateway(cid, rows):
+def passed(r):  # PASS, or every check PASS but C3 not exercised (Hermes sends no plant back: owner, ask 4, 3 Nov)
+    c3 = [w for w in r.get("why") or [] if str(w).startswith("C3 INCONCLUSIVE")]
+    return r.get("result") == "PASS" or (all(g(r.get("checks"), c) == "PASS" for c in CHECKS if c != "C3")
+                                         and g(r.get("checks"), "C3") == "INCONCLUSIVE" and c3
+                                         and all("not exercised" in w or "exercise not done" in w for w in c3))
+
+def counts(r): return passed(r) and not g(r.get("facts"), "masked_upstream") and not r.get("pad_only")
+
+NO_TIER_ROW = {("claude-code-cli", "gateway")}  # the owner's 3 Nov exemption: no tier or release row for it
+RELEASE_OS = "darwin-arm64"  # the release check's system for release_versions
+
+def release_versions(lines):
+    """`release_versions = ["<v>", ...]` (one line) in a harness file: the versions a release needs verified; [] if
+    absent, None if the key is there but unreadable (the release check then refuses, never falls back)."""
+    said = [ln for ln in lines if ln.startswith("release_versions")]
+    m = re.fullmatch(r'release_versions\s*=\s*\[((?:\s*"[^"]+"\s*,?)*)\]\s*(#.*)?', said[0]) if said else None
+    return (re.findall(r'"([^"]+)"', m.group(1)) or None if m else None) if said else []
+
+def has_gateway(cid, rows, lines=None):
     # gateway is n/a, and does not block, when the harness file has no [gateway] table (no documented route).
-    return "[gateway]" in harness_lines(cid) or latest(rows, tier_row((cid,), "gateway")) is not None
+    return "[gateway]" in (lines or harness_lines)(cid) or latest(rows, tier_row((cid,), "gateway")) is not None
 
-def tier_for(cid, rows):
+def tier_for(cid, rows, lines=None):
+    lines = lines or harness_lines  # looked up at call time
     # "not supported" is the watcher's decision (section 9), kept as `not_supported = "<reason>"` in the pad
     # harness file, never computed from rows.
-    said = [m.group(1) for m in map(re.compile(r'not_supported\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
+    said = [m.group(1) for m in map(re.compile(r'not_supported\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
     if said:
-        return ("not supported", "", said[0])
+        return ("not supported", "", "", said[0])
     # A stated reason (`not_verified = "<reason>"`) or no key (PRD-12 section 6) means the pad runs nothing, so
     # that reason is the cell, whatever old rows exist.
-    why = [m.group(1) for m in map(re.compile(r'not_verified\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
-    if why or 'key_kind = "none"' in harness_lines(cid):
-        return ("not verified", "", why[0] if why else "no key")
+    why = [m.group(1) for m in map(re.compile(r'not_verified\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
+    if why or 'key_kind = "none"' in lines(cid):
+        return ("not verified", "", "", why[0] if why else "no key")
     if not any(r.get("connector") == cid for r in rows):
-        return ("not verified", "", "not yet run on the pad")
-    got = [(c, latest(rows, tier_row((cid,), c))) for c in CASES if c != "gateway" or has_gateway(cid, rows)]
+        return ("not verified", "", "", "not yet run on the pad")
+    got = [(c, latest(rows, tier_row((cid,), c))) for c in CASES
+           if (cid, c) not in NO_TIER_ROW and (c != "gateway" or has_gateway(cid, rows, lines))]
     reasons = []
     for _, r in got:
-        if r and r.get("result") != "PASS":
+        if r and passed(r) and not counts(r):
+            reasons.append((2, "%s masked upstream, not confirmed by the owner" % r.get("case") if g(r.get("facts"), "masked_upstream")
+                            else "%s pad-only config: %s" % (r.get("case"), "; ".join(map(str, r["pad_only"])))))
+        elif r and not counts(r):
             bad = next((c for c in CHECKS if g(r.get("checks"), c) != "PASS"), "result")
             why = [str(w) for w in r.get("why") or [r.get("result")]]
             first = next((w for w in why if w.startswith(bad + " ")), why[0])
             reasons.append((2, "%s %s %s" % (r.get("case"), bad, first.split(": ", 1)[-1])))
     reasons += [(3, "no full %s row" % c) for c, r in got if not r]
-    versions = {str(r.get("harness_version") or "") for _, r in got if r}  # section 9: verified "on that version"
-    reasons += [(4, "case rows on different versions")] * (len(versions) > 1)
-    reasons += [(4, "no harness version on a case row")] * ("" in versions)  # P7: a named version
+    pairs = {(str(r.get("harness_version") or ""), str(r.get("os") or "")) for _, r in got if r}
+    reasons += [(4, "case rows on different versions or systems")] * (len(pairs) > 1)  # section 9: "on that version"
+    reasons += [(4, "no harness version on a case row")] * ("" in {v for v, _ in pairs})  # P7: a named version
+    reasons += [(4, "no system on a case row")] * ("" in {o for _, o in pairs})
     if reasons:
-        return ("not verified", "", min(reasons, key=lambda x: x[0])[1])
-    note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
-    return ("verified", versions.pop(), note[0] if note else "")
+        return ("not verified", "", "", min(reasons, key=lambda x: x[0])[1])
+    note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
+    return ("verified", *pairs.pop(), note[0] if note else "")
 
 def cell(v):
     return "-" if v in (None, "", [], {}) else str(v).replace("|", "/").replace("\n", " ")
@@ -111,7 +141,7 @@ def results_md(rows, tiers):
     summary, body = [], []
     for h, cids in sorted(groups.items()):
         tier = [("verified with a note: " + why if why else t) if t == "verified" else "%s: %s" % (t, why)
-                for t, _, why in (tiers[c] for c in cids)]
+                for t, _, _, why in (tiers[c] for c in cids)]
         last = latest(rows, lambda r: r.get("connector") in cids)
         kill = latest(rows, lambda r: r.get("connector") in cids and kills(r)) if h in CORE else None
         summary.append([h, " / ".join(dict.fromkeys(tier)), " / ".join(dict.fromkeys(tiers[c][1] for c in cids))]
@@ -134,27 +164,29 @@ def release_check(commit):
         return 2
     shown, rows, items, used = git("show", sha + ":" + ROWS_REL), [], [], []
     if shown.returncode:
-        return print("no committed %s at %s" % (ROWS_REL, commit)) or 1
+        return print("no committed %s at %s" % (ROWS_REL, sha)) or 1
     try:
         rows = [r for r in map(json.loads, shown.stdout.splitlines()) if isinstance(r, dict)]
     except ValueError:
         items.append("pad-rows.jsonl unreadable")
 
-    def passed(r):  # PASS, or every check PASS but C3 not exercised (Hermes sends no plant back: owner, ask 4, 3 Nov)
-        c3 = [w for w in r.get("why") or [] if str(w).startswith("C3 INCONCLUSIVE")]
-        return r.get("result") == "PASS" or (all(g(r.get("checks"), c) == "PASS" for c in CHECKS if c != "C3")
-                                             and g(r.get("checks"), "C3") == "INCONCLUSIVE" and c3
-                                             and all("not exercised" in w or "exercise not done" in w for w in c3))
-
-    def need(name, want, ok=lambda r: passed(r) and not g(r.get("facts"), "masked_upstream"),
+    def need(name, want, ok=counts,
              say=lambda r: "result %s%s" % (r.get("result"), ", C3 passed as masked upstream (owner has not confirmed)"
-                                            if g(r.get("facts"), "masked_upstream") else "")):
+                                            if g(r.get("facts"), "masked_upstream") else ", pad-only config" if r.get("pad_only") else "")):
         r = latest(rows, want)
         if r is not None and ok(r):
             return used.append((name, r))
         items.append("%s: %s" % (name, "missing" if r is None else say(r)))
-    for cid, case in [(cid, case) for cid in CORE for case in CASES if (cid, case) != ("claude-code-cli", "gateway")]:  # owner, 3 Nov
-        need("%s %s full" % (cid, case), tier_row((cid,), case))
+    for cid in CORE:  # release_versions in the harness file (owner, 4 Nov): each listed version on RELEASE_OS
+        lines = harness_lines(cid, sha)
+        vs = release_versions(lines)
+        if not lines or vs is None:
+            items.append("scripts/pad/harnesses/%s.toml %s at %s" % (cid, "release_versions unreadable (one line: [\"<v>\", ...])" if lines else "missing", sha))
+        for v in vs or [None]:  # no key: the latest rows, any version
+            for case in [c for c in CASES if (cid, c) not in NO_TIER_ROW]:
+                want = tier_row((cid,), case)
+                need("%s %s full%s" % (cid, case, " %s on %s" % (v, RELEASE_OS) if v else ""), want if v is None else
+                     lambda r, w=want, v=v: w(r) and r.get("harness_version") == v and r.get("os") == RELEASE_OS)
     need("codex-cli direct full kill-recorder", lambda r: r.get("connector") == "codex-cli"
          and r.get("case") == "direct" and r.get("mode") == "full" and kills(r)
          and "connector copy" not in (r.get("variant") or []))  # section 9 means the shipped connector
@@ -171,6 +203,11 @@ def release_check(commit):
         elif d.stdout.strip():
             items.append("%s differs from %s under %s: %s" % (
                 c[:12], commit, ", ".join(d.stdout.split()[:5]), ", ".join(names)))
+    tiers = git("show", sha + ":connectors/tiers.toml")
+    if tiers.returncode:
+        items.append("connectors/tiers.toml missing at %s" % sha)
+    elif tiers.stdout != render_tiers({c: tier_for(c, rows, lambda c: harness_lines(c, sha)) for c in CONNECTOR_IDS}):
+        items.append("connectors/tiers.toml differs from the rows; run scripts/pad/table and commit it")
     print("\n".join(items) if items else "release check: pass at %s" % sha)
     return 1 if items else 0
 
@@ -191,7 +228,10 @@ def main(argv):
             rows.append(r)
         else:
             print("table: skipped unreadable %s" % p.relative_to(ROOT), file=sys.stderr)
-    tiers = {cid: tier_for(cid, rows) for cid in CONNECTOR_IDS}  # no rows: the phase 0 seed
+    committed = not found and (ROOT / ROWS_REL).is_file()  # no pad-out: render the committed rows, rewrite nothing else
+    if committed:
+        rows = [r for r in map(json.loads, (ROOT / ROWS_REL).read_text(encoding="utf-8").splitlines()) if isinstance(r, dict)]
+    tiers = {cid: tier_for(cid, rows) for cid in CONNECTOR_IDS}  # neither: the phase 0 seed
     write(TIERS, render_tiers(tiers))
     if found:
         lines = sorted(((str(r.get("connector") or ""), str(r.get("case") or ""), started(r)),
@@ -199,7 +239,8 @@ def main(argv):
         write(ROOT / ROWS_REL, "".join(line + "\n" for _, line in lines))
         write(RESULTS, results_md(rows, tiers))
     print("table: %d of %d rows read; wrote %s%s" % (len(rows), len(found), TIERS.relative_to(ROOT),
-                                                     ", %s, PAD-RESULTS.md" % ROWS_REL if found else " (seed)"))
+                                                     ", %s, PAD-RESULTS.md" % ROWS_REL if found
+                                                     else " (from %s)" % ROWS_REL if committed else " (seed)"))
     return 0
 
 if __name__ == "__main__":

@@ -3,79 +3,95 @@
 [amp-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no key"
 
 [claude-code-cli]
-tier = "not verified"
-version = ""
-reason = "not yet run on the pad"
+tier = "verified"
+version = "2.1.312"
+os = "darwin-arm64"
+reason = ""
 
 [cline-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "needs sign-in (no provider config file or env route; the auth command puts the key in argv)"
 
 [codex-cli]
-tier = "not verified"
-version = ""
-reason = "not yet run on the pad"
+tier = "verified"
+version = "0.165.0"
+os = "darwin-arm64"
+reason = ""
 
 [copilot-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
 
 [crush-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
 
 [droid-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no key"
 
 [gemini-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
 
 [goose-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
 
 [hermes-cli]
-tier = "not verified"
-version = ""
-reason = "not yet run on the pad"
+tier = "verified"
+version = "0.22.6"
+os = "darwin-arm64"
+reason = "subagents shown by their task logs, not tied to individual calls"
 
 [kilo-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
 
 [kimi-code-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
 
 [openclaw-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
 
 [opencode-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
 
 [opencode2-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
 
 [qwen-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no full direct row"
