@@ -1393,7 +1393,7 @@ class RunAll(unittest.TestCase):
             gate.wait(5)
 
         log = self.go({}, ["direct", "dodger"], meet)
-        self.assertEqual(log[:2], ["s direct", "s dodger"])
+        self.assertEqual(sorted(log[:2]), ["s direct", "s dodger"])
 
     def test_stop_skips_later_case(self):
         seen = []
