@@ -7,7 +7,7 @@ start and an end, never skipped. It uploads the record to the Goal Cup server wh
 Everything runs on your machine, and anyone can check a record later with `goalcup-verify`.
 
 Its first use is the /goal Cup: one prompt, one agent, 168 hours. The organizer is
-[Agent Community](https://agentcommunity.org). Sign-up, the rules summary, the demo video and the
+[Agent Community](https://agentcommunity.org). Sign-up, the rules summary, the videos and the
 questionnaire are on the event site, [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup).
 
 Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
@@ -65,8 +65,8 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
 **The end.** At the deadline goalcup stops the agent, finishes the record and uploads the rest. The
 end screen says what was written and what was lost. What is judged is the last push to your
 repository's default branch that GitHub received before the deadline. Your agent must push its own
-work; goalcup never pushes. Then hand in your demo video and questionnaire on the event site
-within 24 hours ([the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
+work; goalcup never pushes. Then hand in your two videos and the questionnaire on the event site
+([rules](docs/RULES.md#submission), [the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
 
 ## Commands
 

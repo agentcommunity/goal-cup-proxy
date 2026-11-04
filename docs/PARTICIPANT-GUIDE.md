@@ -24,7 +24,7 @@ It has eight commands: `setup`, `start`, `continue`, `recover`, `status`, `seal`
 - `git`, and a GitHub account for the real run.
 - A harness from [the harness list](harnesses/README.md), and the account or API key it uses.
 - An Agent Community account signed up at [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup),
-  where you hand in your demo video and questionnaire after the run.
+  where you hand in your two videos and the questionnaire ([RULES](RULES.md#submission)).
 
 ## 2. Install
 
@@ -403,8 +403,8 @@ Then:
 
 - **Delete the token** on GitHub (Settings, Developer settings, Fine-grained personal access tokens,
   Delete), and delete `.env.local`. Log the harness out, or rotate its key.
-- Hand in your demo video and questionnaire on
-  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup) within 24 hours.
+- Hand in your two videos and the questionnaire on
+  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup) ([RULES](RULES.md#submission)).
 
 ## 9. What is recorded, and what is not
 

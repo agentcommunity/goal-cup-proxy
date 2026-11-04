@@ -17,7 +17,7 @@ out of date; the full rules in [docs/RULES.md](docs/RULES.md) win.
   exact day). Every entry gets its own 168 hours from its start.
 - **A fresh product from scratch.** The repository is public from the start and ends under the MIT
   licence.
-- **Two short videos:** one on the goal and setup by hour 24, one demo after the run.
+- **Two short videos:** a setup video before the run and a demo after it (RULES).
 - **Free, online, bring your own harness and your own key.** Solo, as a team or as a company.
 - **Judged by humans.** The judges read the prompt and setup, not only the product.
 

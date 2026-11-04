@@ -405,10 +405,11 @@ supported recording path and its runs do not count.
   it up to date as it works; judges read the version in the judged push, and it can be your written
   material. Ask for it in your prompt: the goal-cup skill tells Codex and Claude Code, but not every
   harness gets that skill.
-- **Demo video and questionnaire.** You hand in a demo video and answer a questionnaire after the run.
-  They are due 24 hours after your own run's 168 hours end, so a later start gets a later due time.
-  You hand them in on the website, not through Goal Cup Proxy. Nothing is added to your repository for
-  them.
+- **Two videos and a questionnaire.** The setup video (before the run: the goal, the harness, the
+  model and the plan; due by OWNER-Q setup-due) and the demo video (after the run, showing the
+  product; due 24 hours after your own 168 hours end) are both required. You hand in both, and the
+  questionnaire, on the event site (OWNER-Q setup-upload: where the setup video goes), not through
+  Goal Cup Proxy. Nothing is added to your repository for them.
 - A local product may run for demonstration, and ordinary runtime data and caches are allowed. Source,
   history and submitted artifacts must stay unchanged through judging. Online services may not be
   rebuilt or redeployed with changed code.
