@@ -52,8 +52,8 @@ impl Drop for SleepLock {
     }
 }
 
-/// Take the lock if this computer can. The second value is the one launch and status line when it
-/// cannot: a warning, never a `PROBLEM:` line.
+/// Take the lock if this computer can. The second value is the one launch line when it cannot, or
+/// the lid note on a Mac when it can: a warning, never a `PROBLEM:` line.
 pub fn take(vars: &BTreeMap<String, String>) -> (Option<SleepLock>, Option<String>) {
     let held = match missing(vars) {
         Some(why) => Err(why.to_string()),
