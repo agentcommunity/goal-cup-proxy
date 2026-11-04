@@ -15,8 +15,11 @@
 //! so this module needs nothing of seam S3; the watchdog calls `mint(&hosts.ca_subtrees())`.
 //! Certificate dates are wall time, as X.509 needs; no proxy timer reads them.
 //!
+//! The files carry the egress roots ([`crate::net::Egress`]): `run-ca.pem` adds the participant's
+//! own CA files, `bundle.pem` the OS roots and those files.
+//!
 //! Copied from `crates/goalcup-cli/src/proxy/tls.rs:100-215` (CA and leaves) and
-//! `crates/goalcup-cli/src/ca_bundle.rs` (OS roots and the bundle).
+//! `crates/goalcup-cli/src/ca_bundle.rs` (the bundle).
 
 use crate::watchdog::CaPem;
 use base64::Engine as _;
@@ -41,24 +44,11 @@ pub const CA_VALIDITY: Duration = Duration::from_secs(8 * 24 * 60 * 60);
 /// How far before minting the validity window starts, for a slightly slow client clock (`:59`).
 pub const CA_CLOCK_SKEW: Duration = Duration::from_secs(60 * 60);
 
-/// The CA certificate alone, in the entry folder.
+/// The run CA, then the participant's own CA files, in the entry folder.
 pub const RUN_CA_FILE: &str = "run-ca.pem";
 
-/// The OS roots plus the run CA, run CA first, in the entry folder.
+/// The run CA, then the egress roots (the OS store's and the participant's), in the entry folder.
 pub const BUNDLE_FILE: &str = "bundle.pem";
-
-/// The Linux distribution bundles, in the order tried (Debian and Ubuntu, Fedora and RHEL,
-/// openSUSE, RHEL 7+, Alpine).
-const LINUX_BUNDLES: &[&str] = &[
-    "/etc/ssl/certs/ca-certificates.crt",
-    "/etc/pki/tls/certs/ca-bundle.crt",
-    "/etc/ssl/ca-bundle.pem",
-    "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
-    "/etc/ssl/cert.pem",
-];
-
-/// The macOS keychain that holds the system's trusted roots.
-const MACOS_ROOTS_KEYCHAIN: &str = "/System/Library/Keychains/SystemRootCertificates.keychain";
 
 /// Why the CA could not be minted, imported or used. Fixed text only: never a name, path or key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -183,15 +173,31 @@ impl RunCa {
         &self.inner.cert_der
     }
 
-    /// Writes `run-ca.pem` (the certificate alone) and `bundle.pem` (the run CA, then the OS
-    /// roots, certificates only) into `entry_dir`, each a new 0600 file. An existing file or
-    /// link at either path is refused, never followed. The bundle is built before either file is
-    /// written, so a failed OS roots read leaves no file behind. The key is not written here.
+    /// Writes `run-ca.pem` (the run CA, then the certificates of the participant's own CA files
+    /// that the OS store lacks) and `bundle.pem` (the run CA, then the egress roots, certificates
+    /// only) into `entry_dir`, each a new 0600 file. An existing file or link at either path is
+    /// refused, never followed. Both are built before either file is written, so an OS store with
+    /// no root leaves no file behind: the bundle would trust the run CA and the participant's
+    /// files alone and break every connection that does not go through the proxy. The key is not
+    /// written here.
+    ///
+    /// `run-ca.pem` leaves out what the OS store holds: an `SSL_CERT_FILE` naming the OS bundle
+    /// would otherwise copy it whole, and `recover` sends this file on one control line.
     pub fn write_files(&self, entry_dir: &Path) -> io::Result<()> {
-        let bundle = system_roots_source()
-            .and_then(|source| bundle_pem(&source, &self.inner.cert_der))
-            .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
-        write_new(&entry_dir.join(RUN_CA_FILE), self.inner.cert_pem.as_bytes())?;
+        let os = crate::net::os_store();
+        if os.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                CaError::NoSystemRoots,
+            ));
+        }
+        let egress = crate::net::Egress::load();
+        let bundle = bundle_pem(&egress.bundle(), &self.inner.cert_der);
+        let mut run_ca = self.inner.cert_pem.clone();
+        for der in egress.own().iter().filter(|d| !os.contains(d)) {
+            run_ca.push_str(&pem_block(der));
+        }
+        write_new(&entry_dir.join(RUN_CA_FILE), run_ca.as_bytes())?;
         write_new(&entry_dir.join(BUNDLE_FILE), bundle.as_bytes())
     }
 
@@ -347,40 +353,6 @@ fn write_new(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.sync_all()
 }
 
-/// The OS trust store's roots as PEM text: the macOS System Roots keychain through
-/// `/usr/bin/security`, else the first Linux bundle in [`LINUX_BUNDLES`] holding a certificate.
-fn system_roots_source() -> Result<Vec<u8>, CaError> {
-    if cfg!(target_os = "macos") {
-        let out = std::process::Command::new("/usr/bin/security")
-            .args(["find-certificate", "-a", "-p", MACOS_ROOTS_KEYCHAIN])
-            .env_clear()
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .map_err(|_| CaError::NoSystemRoots)?;
-        return if out.status.success() && !certificates(&out.stdout).is_empty() {
-            Ok(out.stdout)
-        } else {
-            Err(CaError::NoSystemRoots)
-        };
-    }
-    LINUX_BUNDLES
-        .iter()
-        .filter_map(|path| std::fs::read(path).ok())
-        .find(|text| !certificates(text).is_empty())
-        .ok_or(CaError::NoSystemRoots)
-}
-
-/// The OS roots, the same read as the bundle; empty when the store cannot be read.
-pub(crate) fn os_roots() -> Vec<CertificateDer<'static>> {
-    system_roots_source()
-        .map(|source| certificates(&source))
-        .unwrap_or_default()
-        .into_iter()
-        .map(CertificateDer::from)
-        .collect()
-}
-
 /// The DER of every `CERTIFICATE` PEM block in `pem` that parses as a trust anchor, in order.
 /// Every other block (a private key, a `TRUSTED CERTIFICATE`, a CRL) and every line outside a
 /// block is dropped.
@@ -423,17 +395,11 @@ fn pem_block(der: &[u8]) -> String {
     out
 }
 
-/// The bundle text: the run CA, then every root certificate in `roots_source`. An error when the
-/// source holds no root, since the file would then trust the run CA alone and break every
-/// connection that does not go through the proxy.
-fn bundle_pem(roots_source: &[u8], ca_der: &[u8]) -> Result<String, CaError> {
-    let roots = certificates(roots_source);
-    if roots.is_empty() {
-        return Err(CaError::NoSystemRoots);
-    }
+/// The bundle text: the run CA, then every root in `roots` (DER).
+fn bundle_pem(roots: &[Vec<u8>], ca_der: &[u8]) -> String {
     let mut out = pem_block(ca_der);
-    for der in &roots {
+    for der in roots {
         out.push_str(&pem_block(der));
     }
-    Ok(out)
+    out
 }
