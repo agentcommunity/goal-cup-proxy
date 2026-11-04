@@ -53,27 +53,41 @@ def harness_lines(cid):
     f = ROOT / "scripts" / "pad" / "harnesses" / (cid + ".toml")
     return [ln.strip() for ln in f.read_text(encoding="utf-8").splitlines()] if f.is_file() else []
 
-def has_gateway(cid, rows):
-    # gateway is n/a, and does not block, when the harness file has no [gateway] table (no documented route).
-    return "[gateway]" in harness_lines(cid) or latest(rows, tier_row((cid,), "gateway")) is not None
+def passed(r):  # PASS, or every check PASS but C3 not exercised (Hermes sends no plant back: owner, ask 4, 3 Nov)
+    c3 = [w for w in r.get("why") or [] if str(w).startswith("C3 INCONCLUSIVE")]
+    return r.get("result") == "PASS" or (all(g(r.get("checks"), c) == "PASS" for c in CHECKS if c != "C3")
+                                         and g(r.get("checks"), "C3") == "INCONCLUSIVE" and c3
+                                         and all("not exercised" in w or "exercise not done" in w for w in c3))
 
-def tier_for(cid, rows):
+def counts(r): return passed(r) and not g(r.get("facts"), "masked_upstream") and not r.get("pad_only")
+
+NO_TIER_ROW = {("claude-code-cli", "gateway")}  # the owner's 3 Nov exemption: no tier or release row for it
+
+def has_gateway(cid, rows, lines=None):
+    # gateway is n/a, and does not block, when the harness file has no [gateway] table (no documented route).
+    return "[gateway]" in (lines or harness_lines)(cid) or latest(rows, tier_row((cid,), "gateway")) is not None
+
+def tier_for(cid, rows, lines=None):
+    lines = lines or harness_lines  # looked up at call time
     # "not supported" is the watcher's decision (section 9), kept as `not_supported = "<reason>"` in the pad
     # harness file, never computed from rows.
-    said = [m.group(1) for m in map(re.compile(r'not_supported\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
+    said = [m.group(1) for m in map(re.compile(r'not_supported\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
     if said:
         return ("not supported", "", said[0])
     # A stated reason (`not_verified = "<reason>"`) or no key (PRD-12 section 6) means the pad runs nothing, so
     # that reason is the cell, whatever old rows exist.
-    why = [m.group(1) for m in map(re.compile(r'not_verified\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
-    if why or 'key_kind = "none"' in harness_lines(cid):
+    why = [m.group(1) for m in map(re.compile(r'not_verified\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
+    if why or 'key_kind = "none"' in lines(cid):
         return ("not verified", "", why[0] if why else "no key")
     if not any(r.get("connector") == cid for r in rows):
         return ("not verified", "", "not yet run on the pad")
-    got = [(c, latest(rows, tier_row((cid,), c))) for c in CASES if c != "gateway" or has_gateway(cid, rows)]
+    got = [(c, latest(rows, tier_row((cid,), c))) for c in CASES
+           if (cid, c) not in NO_TIER_ROW and (c != "gateway" or has_gateway(cid, rows, lines))]
     reasons = []
     for _, r in got:
-        if r and r.get("result") != "PASS":
+        if r and passed(r) and not counts(r):
+            reasons.append((2, "%s masked upstream, not confirmed by the owner" % r.get("case")))
+        elif r and not counts(r):
             bad = next((c for c in CHECKS if g(r.get("checks"), c) != "PASS"), "result")
             why = [str(w) for w in r.get("why") or [r.get("result")]]
             first = next((w for w in why if w.startswith(bad + " ")), why[0])
@@ -84,7 +98,7 @@ def tier_for(cid, rows):
     reasons += [(4, "no harness version on a case row")] * ("" in versions)  # P7: a named version
     if reasons:
         return ("not verified", "", min(reasons, key=lambda x: x[0])[1])
-    note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, harness_lines(cid)) if m]
+    note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
     return ("verified", versions.pop(), note[0] if note else "")
 
 def cell(v):
@@ -140,20 +154,14 @@ def release_check(commit):
     except ValueError:
         items.append("pad-rows.jsonl unreadable")
 
-    def passed(r):  # PASS, or every check PASS but C3 not exercised (Hermes sends no plant back: owner, ask 4, 3 Nov)
-        c3 = [w for w in r.get("why") or [] if str(w).startswith("C3 INCONCLUSIVE")]
-        return r.get("result") == "PASS" or (all(g(r.get("checks"), c) == "PASS" for c in CHECKS if c != "C3")
-                                             and g(r.get("checks"), "C3") == "INCONCLUSIVE" and c3
-                                             and all("not exercised" in w or "exercise not done" in w for w in c3))
-
-    def need(name, want, ok=lambda r: passed(r) and not g(r.get("facts"), "masked_upstream"),
+    def need(name, want, ok=counts,
              say=lambda r: "result %s%s" % (r.get("result"), ", C3 passed as masked upstream (owner has not confirmed)"
                                             if g(r.get("facts"), "masked_upstream") else "")):
         r = latest(rows, want)
         if r is not None and ok(r):
             return used.append((name, r))
         items.append("%s: %s" % (name, "missing" if r is None else say(r)))
-    for cid, case in [(cid, case) for cid in CORE for case in CASES if (cid, case) != ("claude-code-cli", "gateway")]:  # owner, 3 Nov
+    for cid, case in [(cid, case) for cid in CORE for case in CASES if (cid, case) not in NO_TIER_ROW]:
         need("%s %s full" % (cid, case), tier_row((cid,), case))
     need("codex-cli direct full kill-recorder", lambda r: r.get("connector") == "codex-cli"
          and r.get("case") == "direct" and r.get("mode") == "full" and kills(r)

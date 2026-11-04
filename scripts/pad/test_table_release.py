@@ -104,5 +104,44 @@ class PathAndPass(Repo):
         self.assertEqual(out.getvalue().strip(), "no committed scripts/pad/rows/pad-rows.jsonl at %s" % sha)
 
 
+def hermes_rows(**over):
+    return [dict(r, **over) for r in green_rows() if r["connector"] == "hermes-cli"]
+
+
+class Agreement(Repo):
+    """tier_for and release_check use one rule for what counts."""
+
+    def tier(self, cid, rows):
+        with mock.patch.object(table, "harness_lines", return_value=["[gateway]"]):
+            return table.tier_for(cid, rows)
+
+    def test_claude_gateway_fail_does_not_block_claude(self):
+        rows = green_rows() + [dict(green_rows()[0], case="gateway", result="FAIL", started="2026-11-03T21:00:00Z")]
+        sha = self.repo(rows)
+        self.assertEqual(self.tier("claude-code-cli", rows)[0], "verified")
+        code, out = self.check(sha)
+        self.assertEqual(code, 0, out)
+
+    def test_hermes_c3_not_exercised_counts(self):
+        rows = [dict(r, result="INCONCLUSIVE", checks=dict(r["checks"], C3="INCONCLUSIVE"),
+                     why=["C3 INCONCLUSIVE: exercise not done"]) for r in hermes_rows()]
+        self.assertEqual(self.tier("hermes-cli", rows)[0], "verified")
+
+    def test_masked_upstream_blocks_both(self):
+        rows = green_rows()
+        i = next(i for i, r in enumerate(rows) if r["connector"] == "hermes-cli")
+        rows[i] = dict(rows[i], facts={"masked_upstream": True})
+        sha = self.repo(rows)
+        tier = self.tier("hermes-cli", rows)
+        self.assertEqual(tier[0], "not verified")
+        self.assertIn("masked upstream", tier[2])
+        self.assertIn("C3 passed as masked upstream", self.check(sha)[1])
+
+    def test_exec_verdict_missing(self):
+        rows = green_rows()
+        rows[-1] = {k: v for k, v in rows[-1].items() if k != "exec"}
+        self.assertIn("exec h2-parallel.sh verdict PASS: missing", self.check(self.repo(rows))[1])
+
+
 if __name__ == "__main__":
     unittest.main()
