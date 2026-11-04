@@ -101,6 +101,11 @@ pub struct Honesty {
     /// The start event's `hosts_sha256` is not this build's (an absent, empty or all-zero one,
     /// as test builds write, is not judged).
     other_list: bool,
+    /// The last start event's `hosts_sha256` is this build's. Only then does this build's host
+    /// list override the record's labels: a record made with another list (or none named) keeps
+    /// its own word. The writer's first record in each boot is its start event, so it is seen
+    /// before that boot's conns.
+    same_list: bool,
     n: Counts,
     checks: Checks,
 }
@@ -219,6 +224,7 @@ impl Honesty {
             let sha = (e.get("hosts_sha256").and_then(Value::as_str))
                 .filter(|h| h.bytes().any(|b| b != b'0'));
             self.other_list |= sha.is_some_and(|h| h != hosts::sha256());
+            self.same_list = sha == Some(hosts::sha256());
             let Some(Value::Object(by_source)) = e.get("hosts") else {
                 return;
             };
@@ -264,10 +270,10 @@ impl Honesty {
             let (on_kind, on_src) = on.unwrap_or_default();
             let host_kind = s("kind").unwrap_or(on_kind);
             let src = s("listed").unwrap_or(on_src);
-            // Listed by the conn's word, the start event's or this build's host file (a
-            // mislabelled host must not hide a blind relay); by the participant's or config's
-            // word it is the model host.
-            let built = hosts::kind(host).is_some_and(|k| k != "vendor");
+            // Listed by the conn's word, the start event's or this build's host file when the
+            // record was made with it (a mislabelled host must not hide a blind relay); by the
+            // participant's or config's word it is the model host.
+            let built = self.same_list && hosts::kind(host).is_some_and(|k| k != "vendor");
             let listed = s("listed").is_some() || on.is_some() || built;
             let model = built
                 || listed

@@ -52,14 +52,18 @@ fn only_the_unflagged_host_is_named() {
 }
 
 /// One tunnel the record labels unlisted, with this reason and END sizes, in a sealed entry.
-fn tunnel(name: &str, host: &str, reason: &str, (up, down): (u64, u64)) -> Value {
+fn tunnel_dir(name: &str, host: &str, reason: &str, (up, down): (u64, u64)) -> std::path::PathBuf {
     let mut e = Entry::new(name);
     let meta = json!({"host": host, "port": 443, "mode": "tunnel", "reason": reason,
         "listed": null, "kind": null, "alpn": null, "tls": null, "fingerprint": null});
     let s = e.open(StreamKind::Conn, 0, 0, meta);
     e.end(s, EndReason::Complete, 0, json!({"up": up, "down": down}));
     e.count();
-    check(&e.seal(), &[]).1
+    e.seal()
+}
+
+fn tunnel(name: &str, host: &str, reason: &str, sizes: (u64, u64)) -> Value {
+    check(&tunnel_dir(name, host, reason, sizes), &[]).1
 }
 
 #[test]
@@ -139,4 +143,23 @@ fn a_1_0_0_fixture_record_passes_the_listed_check() {
     );
     let v = check(std::path::Path::new(dir), &[]).1;
     assert_eq!(result(&v, "listed_hosts_decrypted"), "pass");
+}
+
+/// A record made with another host list (an older build, or `--hosts`) that tunnels a host only
+/// this verifier's list holds is trusted on its own label: the differing list is a warn, never a
+/// silent-loss fail. An absent hash is the same as a differing one, and is not judged.
+#[test]
+fn a_record_with_another_host_list_keeps_its_own_label() {
+    for (name, to) in [("tun-other", Some("a".repeat(64))), ("tun-nohash", None)] {
+        let dir = tunnel_dir(name, "api.openai.com", "tls_refused", (10, 10));
+        let dir = mutate(&dir, None, |recs| {
+            edit_event(recs, "start", 0, |s| match &to {
+                Some(h) => s["hosts_sha256"] = json!(h),
+                None => drop(s.as_object_mut().unwrap().remove("hosts_sha256")),
+            })
+        });
+        let want = if to.is_some() { "warn" } else { "pass" };
+        let v = check(&dir, &[]).1;
+        assert_eq!(result(&v, "listed_hosts_decrypted"), want, "{name}");
+    }
 }

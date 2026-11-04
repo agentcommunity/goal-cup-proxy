@@ -409,7 +409,9 @@ two and `torn_tail` under Invariants), the three honesty checks and the three le
 
 **Honesty checks** (`honesty.rs`; a listed host is on the `start` host list, has `listed` in its
 meta, or is a `provider` or `gateway` host in the verifier's own `connectors/model-hosts.toml`,
-whatever the record calls it; a `vendor` host there is not listed by the file):
+whatever the record calls it, when the `start` event's `hosts_sha256` equals that file's (a
+record made with another list, or naming none, keeps its own labels); a `vendor` host there is
+not listed by the file):
 
 - `listed_hosts_decrypted`: a listed host should be read, not tunnelled. A tunnel to one is `named`
   when a GAP of the tunnel's own reason is on that connection, `fail` when none is; a `sign_in`
