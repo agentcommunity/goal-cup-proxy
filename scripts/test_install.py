@@ -299,13 +299,15 @@ class InstallTests(unittest.TestCase):
                 self.assert_upgraded(result, prefix)
                 self.assertIn(UNSURE, result.stderr)
 
-    def test_a_hanging_status_is_stopped_after_10_seconds_and_gives_the_unsure_line(self) -> None:
-        prefix, _, _ = self.guarded(hang=True)
+    def test_a_hanging_status_is_stopped_after_10_seconds_and_refuses(self) -> None:
+        prefix, _, before = self.guarded(hang=True)
         started = time.monotonic()
         result = self.install(self.newer(), "--prefix", str(prefix))
         took = time.monotonic() - started
-        self.assert_upgraded(result, prefix)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(UNSURE, result.stderr)
+        self.assertIn("--force", result.stderr)
+        self.assertEqual(self.tree(prefix), before)
         self.assertGreaterEqual(took, 9.5)
         self.assertLess(took, 25)
 

@@ -143,11 +143,13 @@ guard_recording_run() {
         printf '%s\n' "$code" >"$status_rc.tmp" && mv "$status_rc.tmp" "$status_rc"
     ) >/dev/null 2>&1 &
     started=$(date +%s)
+    hung=0
     while [ ! -f "$status_rc" ]; do
         if [ $(($(date +%s) - started)) -gt 10 ]; then
             if [ -f "$status_pid" ]; then
                 kill -9 "$(cat "$status_pid")" 2>/dev/null || true
             fi
+            hung=1
             break
         fi
         sleep 0.1 2>/dev/null || sleep 1
@@ -171,6 +173,10 @@ guard_recording_run() {
         exit 1
         ;;
     unsure)
+        if [ "$hung" = 1 ]; then
+            printf '%s\n' "INSTALL_UNSURE: goalcup status did not answer in 10 seconds, so a run may be recording. Nothing was changed. Update after the run ends, or run the installer again with: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh -s -- --force" >&2
+            exit 1
+        fi
         printf '%s\n' "INSTALL_UNSURE: Could not tell whether a Goal Cup run is recording. If one is, stop this update and run it after the run ends." >&2
         ;;
     esac

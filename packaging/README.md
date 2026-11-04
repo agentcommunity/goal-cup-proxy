@@ -30,7 +30,8 @@ object `{"status": ..., "upload": ..., "run": ...}` on one line. When `status.mo
 `recording`, `losing`, `writer_slow` or `null` it stops with a line starting `INSTALL_BLOCKED:`,
 which names `--force`. Any other mode (`sealed`), exit 1 with nothing on stdout (no run on this computer yet)
 and a first install go on. An answer it cannot read (exit 3, output it cannot parse, a `goalcup`
-from before 1.0, no answer within 10 s) prints a line starting `INSTALL_UNSURE:` and goes on. The JSON is
+from before 1.0) prints a line starting `INSTALL_UNSURE:` and goes on. No answer within 10 s
+prints an `INSTALL_UNSURE:` line that names `--force` and stops, like `INSTALL_BLOCKED`. The JSON is
 read with `awk` only, as a participant may have no `jq` or `python3`.
 
 The binaries are unsigned and not notarized. A download by `curl` is not quarantined on macOS, so
