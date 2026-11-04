@@ -418,7 +418,7 @@ class PadOnly(unittest.TestCase):
 
         def fake_sh(argv, **kw):
             out = "Hermes Agent v%s (2026.9.1)" % version if argv[-1] == "hermes --version" else '"%s"' % home
-            return mock.Mock(stdout=out, returncode=0)
+            return mock.Mock(stdout=out, stderr="", returncode=0)
         with mock.patch.dict("sys.modules", harness_version=stub), mock.patch.object(padrun, "PAD", pad_dir), \
                 mock.patch.object(padrun, "sh", fake_sh), mock.patch.object(padrun, "tool", lambda n: "/bin/" + n):
             r.setup(None)
@@ -438,7 +438,7 @@ class VersionCmdEnv(unittest.TestCase):
         seen = []
         r = bare()
         r.s, r.h = {"harness_id": "opencode-cli", "version": "1.18.0"}, {"version_cmd": "opencode --version"}
-        with mock.patch.object(padrun, "sh", lambda argv, **kw: seen.append(kw) or mock.Mock(stdout="", returncode=0)):
+        with mock.patch.object(padrun, "sh", lambda argv, **kw: seen.append(kw) or mock.Mock(stdout="", stderr="", returncode=0)):
             with self.assertRaises(padrun.Step):  # no version printed: setup stops after the first call
                 r.setup(None)
         self.assertEqual(seen[0]["env"]["PAD_VERSION"], "1.18.0")

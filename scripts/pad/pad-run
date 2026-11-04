@@ -332,8 +332,6 @@ class Run:
             raise Step("FAIL", "goalcup setup exit %d, %d home paths printed" % (r.returncode, len(homes)))
         home = self.st["home"] = homes[-1]
         extra = sec.get("pad_only", [])  # config no participant writes: merged, and the row never counts (table)
-        if extra:
-            import harness_version  # lane F's module, loaded only when a section names a version
         extra = [e for e in extra if harness_version.matches(version, e["match"])]
         self.st["pad_only"] = [e["why"] for e in extra]
         for files in [sec.get("files", {})] + [e["files"] for e in extra]:  # provider config, as a participant writes it
