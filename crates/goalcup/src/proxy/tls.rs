@@ -18,9 +18,14 @@ use rustls::{AlertDescription, ClientConfig, Error, PeerMisbehaved, ServerConfig
 use std::fmt;
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 const H1: &[u8] = b"http/1.1";
 const H2: &[u8] = b"h2";
+
+/// How long either leg's TLS handshake may take before it is given up (cr-proxy-4): a stalled
+/// upstream becomes a fresh tunnel, a stalled harness a `tls_refused` loss that teaches nothing.
+pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(60);
 
 /// What upstream is offered, from the client's ALPN list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

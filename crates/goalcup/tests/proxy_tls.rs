@@ -403,6 +403,66 @@ async fn a_close_mid_handshake_teaches_nothing() {
     assert!(ca_refused(&calls).is_empty());
 }
 
+/// cr-proxy-4: an upstream that takes the TCP connection and never answers the ClientHello is an
+/// `upstream_untrusted` tunnel once the handshake deadline passes.
+#[tokio::test]
+async fn a_stalled_upstream_handshake_becomes_a_tunnel() {
+    let (staller, at) = common::ports::held(); // accepts into the backlog, never answers
+    let env = [
+        ("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={at}")),
+        ("GOALCUP_TEST_HANDSHAKE_MS", "200".into()),
+    ];
+    let (_h, addr, calls, ca) = proxy(HOST_FILE, &env);
+    let c = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]));
+    let s = through(addr, TARGET).await;
+    tokio::spawn(async move {
+        let _ = c.connect(name("api.openai.com"), s).await;
+    });
+    // The fresh tunnel goes to the staller too, so the conn stays open: wait for its OPEN.
+    let opened = async {
+        loop {
+            let conn = (opens(&calls).into_iter()).find(|o| o.1 == StreamKind::Conn);
+            if let Some((_, _, meta)) = conn {
+                return meta;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    };
+    let meta = common::within_async(std::time::Duration::from_secs(5), opened).await;
+    assert_eq!(meta["reason"], "upstream_untrusted");
+    drop(staller);
+}
+
+/// cr-proxy-4: a client that sends its ClientHello and then nothing ends at the handshake
+/// deadline as a `tls_refused` loss with no alert, and teaches nothing.
+#[tokio::test]
+async fn a_stalled_client_handshake_ends_and_teaches_nothing() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let dir = tempfile::tempdir().unwrap();
+    let roots = up.pki().roots_file(dir.path()).display().to_string();
+    let env = [
+        (
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        ),
+        ("GOALCUP_TEST_EXTRA_ROOTS", roots),
+        ("GOALCUP_TEST_HANDSHAKE_MS", "200".into()),
+    ];
+    let (_h, addr, calls, ca) = proxy(HOST_FILE, &env);
+    let mut hello = Vec::new();
+    let config = client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]);
+    let mut tls = ClientConnection::new(config, name("api.openai.com")).unwrap();
+    tls.write_tls(&mut hello).unwrap();
+    let mut s = through(addr, TARGET).await;
+    s.write_all(&hello).await.unwrap();
+    let five = std::time::Duration::from_secs(5);
+    let (sid, ..) = common::within_async(five, conns(&calls, 1)).await.remove(0);
+    let alert = Some(json!({"alert": false}));
+    assert_eq!(gaps_of(&calls, sid), [(GapReason::TlsRefused, alert)]);
+    assert!(ca_refused(&calls).is_empty());
+    drop(s);
+}
+
 /// cr-proxy-3 through `serve`: three clients that read our flight and close without an alert teach
 /// the pair with one note; the fourth connection of the pair tunnels.
 #[tokio::test]

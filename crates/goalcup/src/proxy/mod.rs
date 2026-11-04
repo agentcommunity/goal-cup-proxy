@@ -99,6 +99,8 @@ struct Boot {
     quiet: Arc<AtomicU64>,
     /// `GOALCUP_TEST_UPSTREAM`; always empty without `test-hooks`.
     upstream: HashMap<String, SocketAddr>,
+    /// Either leg's TLS handshake deadline: [`tls::HANDSHAKE_DEADLINE`] outside tests.
+    handshake: Duration,
     /// The participant's proxy for the upstream leg, if any; a test upstream never uses it.
     egress: &'static net::Egress,
 }
@@ -112,15 +114,16 @@ pub fn serve(listener: std::net::TcpListener, ctx: ProxyCtx) -> ProxyHandle {
         .enable_all()
         .build()
         .expect("the relay runtime starts");
-    let (upstream, extra_roots) = test_hooks();
+    let hooks = test_hooks();
     let quiet = Arc::new(AtomicU64::new(ctx.recorder.now().ns()));
     let boot = Arc::new(Boot {
         hosts: Hosts::new(ctx.hosts),
-        tls: Tls::new(&ctx.ca, extra_roots),
+        tls: Tls::new(&ctx.ca, hooks.roots),
         flags: tunnel::Flags::default(),
         notes: RefusalNotes::default(),
         quiet: quiet.clone(),
-        upstream,
+        upstream: hooks.upstream,
+        handshake: hooks.handshake,
         egress: net::Egress::load(),
         rec: ctx.recorder,
     });
@@ -190,8 +193,18 @@ impl Drop for Admitted {
     }
 }
 
+/// What the `GOALCUP_TEST_*` variables set; all defaults without `test-hooks`.
+struct Hooks {
+    /// `GOALCUP_TEST_UPSTREAM`: a host sent to a local address.
+    upstream: HashMap<String, SocketAddr>,
+    /// `GOALCUP_TEST_EXTRA_ROOTS`: roots the upstream leg also trusts.
+    roots: Vec<CertificateDer<'static>>,
+    /// `GOALCUP_TEST_HANDSHAKE_MS`, else [`tls::HANDSHAKE_DEADLINE`].
+    handshake: Duration,
+}
+
 #[cfg(feature = "test-hooks")]
-fn test_hooks() -> (HashMap<String, SocketAddr>, Vec<CertificateDer<'static>>) {
+fn test_hooks() -> Hooks {
     let pairs = std::env::var("GOALCUP_TEST_UPSTREAM").unwrap_or_default();
     let upstream = (pairs.split(|c: char| c == ',' || c.is_whitespace()))
         .filter_map(|p| p.split_once('='))
@@ -200,12 +213,23 @@ fn test_hooks() -> (HashMap<String, SocketAddr>, Vec<CertificateDer<'static>>) {
     let roots = std::env::var_os("GOALCUP_TEST_EXTRA_ROOTS").and_then(|p| std::fs::read(p).ok());
     let roots = ca::certificates(&roots.unwrap_or_default());
     let roots = roots.into_iter().map(CertificateDer::from).collect();
-    (upstream, roots)
+    let ms = std::env::var("GOALCUP_TEST_HANDSHAKE_MS").ok();
+    let handshake =
+        (ms.and_then(|ms| ms.parse().ok())).map_or(tls::HANDSHAKE_DEADLINE, Duration::from_millis);
+    Hooks {
+        upstream,
+        roots,
+        handshake,
+    }
 }
 
 #[cfg(not(feature = "test-hooks"))]
-fn test_hooks() -> (HashMap<String, SocketAddr>, Vec<CertificateDer<'static>>) {
-    Default::default()
+fn test_hooks() -> Hooks {
+    Hooks {
+        upstream: HashMap::new(),
+        roots: Vec::new(),
+        handshake: tls::HANDSHAKE_DEADLINE,
+    }
 }
 
 fn listed(d: Decision) -> Option<(Source, Kind)> {
@@ -314,10 +338,12 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
         return run_tunnel(&b, hold, c, client, up).await;
     }
     // Upstream first, checked against the deciding name (C10). Any failure: a fresh TCP leg and a
-    // tunnel, so the harness meets the real server itself.
+    // tunnel, so the harness meets the real server itself. A stalled handshake is untrusted too.
     let connector = b.tls.client(offer).map(tokio_rustls::TlsConnector::from);
     let upstream_tls = match (connector, ServerName::try_from(name.clone())) {
-        (Some(c), Ok(server_name)) => c.connect(server_name, up).await,
+        (Some(c), Ok(server_name)) => tokio::time::timeout(b.handshake, c.connect(server_name, up))
+            .await
+            .unwrap_or_else(|_| Err(io::ErrorKind::TimedOut.into())),
         _ => Err(io::Error::other("no upstream TLS for this name")),
     };
     let fresh = (target, is_listed);
@@ -356,22 +382,29 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
         n: wire.clone(),
     };
     let acceptor = tokio_rustls::TlsAcceptor::from(server);
-    let client_tls = match acceptor.accept(PrefixedIo::new(hello.bytes, counted)).await {
-        Ok(t) => t,
-        Err(e) => {
+    let accept = acceptor.accept(PrefixedIo::new(hello.bytes, counted));
+    let client_tls = match tokio::time::timeout(b.handshake, accept).await {
+        Ok(Ok(t)) => t,
+        stalled_or_refused => {
             // Opened only now, so its meta tells the outcome. An alert teaches; a close after our
-            // flight went out counts toward `SILENT_STRIKES`.
-            let alert = match tls::classify_client_handshake(&e) {
-                Refusal::Alert(alert) => {
+            // flight went out counts toward `SILENT_STRIKES`; a stall past the deadline teaches
+            // nothing.
+            let refusal = match stalled_or_refused {
+                Ok(Err(e)) => Some(tls::classify_client_handshake(&e)),
+                _ => None,
+            };
+            let alert = match refusal {
+                Some(Refusal::Alert(alert)) => {
                     b.hosts.learn(rec, rec.now(), &name, &fp);
                     json!(alert)
                 }
-                Refusal::NoAlert => {
+                Some(Refusal::NoAlert) => {
                     if wire[1].load(Relaxed) > 0 {
                         b.hosts.learn_silent(rec, rec.now(), &name, &fp);
                     }
                     json!(false)
                 }
+                None => json!(false),
             };
             let c = tc("tls_refused", dl, fp16, Bytes::new(), Bytes::new());
             drop(hold);
