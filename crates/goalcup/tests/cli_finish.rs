@@ -308,6 +308,31 @@ fn closing_prints_the_sealed_counts_and_never_invents_any() {
     assert!(done.contains(text::PART_RECORDED) && done.contains("905"));
 }
 
+/// A sealed part with no harness says why, when the log has the reason; else the bare sentence.
+#[test]
+fn closing_names_why_the_harness_did_not_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = part(dir.path());
+    std::fs::create_dir_all(&entry).unwrap();
+    put(
+        &entry,
+        "status.json",
+        &patch(&sealed(), json!({"harness": null})),
+    );
+    let log = entry.join("goalcup.log");
+    std::fs::write(&log, "2026-11-04T09:59:59Z boot port=8080\n").unwrap();
+    let bare = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, false);
+    assert!(bare.contains("Agent did not start.") && !bare.contains("io="));
+    std::fs::write(
+        &log,
+        "2026-11-04T10:00:00Z harness_failed io=PermissionDenied\n",
+    )
+    .unwrap();
+    let shown = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, false);
+    assert!(shown.contains("PermissionDenied") && shown.contains(text::PART_RECORDED));
+    assert!(shown.contains(&format!("goalcup continue {RUN}")));
+}
+
 /// A recorder that dies after writing `status.json` and before `ready` (exit 3, unsealed, no
 /// harness) is a part that did not start, not one whose counts cannot be read.
 #[test]

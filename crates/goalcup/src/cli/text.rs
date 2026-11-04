@@ -1125,6 +1125,17 @@ pub const NEEDS_REPO: &str =
 
 pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harness <id>";
 
+/// The end screen's first line when the harness never started; `kind` is the logged io error.
+pub fn harness_not_started(name: &str, kind: Option<&str>, run: &str) -> String {
+    match kind {
+        Some(kind) => format!(
+            "{name} did not start ({kind}). Check that it runs on its own, then run goalcup \
+             continue {run}."
+        ),
+        None => format!("{name} did not start."),
+    }
+}
+
 pub fn mask_refused() -> String {
     format!("goalcup could not set up masking, so nothing was started. Write to {SUPPORT_ADDRESS}.")
 }

@@ -185,6 +185,17 @@ pub fn screen(
 /// How long a sealed `status.json` is waited for after the watchdog returns, in 100 ms steps.
 const SEALED_WAIT: u32 = 30;
 
+/// The io error kind of the last `<time> harness_failed io=<Kind>` line of `goalcup.log`.
+fn spawn_failure(entry_dir: &Path) -> Option<String> {
+    let log = std::fs::read_to_string(super::goalcup_log(entry_dir)).ok()?;
+    log.lines()
+        .rev()
+        .find(|l| l.split(' ').nth(1) == Some("harness_failed"))?
+        .split(' ')
+        .find_map(|w| w.strip_prefix("io="))
+        .map(str::to_owned)
+}
+
 /// What `start` prints when the watchdog has returned: the end screen of the sealed part, with a
 /// line first when the harness never started, or the start refusal when nothing was recorded at
 /// all. `refused` is the watchdog's mask refusal, which has its own text; `not_started` is its
@@ -204,7 +215,13 @@ pub fn closing(
         if let Ok(screen) = end_screen(entry_dir) {
             let st: Option<Status> = super::read_json(&super::status_json(entry_dir));
             let gone = st.is_some_and(|s| s.harness.is_none());
-            let first = gone.then(|| format!("{name} did not start.\n\n"));
+            let first = gone.then(|| {
+                let kind = spawn_failure(entry_dir);
+                format!(
+                    "{}\n\n",
+                    text::harness_not_started(name, kind.as_deref(), run)
+                )
+            });
             return format!("{}{screen}", first.unwrap_or_default());
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
