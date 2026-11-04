@@ -41,8 +41,22 @@ pub fn serve_with(
         recorder,
         hosts,
         ca,
+        null: false,
     };
     serve(listener.try_clone().unwrap(), ctx)
+}
+
+/// [`serve_on`] as a null recorder boot runs it.
+pub fn serve_null(listener: &TcpListener, hosts: &str, ca: RunCa) -> (ProxyHandle, Calls) {
+    let (recorder, calls) = Recorder::for_tests(1 << 30);
+    let hosts = HostList::from_file(hosts.as_bytes(), "hosts.toml").unwrap();
+    let ctx = ProxyCtx {
+        recorder,
+        hosts,
+        ca,
+        null: true,
+    };
+    (serve(listener.try_clone().unwrap(), ctx), calls)
 }
 
 /// The real `serve` on a held port with a 4,096 backlog, as the watchdog sets it, a fresh run CA

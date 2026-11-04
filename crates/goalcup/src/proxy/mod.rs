@@ -57,6 +57,8 @@ pub struct ProxyCtx {
     pub recorder: Recorder,
     pub hosts: HostList,
     pub ca: RunCa,
+    /// A null recorder boot: relay without parsing, since nothing is recorded.
+    pub null: bool,
 }
 
 /// The running proxy. Dropping it stops accepting at once, then shuts the runtime down, which
@@ -103,6 +105,8 @@ struct Boot {
     handshake: Duration,
     /// The participant's proxy for the upstream leg, if any; a test upstream never uses it.
     egress: &'static net::Egress,
+    /// [`ProxyCtx::null`]: no parser runs.
+    null: bool,
 }
 
 /// Accepts on the inherited `listener` (it binds nothing) on a runtime of its own with
@@ -125,6 +129,7 @@ pub fn serve(listener: std::net::TcpListener, ctx: ProxyCtx) -> ProxyHandle {
         upstream: hooks.upstream,
         handshake: hooks.handshake,
         egress: net::Egress::load(),
+        null: ctx.null,
         rec: ctx.recorder,
     });
     let _ = listener.set_nonblocking(true);
@@ -459,11 +464,12 @@ where
     let (rec, prefixes) = (&b.rec, (to_up, Bytes::new()));
     drop(hold);
     let mut conn = rec.open(StreamKind::Conn, 0, 0, 0, OpenFlags::DECRYPTED, meta);
-    let parser: Box<dyn Parser> = match h2 {
-        true => Box::new(h2::H2::new(rec, conn.sid())),
-        false => Box::new(http1::Http1::new(rec, conn.sid())),
+    let parser: Option<Box<dyn Parser>> = match (b.null, h2) {
+        (true, _) => None,
+        (false, true) => Some(Box::new(h2::H2::new(rec, conn.sid()))),
+        (false, false) => Some(Box::new(http1::Http1::new(rec, conn.sid()))),
     };
-    let p = pump::relay(rec, &mut conn, legs, prefixes, Some(parser), &b.quiet, None).await;
+    let p = pump::relay(rec, &mut conn, legs, prefixes, parser, &b.quiet, None).await;
     (conn, p)
 }
 

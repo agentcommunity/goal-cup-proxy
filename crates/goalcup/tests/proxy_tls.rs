@@ -15,7 +15,7 @@ use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::connect::fingerprint_hex16;
 use goalcup::proxy::hosts::{Hosts, REFUSAL_EXPIRY};
 use goalcup::proxy::tls::{Offer, Tls, upstream_offer};
-use proxy_fixtures::{client_trusting, conns, get, proxy, through};
+use proxy_fixtures::{client_trusting, conns, get, proxy, serve_null, through};
 use rustls::ClientConnection;
 use rustls::pki_types::ServerName;
 use serde_json::{Value, json};
@@ -329,6 +329,42 @@ async fn an_upstream_signed_by_the_participants_ca_is_decrypted() {
     get(&mut t).await;
     drop(t);
     assert_eq!(conns(&calls, 1).await[0].1["mode"], "decrypt");
+}
+
+/// cr-proxy-5: a null boot relays a decrypted call without a parser, so no HTTP stream opens.
+#[tokio::test]
+async fn null_mode_relays_without_parsing() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let dir = tempfile::tempdir().unwrap();
+    let roots = up.pki().roots_file(dir.path()).display().to_string();
+    let env = [
+        (
+            "GOALCUP_TEST_UPSTREAM",
+            format!("api.openai.com={}", up.addr()),
+        ),
+        ("GOALCUP_TEST_EXTRA_ROOTS", roots),
+    ];
+    for (k, v) in env {
+        // SAFETY: nextest runs each test in its own process; this runs before `serve` reads them.
+        unsafe { std::env::set_var(k, v) };
+    }
+    let (listener, addr) = common::ports::held();
+    let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
+    let (_h, calls) = serve_null(&listener, HOST_FILE, ca.clone());
+    let c = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]));
+    let mut t = c
+        .connect(name("api.openai.com"), through(addr, TARGET).await)
+        .await
+        .unwrap();
+    get(&mut t).await;
+    drop(t);
+    assert_eq!(conns(&calls, 1).await[0].1["mode"], "decrypt");
+    assert!(
+        opens(&calls)
+            .iter()
+            .all(|(_, kind, _)| *kind == StreamKind::Conn),
+        "a parser ran"
+    );
 }
 
 /// GAP 14: an upstream that rejects the offered ALPN is an `alpn_other` tunnel.
