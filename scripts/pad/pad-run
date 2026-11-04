@@ -13,6 +13,7 @@ import urllib.parse
 PAD = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PAD)
 import check as pc  # noqa: E402  S6, S7 and S9 keys are read through check.py's SEAM only
+import harness_version  # noqa: E402
 NO_BUILD = "no goalcup build"
 BESIDE = ("spend", "seal-now", "watch")  # these run beside the other steps, so they never write state.json
 STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep-going", "seal", "wait-upload", "verify",
@@ -311,8 +312,8 @@ class Run:
 
     def setup(self, _):
         h, s, sec = self.h, self.s, self.sec
-        got = re.search(r"(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)", sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]]).stdout)
-        version = got and got.group(1)  # section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
+        r = sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]])
+        version = harness_version.parse(next((l for l in r.stdout.splitlines() if l.strip()), ""))  # section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
         if not version:
             raise Step("FAIL", "%s not installed" % s["harness_id"])
         self.st.update(harness_version=version, plain_planted=True)
