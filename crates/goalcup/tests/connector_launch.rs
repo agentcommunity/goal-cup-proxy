@@ -192,6 +192,16 @@ fn a_held_home_refuses_and_the_version_probe_never_holds_the_start() {
 }
 
 #[test]
+fn opencode_ids_share_a_program() {
+    let pair = vec![
+        ("opencode-cli", "1.".into()),
+        ("opencode2-cli", "2.".into()),
+    ];
+    assert_eq!(connector::version::same_program("opencode"), pair);
+    assert!(connector::version::same_program("claude").is_empty());
+}
+
+#[test]
 fn a_wrong_opencode_pick_names_the_other_connector() {
     let fake = |d: &Path, body: &str| {
         let program = d.join("opencode");

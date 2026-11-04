@@ -138,10 +138,10 @@ mod tests {
             let want = (want != "-").then(|| want.to_string());
             assert_eq!(parse(raw).map(|v| v.text), want, "{row}");
         }
-        let v = parse("Hermes Agent v0.22.6 (2026.9.24)").unwrap();
+        let v = parse("Fakev Agent v0.22.6 (2026.9.24)").unwrap();
         assert_eq!(v.nums, vec![0, 22, 6]);
         assert_eq!(parse("(8b18b55)"), None);
-        let amp = parse("amp 0.0.1-gabc123").unwrap();
+        let amp = parse("fakev 0.0.1-gabc123").unwrap();
         assert_eq!(
             (amp.text.as_str(), amp.nums),
             ("0.0.1-gabc123", vec![0, 0, 1])
@@ -166,30 +166,18 @@ mod tests {
     }
 
     #[test]
-    fn opencode_ids_share_a_program() {
-        assert_eq!(
-            same_program("opencode"),
-            vec![
-                ("opencode-cli", "1.".into()),
-                ("opencode2-cli", "2.".into())
-            ]
-        );
-        assert!(same_program("claude").is_empty());
-    }
-
-    #[test]
     fn says_name_the_version_and_the_other_connector() {
         assert_eq!(
             untested_say("fakev", "1.9.0", "2."),
             "fakev 1.9.0 is not the version this connector was written for (2.x). goalcup records it the same way; goalcup status says if model requests are missing."
         );
         assert_eq!(
-            unchecked_say("opencode", "1.", &[("opencode2-cli", "2.".into())]),
-            "goalcup could not read opencode --version, so it could not check this is opencode 1.x. If it is 2.x, run: goalcup setup --harness opencode2-cli"
+            unchecked_say("fakev", "1.", &[("fake2-cli", "2.".into())]),
+            "goalcup could not read fakev --version, so it could not check this is fakev 1.x. If it is 2.x, run: goalcup setup --harness fake2-cli"
         );
         assert_eq!(
-            unchecked_say("opencode", "1.", &[]),
-            "goalcup could not read opencode --version, so it could not check this is opencode 1.x."
+            unchecked_say("fakev", "1.", &[]),
+            "goalcup could not read fakev --version, so it could not check this is fakev 1.x."
         );
     }
 }
