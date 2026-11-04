@@ -274,11 +274,7 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         .and_then(|r| r.say.clone())
     {
         version_notes.push(say);
-    } else if read.is_none() && free && !connector.versions.is_empty() {
-        let rules = match &connector.checked {
-            Some(v) => format!("{} {v}", connector.name),
-            None => format!("the newest version of {} it knows", connector.name),
-        };
+    } else if let Some(rules) = connector.unread_rules().filter(|_| read.is_none() && free) {
         version_notes.push(format!(
             "goalcup could not read {} --version, so it used the rules for {rules}.",
             connector.program

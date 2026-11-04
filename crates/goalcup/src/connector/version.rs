@@ -140,6 +140,10 @@ mod tests {
         );
         assert_eq!(probe("echo 'error: needs Python 3.11.4' >&2; exit 1"), None);
         assert_eq!(probe("echo fakev 1.2.3; exit 1"), some("fakev 1.2.3"));
+        // A long line is cut at the probe, so it never fills the start line.
+        let long = probe(&format!("echo fakev 1.2.3 {}", "é".repeat(5000))).unwrap();
+        assert_eq!(long.encode_utf16().count(), 64);
+        assert!(long.starts_with("fakev 1.2.3 "));
         assert_eq!(probe("echo warning: no config >&2"), None);
         assert_eq!(probe("echo 'warning: node 2.0.1 deprecated' >&2"), None);
         assert_eq!(probe("echo 'fakev: requires bun 2.1.0' >&2; exit 1"), None);

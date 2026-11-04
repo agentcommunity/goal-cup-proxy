@@ -347,10 +347,13 @@ fn an_unread_harness_version_is_said_and_the_run_starts() {
             .unwrap_or_else(|s| panic!("{}", s.text));
         String::from_utf8(out).unwrap()
     };
-    let line = text::version_unread("Tester", true);
+    let rules = Some("the newest version of Tester it knows");
+    let line = text::version_unread("Tester", true, rules);
     let unread = scripted("#!/bin/sh\nexit 1\n", note);
     let shown = screen(&unread);
     assert!(shown.contains(&line) && !shown.contains("loses calls"));
+    // Said once: the recorded note is that line, not a second one.
+    assert_eq!(shown.matches("could not").count(), 1, "{shown}");
     // On record in goalcup.log too, for when the harness clears the terminal.
     assert!(logs(unread.t.home()).contains("version_unread"));
     let read = scripted("#!/bin/sh\necho tester 1.2.3\n", "");

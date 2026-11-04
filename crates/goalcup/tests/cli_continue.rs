@@ -427,18 +427,18 @@ fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
     assert!(log.contains("version_unread"), "{log}");
 }
 
-/// A run started on 1.0 as `opencode2-cli` continues as `opencode-cli`, the one OpenCode connector.
-#[test]
-fn an_opencode2_run_continues_as_opencode() {
+/// Continues a run started on 1.0 as `opencode2-cli`, whose last part wrote `written`, with a
+/// fake `opencode` that prints `line`.
+fn continue_opencode2(line: &str, written: Value) -> Result<Ready, Stop> {
     let worker = FakeWorker::start();
     next_part(&worker);
     let mut w = World::new(Some(worker.url()));
     let bin = w.t.home().join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let fake = bin.join("opencode");
-    std::fs::write(&fake, "#!/bin/sh\necho opencode v2.2.2\n").unwrap();
+    std::fs::write(&fake, format!("#!/bin/sh\necho {line}\n")).unwrap();
     std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    w.part(1, false, Some(World::sealed(json!({"model_requests": 1}))));
+    w.part(1, false, Some(World::sealed(written)));
     let mut sj: Value = serde_json::from_slice(&w.server_json()).unwrap();
     sj["connector"] = json!({"id": "opencode2-cli", "name": "OpenCode", "source": "builtin"});
     put(&w.run_dir(), "server.json", &sj);
@@ -453,11 +453,30 @@ fn an_opencode2_run_continues_as_opencode() {
         std::env::var("PATH").unwrap_or_default()
     );
     let vars = [("PATH".to_owned(), path)].into();
-    let ready = prepare(&a, &w.gc(), &w.project, &vars, &mut Vec::new())
+    prepare(&a, &w.gc(), &w.project, &vars, &mut Vec::new())
+}
+
+/// A run started on 1.0 as `opencode2-cli` continues as `opencode-cli`, the one OpenCode connector.
+#[test]
+fn an_opencode2_run_continues_as_opencode() {
+    let ready = continue_opencode2("opencode v2.2.2", json!({"model_requests": 1}))
         .unwrap_or_else(|s| panic!("{}", s.text));
     assert_eq!(ready.plan.connector.id, "opencode-cli");
     assert_eq!(
         ready.plan.harness_version.as_deref(),
         Some("opencode v2.2.2")
+    );
+}
+
+/// No version refuses a continue, also when it opens a new session (resume off): a 1.x build on a
+/// run started as the 2.x id gets the 1.x rules.
+#[test]
+fn a_continue_without_resume_is_never_refused_on_version() {
+    let ready =
+        continue_opencode2("opencode 1.19.5", json!({})).unwrap_or_else(|s| panic!("{}", s.text));
+    assert!(!ready.plan.argv.contains(&"--continue".to_owned()));
+    assert_eq!(
+        (&ready.plan.refusal, ready.plan.version_row.as_deref()),
+        (&None, Some("1.x"))
     );
 }

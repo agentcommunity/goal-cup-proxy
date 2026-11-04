@@ -116,6 +116,15 @@ impl Connector {
         c
     }
 
+    /// Whose rules an unread version gets, said only on a connector with rows: `checked`, else
+    /// the newest version it knows.
+    pub fn unread_rules(&self) -> Option<String> {
+        (!self.versions.is_empty()).then(|| match &self.checked {
+            Some(v) => format!("{} {v}", self.name),
+            None => format!("the newest version of {} it knows", self.name),
+        })
+    }
+
     /// The connector in force for version `v` and the `match` of the row applied: the first row
     /// that holds, else the base. An unread version gets the base.
     pub fn for_version(

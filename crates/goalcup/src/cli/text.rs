@@ -1198,8 +1198,11 @@ pub fn run_kind(mode: RunMode) -> &'static str {
 
 /// The harness version could not be read. The upload sentence is said only when there is an upload,
 /// because the upload carries "unknown".
-pub fn version_unread(name: &str, upload: bool) -> String {
-    let said = format!("{name}'s version could not be read, so the run starts without it.");
+/// The one start line for an unread version; `rules` names whose rules apply, on a connector with
+/// `[[versions]]` rows.
+pub fn version_unread(name: &str, upload: bool, rules: Option<&str>) -> String {
+    let with = rules.map_or_else(String::new, |r| format!(", with the rules for {r}"));
+    let said = format!("{name}'s version could not be read, so the run starts without it{with}.");
     if upload {
         format!("{said} The upload says unknown.")
     } else {
@@ -1265,7 +1268,7 @@ pub fn tier_line(
             "{who}: not verified. goalcup records what reaches it; goalcup status says if model requests are missing."
         ),
         ("verified", None) => format!(
-            "{name}: verified with goalcup on {}; the version here could not be read, so goalcup cannot say it is that build.",
+            "{name}: verified with goalcup on {}; goalcup cannot say the build here is one of those.",
             on(&pool)
         ),
         ("verified", Some(v)) if this.is_empty() => format!(

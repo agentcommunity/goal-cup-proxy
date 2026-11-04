@@ -311,10 +311,14 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     lines.extend(first_message(a, c, prompt.as_deref(), &opened.run)?);
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(c.server.host()));
-    lines.extend(plan.version_notes.clone());
+    // An unread version is said once: its note (recorded) is this line.
     if plan.harness_version.is_none() {
         log::line(&entry_dir, "version_unread", &[]);
-        lines.push(text::version_unread(&name, c.server.host().is_some()));
+        let rules = connector.unread_rules();
+        let upload = c.server.host().is_some();
+        lines.push(text::version_unread(&name, upload, rules.as_deref()));
+    } else {
+        lines.extend(plan.version_notes.clone());
     }
     lines.push(tier_line(
         &name,
@@ -568,7 +572,7 @@ mod tests {
         );
         assert_eq!(
             row(None, &b, "macos"),
-            "Fakev: verified with goalcup on 0.22.6, 0.22.5 (macOS); the version here could not be read, so goalcup cannot say it is that build."
+            "Fakev: verified with goalcup on 0.22.6, 0.22.5 (macOS); goalcup cannot say the build here is one of those."
         );
         let one = [("2.1.312".to_owned(), String::new())];
         assert_eq!(

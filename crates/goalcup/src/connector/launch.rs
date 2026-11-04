@@ -183,7 +183,23 @@ pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -
         .next()
         .is_some_and(|w| w.eq_ignore_ascii_case(name));
     let held = named && super::version::parse(&line).is_some();
-    (!checked || held).then_some(line)
+    (!checked || held).then(|| cut_version(&line).to_owned())
+}
+
+/// The most of a version line goalcup keeps, in UTF-16 units: the server's limit, so a long
+/// `--version` line never fills the start line.
+pub const VERSION_UNITS: usize = 64;
+
+/// `v` cut to `VERSION_UNITS` UTF-16 units at a char boundary.
+pub fn cut_version(v: &str) -> &str {
+    let mut units = 0;
+    for (i, c) in v.char_indices() {
+        units += c.len_utf16();
+        if units > VERSION_UNITS {
+            return &v[..i];
+        }
+    }
+    v
 }
 
 /// Writes `no_prompts` or `update_off` rows into the home; a row not written comes back skipped.

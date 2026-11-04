@@ -308,10 +308,14 @@ pub fn prepare(
     ));
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(server.host()));
-    lines.extend(plan.version_notes.clone());
+    // An unread version is said once: its note (recorded) is this line.
     if plan.harness_version.is_none() {
         log::line(&new_dir, "version_unread", &[]);
-        lines.push(text::version_unread(&name, server.host().is_some()));
+        let rules = connector.unread_rules();
+        let upload = server.host().is_some();
+        lines.push(text::version_unread(&name, upload, rules.as_deref()));
+    } else {
+        lines.extend(plan.version_notes.clone());
     }
     for (what, file) in [
         ("Connector", first.map(PathBuf::from)),
