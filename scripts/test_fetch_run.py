@@ -44,13 +44,13 @@ cat "$FAKE_INDEX"
 FAKE_CURL = """#!/usr/bin/env python3
 # Reads curl's configuration from stdin, as the script gives it, and serves objects from FAKE_STORE:
 # the body and 200, or an error body and 404 (403 for FAKE_FORBID), the status as `write-out` names it.
-import os, sys, urllib.parse
+import os, re, sys, urllib.parse
 with open(os.environ["FAKE_LOG"] + ".curl.args", "a") as f:
     f.write(" ".join(sys.argv[1:]) + "\\n")
 cfg = {}
 for line in sys.stdin.read().splitlines():
     name, _, value = line.partition(" = ")
-    cfg.setdefault(name.strip(), []).append(value.strip().strip('"'))
+    cfg.setdefault(name.strip(), []).append(re.sub(r'\\\\(.)', lambda m: {"n": "\\n", "r": "\\r", "t": "\\t"}.get(m[1], m[1]), value.strip().strip('"')))
 prefix = ("https://api.cloudflare.com/client/v4/accounts/" + os.environ["EXPECT_ACCOUNT"] + "/r2/buckets/"
           + os.environ["EXPECT_BUCKET"] + "/objects/")
 url = cfg["url"][0]
@@ -346,6 +346,14 @@ class FetchRunTest(unittest.TestCase):
         for text in (result.stdout, result.stderr, args):
             for secret in SECRETS:
                 self.assertNotIn(secret, text)
+        self.assertEqual(self.fetched()[0], b"".join(e["_bodies"]))
+
+    def test_an_outdir_with_quote_and_backslash_is_read_by_curl(self) -> None:
+        e = self.entry()
+        self.write_index(e)
+        self.out = self.root / 'we"ird\\dir'
+        result = self.run_script("--index", str(self.index_path), ENTRY, str(self.out), env=self.fakes())
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.fetched()[0], b"".join(e["_bodies"]))
 
     def test_an_object_r2_does_not_have_is_object_bad_but_a_refusal_writes_nothing(self) -> None:
