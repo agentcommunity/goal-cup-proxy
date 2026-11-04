@@ -134,13 +134,34 @@ class Agreement(Repo):
         sha = self.repo(rows)
         tier = self.tier("hermes-cli", rows)
         self.assertEqual(tier[0], "not verified")
-        self.assertIn("masked upstream", tier[2])
+        self.assertIn("masked upstream", tier[3])
         self.assertIn("C3 passed as masked upstream", self.check(sha)[1])
 
     def test_exec_verdict_missing(self):
         rows = green_rows()
         rows[-1] = {k: v for k, v in rows[-1].items() if k != "exec"}
         self.assertIn("exec h2-parallel.sh verdict PASS: missing", self.check(self.repo(rows))[1])
+
+
+class TierOs(unittest.TestCase):
+    def tier(self, rows):
+        with mock.patch.object(table, "harness_lines", return_value=["[gateway]"]):
+            return table.tier_for("hermes-cli", rows)
+
+    def test_verified_names_the_os(self):
+        self.assertEqual(self.tier(hermes_rows()), ("verified", "0.22.5", "darwin-arm64", ""))
+
+    def test_two_systems_do_not_merge(self):
+        rows = hermes_rows()
+        rows[0] = dict(rows[0], os="linux-x86_64")
+        self.assertEqual(self.tier(rows), ("not verified", "", "", "case rows on different versions or systems"))
+
+    def test_row_without_os(self):
+        rows = [{k: v for k, v in r.items() if k != "os"} for r in hermes_rows()]
+        self.assertEqual(self.tier(rows), ("not verified", "", "", "no system on a case row"))
+
+    def test_render_has_os_line(self):
+        self.assertIn('os = "darwin-arm64"\nreason', table.render_tiers({"hermes-cli": self.tier(hermes_rows())}))
 
 
 if __name__ == "__main__":

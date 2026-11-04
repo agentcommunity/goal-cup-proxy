@@ -130,7 +130,7 @@ class NotVerified(unittest.TestCase):
     def test_table_shows_the_reason_over_old_rows(self):
         tbl = load("padtable", "table")
         row = {"connector": "amp-cli", "case": "direct", "mode": "full", "result": "FAIL"}
-        self.assertEqual(tbl.tier_for("amp-cli", [row]), ("not verified", "", "no key"))
+        self.assertEqual(tbl.tier_for("amp-cli", [row]), ("not verified", "", "", "no key"))
 
 
 class CrushPermissions(unittest.TestCase):
@@ -143,7 +143,7 @@ class CrushPermissions(unittest.TestCase):
         allow = [ln for ln in lines if ln.startswith("permissions allow ")]
         self.assertEqual(len(allow), 1)
         self.assertIn("bash", allow[0].split())
-        self.assertEqual(load("padtable2", "table").tier_for("crush-cli", []), ("not verified", "", "not yet run on the pad"))
+        self.assertEqual(load("padtable2", "table").tier_for("crush-cli", []), ("not verified", "", "", "not yet run on the pad"))
 
 
 class CrushInitQuestion(unittest.TestCase):

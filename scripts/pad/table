@@ -27,9 +27,9 @@ HEADER = "# Written by scripts/pad/table (PRD-12 section 9). Do not edit by hand
 def toml_str(s): return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 def render_tiers(tiers):
-    """tiers: {connector id: (tier, version, reason)} -> tiers.toml text (PRD-10 T1)."""
-    return HEADER + "\n" + "\n".join("[%s]\ntier = %s\nversion = %s\nreason = %s\n" % (
-        cid, toml_str(t), toml_str(v), toml_str(why)) for cid, (t, v, why) in sorted(tiers.items()))
+    """tiers: {connector id: (tier, version, os, reason)} -> tiers.toml text (PRD-10 T1)."""
+    return HEADER + "\n" + "\n".join("[%s]\ntier = %s\nversion = %s\nos = %s\nreason = %s\n" % (
+        cid, toml_str(t), toml_str(v), toml_str(o), toml_str(why)) for cid, (t, v, o, why) in sorted(tiers.items()))
 
 def write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,14 +73,14 @@ def tier_for(cid, rows, lines=None):
     # harness file, never computed from rows.
     said = [m.group(1) for m in map(re.compile(r'not_supported\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
     if said:
-        return ("not supported", "", said[0])
+        return ("not supported", "", "", said[0])
     # A stated reason (`not_verified = "<reason>"`) or no key (PRD-12 section 6) means the pad runs nothing, so
     # that reason is the cell, whatever old rows exist.
     why = [m.group(1) for m in map(re.compile(r'not_verified\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
     if why or 'key_kind = "none"' in lines(cid):
-        return ("not verified", "", why[0] if why else "no key")
+        return ("not verified", "", "", why[0] if why else "no key")
     if not any(r.get("connector") == cid for r in rows):
-        return ("not verified", "", "not yet run on the pad")
+        return ("not verified", "", "", "not yet run on the pad")
     got = [(c, latest(rows, tier_row((cid,), c))) for c in CASES
            if (cid, c) not in NO_TIER_ROW and (c != "gateway" or has_gateway(cid, rows, lines))]
     reasons = []
@@ -93,13 +93,14 @@ def tier_for(cid, rows, lines=None):
             first = next((w for w in why if w.startswith(bad + " ")), why[0])
             reasons.append((2, "%s %s %s" % (r.get("case"), bad, first.split(": ", 1)[-1])))
     reasons += [(3, "no full %s row" % c) for c, r in got if not r]
-    versions = {str(r.get("harness_version") or "") for _, r in got if r}  # section 9: verified "on that version"
-    reasons += [(4, "case rows on different versions")] * (len(versions) > 1)
-    reasons += [(4, "no harness version on a case row")] * ("" in versions)  # P7: a named version
+    pairs = {(str(r.get("harness_version") or ""), str(r.get("os") or "")) for _, r in got if r}
+    reasons += [(4, "case rows on different versions or systems")] * (len(pairs) > 1)  # section 9: "on that version"
+    reasons += [(4, "no harness version on a case row")] * ("" in {v for v, _ in pairs})  # P7: a named version
+    reasons += [(4, "no system on a case row")] * ("" in {o for _, o in pairs})
     if reasons:
-        return ("not verified", "", min(reasons, key=lambda x: x[0])[1])
+        return ("not verified", "", "", min(reasons, key=lambda x: x[0])[1])
     note = [m.group(1) for m in map(re.compile(r'tier_note\s*=\s*"(.*)"').fullmatch, lines(cid)) if m]
-    return ("verified", versions.pop(), note[0] if note else "")
+    return ("verified", *pairs.pop(), note[0] if note else "")
 
 def cell(v):
     return "-" if v in (None, "", [], {}) else str(v).replace("|", "/").replace("\n", " ")
@@ -125,7 +126,7 @@ def results_md(rows, tiers):
     summary, body = [], []
     for h, cids in sorted(groups.items()):
         tier = [("verified with a note: " + why if why else t) if t == "verified" else "%s: %s" % (t, why)
-                for t, _, why in (tiers[c] for c in cids)]
+                for t, _, _, why in (tiers[c] for c in cids)]
         last = latest(rows, lambda r: r.get("connector") in cids)
         kill = latest(rows, lambda r: r.get("connector") in cids and kills(r)) if h in CORE else None
         summary.append([h, " / ".join(dict.fromkeys(tier)), " / ".join(dict.fromkeys(tiers[c][1] for c in cids))]
