@@ -222,11 +222,11 @@ row has verified. It covers Claude Code, Codex, Amp and Hermes, needs `npm` and 
 
 Run `python3.11 scripts/pad/canary` on the maintainer Mac every 2 hours for Claude Code, Codex and Hermes, and
 hourly for Amp (about 7 npm builds a day, [Amp section 2](harnesses/amp-cli.md#2-install-and-record-a-version)):
-`python3.11 scripts/pad/canary --only amp-cli`. Exit 0 means nothing new; 1 a new build, named in its line;
-2 a lookup failed, so run it again before assuming nothing is new.
+`python3.11 scripts/pad/canary --only amp-cli`. Exit 0 means nothing new; 1 a new build, named in its line (read every line: a lookup can
+have failed too); 2 a lookup failed, so run it again before assuming nothing is new.
 
 Classify a new build within 2 hours, on the pad (serial, one Mac). Install that exact build with the `install`
-line of `scripts/pad/harnesses/<id>.toml`, the version changed. Copy `scripts/pad/runs/micro.toml`, set its
+line of `scripts/pad/harnesses/<id>.toml`, the version changed (for Hermes, the tag and the `--commit` hash). Copy `scripts/pad/runs/micro.toml`, set its
 `harness` and `key` lines for that harness (`key` names one in `scripts/pad/pad.toml`), and run
 `python3.11 scripts/pad/pad <your copy>`. Amp has no pad key (`key_kind = "none"`): install the build by hand
 and run it as in [Amp section 1](harnesses/amp-cli.md#1-run-one-prompt-in-chat-mode-first).
@@ -237,8 +237,8 @@ and run it as in [Amp section 1](harnesses/amp-cli.md#1-run-one-prompt-in-chat-m
 | The wire records fine but the native reader drifts | Note it and verify again after the event. The raw wire record is the evidence. |
 | The model is unreachable or a prompt blocks | Publish the downgrade line on the event page: the `install` line of the last verified build. |
 
-Never disqualify or refuse an entry on a version. Find the affected entries by connector and the version word
-in the `start` event, then flag them.
+Never disqualify or refuse an entry on a version. Find the affected entries by `connector` and `harness_version`
+in the `start` event, then flag them; a start whose version could not be read has `harness_version` null.
 
 ## Bad days
 
