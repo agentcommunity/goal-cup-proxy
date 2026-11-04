@@ -5,6 +5,7 @@
 //! code lives (P14): the only timers are `approve`'s. No token or credential is printed.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -121,7 +122,7 @@ pub(super) fn hand_over(ready: Ready) -> ExitCode {
         let handler = on_signal as *const () as libc::sighandler_t;
         // SAFETY: `signal` with a handler that does nothing.
         unsafe { libc::signal(libc::SIGINT, handler) };
-        println!("{line}");
+        tell(&line);
     });
     let code = watchdog::run(plan, facts);
     // Joined before the reset, so the thread cannot install the handler after it.
@@ -135,14 +136,21 @@ pub(super) fn hand_over(ready: Ready) -> ExitCode {
     let refused =
         code == ExitCode::from(watchdog::MASK_REFUSED) && !super::status_json(&dir).exists();
     let not_started = code == ExitCode::from(watchdog::NOT_STARTED);
-    print!(
+    let _ = write!(
+        std::io::stdout(),
         "{}",
         finish::closing(&dir, &name, &run, refused, not_started)
     );
     if !refused {
-        finish::wrap_up(&dir, &mut |l| println!("{l}"));
+        finish::wrap_up(&dir, &mut tell);
     }
     if refused { ExitCode::from(1) } else { code }
+}
+
+/// One line to the terminal. A closed terminal is not an error: the run goes on, so a failed
+/// write is dropped (`println!` would panic on it).
+fn tell(line: &str) {
+    let _ = writeln!(std::io::stdout(), "{line}");
 }
 
 fn stop(text: String) -> Stop {
