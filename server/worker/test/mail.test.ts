@@ -9,7 +9,6 @@ import { LocalDb } from "../src/db-local.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
 import type { Env } from "../src/env.ts";
 import { sendNotices } from "../src/mail.ts";
-import { STORAGE_ALERT_KEY, alertStorage } from "../src/notices.ts";
 import { FakeBucket, asR2 } from "./helpers/fake-r2.ts";
 
 const realFetch = globalThis.fetch;
@@ -106,67 +105,4 @@ test("LocalDb: a queued notice is claimed once, again after 15 minutes, and neve
   assert.deepEqual(again.map((n) => n.id), [first[0]!.id]);
   await db.finishNotice(first[0]!.id, "sent", "delivered@resend.dev", "msg", "2026-10-15T12:16:01Z");
   assert.deepEqual(await db.claimNotices(10, "2026-10-15T13:00:00Z"), []);
-});
-
-/** The storage alert's rig: a cron ctx whose runs hold 60 and 50 bytes (sum 110), on a fake bucket. */
-function alertRig(env: Partial<Env>) {
-  const bucket = new FakeBucket();
-  const rows = [
-    { run_id: "r0000000000000002", stored_bytes: 50 },
-    { run_id: "r0000000000000001", stored_bytes: 60 },
-    { run_id: "r0000000000000003", stored_bytes: 0 },
-    { run_id: "r0000000000000004", stored_bytes: 0 },
-  ];
-  const db = { runsForTick: async () => rows };
-  const full = { RESEND_API_KEY: "re_test", NOTICE_FROM: "AC <a@example.test>", ALERT_EMAIL: "owner@example.test", STORAGE_ALERT_BYTES: "100", TRACES: asR2(bucket), ...env };
-  return { ctx: { env: full as Env, db, now: () => NOW } as unknown as Ctx, bucket };
-}
-const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
-
-test("storage alert: below the level sends nothing", async () => {
-  const r = alertRig({ STORAGE_ALERT_BYTES: "111" });
-  const sent = stubResend(() => new Response('{"id":"m"}', { status: 200 }));
-  assert.equal(await alertStorage(r.ctx, NOW), 0);
-  assert.equal(sent.length, 0);
-  assert.equal(r.bucket.map.has(STORAGE_ALERT_KEY), false);
-});
-
-test("storage alert: over the level sends one mail, naming the top 3 runs, and a second tick within 6 hours sends none", async () => {
-  const r = alertRig({});
-  const sent = stubResend(() => new Response('{"id":"m"}', { status: 200 }));
-  assert.equal(await alertStorage(r.ctx, NOW), 1);
-  assert.equal(await alertStorage(r.ctx, at(5)), 0);
-  assert.equal(sent.length, 1);
-  const mail = sent[0]!.body;
-  assert.deepEqual(mail.to, ["owner@example.test"]);
-  assert.equal(mail.subject, "Goal Cup server: stored bytes over the alert level");
-  const text = mail.text as string;
-  assert.match(text, /110/);
-  assert.match(text, /100/);
-  assert.ok(text.indexOf("r0000000000000001") < text.indexOf("r0000000000000002"));
-  assert.equal((text.match(/r0{12}\d{3}/g) ?? []).length, 3);
-  assert.doesNotMatch(text, /@/);
-  assert.equal(await alertStorage(r.ctx, at(6 * 60 + 1)), 1);
-  assert.equal(sent.length, 2);
-});
-
-test("storage alert: level 0 or no ALERT_EMAIL sends nothing", async () => {
-  const sent = stubResend(() => new Response('{"id":"m"}', { status: 200 }));
-  for (const env of [{ STORAGE_ALERT_BYTES: "0" }, { STORAGE_ALERT_BYTES: undefined }, { ALERT_EMAIL: undefined }, { ALERT_EMAIL: "" }, { RESEND_API_KEY: undefined }]) {
-    assert.equal(await alertStorage(alertRig(env).ctx, NOW), 0, JSON.stringify(env));
-  }
-  assert.equal(sent.length, 0);
-});
-
-test("storage alert: staging mails the override; a failed send writes no marker", async () => {
-  const r = alertRig({ STAGING: "on", NOTICE_RECIPIENT_OVERRIDE: "delivered@resend.dev" });
-  let status = 500;
-  const sent = stubResend(() => new Response('{"id":"m"}', { status }));
-  await assert.rejects(alertStorage(r.ctx, NOW), /resend HTTP 500/);
-  assert.equal(r.bucket.map.has(STORAGE_ALERT_KEY), false);
-  status = 200;
-  assert.equal(await alertStorage(r.ctx, at(5)), 1);
-  assert.deepEqual(sent.map((s) => s.body.to), [["delivered@resend.dev"], ["delivered@resend.dev"]]);
-  assert.equal(sent[1]!.body.subject, "[staging] Goal Cup server: stored bytes over the alert level");
-  assert.equal(r.bucket.map.has(STORAGE_ALERT_KEY), true);
 });

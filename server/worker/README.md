@@ -44,8 +44,8 @@ copy, on an organizer machine (`scripts/fetch-run.sh`, then `goalcup-verify chec
 - Only a practice run has a size limit: `PRACTICE_MAX_BYTES` compressed bytes over all its entries
   (1 GiB), then `410 closed` ("This practice run has reached its upload limit."). Competition and test
   runs have none. The database counts `stored_bytes` and `chunk_count` per entry in the step that
-  commits a chunk, the log line `large-run <run_id> stored=<bytes>` marks each 10 GiB a run crosses,
-  and the cron mails `ALERT_EMAIL` when stored bytes pass `STORAGE_ALERT_BYTES` ([The cron](#the-cron)).
+  commits a chunk, and the log line `large-run <run_id> stored=<bytes>` marks each 10 GiB a run crosses.
+  There is no total storage limit or alert: the server keeps everything.
 - The bucket lock (180 days) covers the competition prefix only (`traces/goalcup-cup-2026/`). Dry run,
   practice and test prefixes are not locked. No lifecycle rule deletes objects.
 
@@ -146,10 +146,10 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/auth.ts` | Bearer run credential to member, and the one run it may touch |
 | `src/runs.ts` | Open, continue, position, heartbeat, and the seal (`trySeal`) |
 | `src/chunks.ts` | The chunk upload: early refusals, retry rule, streaming to R2, atomic commit, the seal on the completing chunk |
-| `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit, queue the run emails, the storage alert, purge expired device requests |
+| `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit, queue the run emails, purge expired device requests |
 | `src/notes.ts`, `src/advisories.json` | Server notes: the rows of `advisories.json` that match a run's connector, harness version and OS, sent as `notes` in the open and continue answers |
 | `src/github.ts` | The GitHub API: the judged commit (last push before the deadline) and the headers every GitHub call carries |
-| `src/mail.ts` | Sends each queued notice once through Resend, and the storage alert |
+| `src/mail.ts` | Sends each queued notice once through Resend |
 | `src/db.ts` | The `Db` interface: one method per step, and the run-state rules (`endsAt`, `statusAt`) |
 | `src/db-supabase.ts` | Production: one Postgres function per step, through PostgREST RPC |
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
@@ -172,7 +172,6 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's length. |
 | `PRACTICE_MAX_BYTES` | `1073741824` (1 GiB) | The compressed bytes a practice run may store, over all its entries. A chunk past it is `410 closed`. Competition and test runs have no limit. |
-| `STORAGE_ALERT_BYTES` | `0` (off) | The cron mails `ALERT_EMAIL`, at most once every 6 hours, while the open runs and those that ended in the last 48 hours hold at least this many compressed bytes. The mail names the sum, the level and the 3 largest run ids. `0` or unset is off. The owner sets it (200 GiB suggested: `214748364800`). |
 | `MIN_COMPETITION_VERSION` | empty (no minimum) | The oldest goalcup (`x.y.z`; the first three numbers of what it sends) that may sign in for, or open, a run in any mode. Older, or a version with no `x.y.z` while a minimum is set, is `403` with the update line. A value with no `x.y.z` in it is malformed (parsing is lenient: the first `x.y.z` counts) and makes those two calls `500 misconfigured`; `continue`, heartbeats and everything else are untouched. `wrangler.toml` sets `1.0.0` in both blocks ([steps to raise it](#set-the-minimum-competition-version)). |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local` (`wrangler dev` and tests only). Never set `local` in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |
@@ -192,7 +191,6 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 | `RATE_LIMIT_KEY` | Random, at least 32 characters: the HMAC key of every rate-limit key. A deployment answers every device call `500 misconfigured` without it. |
 | `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's judged commit (repository, activity and possibly `commits/HEAD`), and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. Without it the cron logs `WARNING: GITHUB_TOKEN is not set` and carries on. |
 | `RESEND_API_KEY` | Switches the run emails on. Send-only. |
-| `ALERT_EMAIL` | The owner's address for the storage alert (`STORAGE_ALERT_BYTES`). Unset: no alert. Staging sends it to `NOTICE_RECIPIENT_OVERRIDE`. Never logged. |
 | `TEST_APPROVAL_KEY` | **Tests and staging only.** Switches on `POST /v1/device/approve`, which approves a device request as any member. Set anywhere else, every call answers `500 misconfigured`. Unset, the route is `404`. Never set it in production. |
 
 `test/config.test.ts` reads `wrangler.toml` and fails if the top level names `TEST_APPROVAL_KEY` or
@@ -562,10 +560,9 @@ run as before. Expired device requests stay in the table until it lands.
 
 ## The cron
 
-`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Six steps, in this
+`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Five steps, in this
 order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
-(`src/mail.ts`), `alertStorage` (the storage alert; its marker is `cron/storage-alert.json` in the
-traces bucket) and `purgeDevices` (deletes device requests that expired more than a day ago; needs
+(`src/mail.ts`) and `purgeDevices` (deletes device requests that expired more than a day ago; needs
 the [pending migration](#deploying-a-pending-migration)). All take the time as a parameter. All but `sendNotices` and `purgeDevices` read `Db.runsForTick(now)` (open
 runs, and runs that ended in the last 48 hours). Every notice is decided here, never in a request handler, and a
 staging Worker sends every email to its test inbox. The constants (20 minutes of silence, idle at 3

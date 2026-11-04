@@ -499,10 +499,10 @@ may still upload its wrap-up.
 
 ## What the server does on its own
 
-A cron runs every 5 minutes. It does six things, in this order, and a step that fails is logged
+A cron runs every 5 minutes. It does five things, in this order, and a step that fails is logged
 and does not stop the next: it closes runs that are over (so a run's status is final without any
 call naming it), it records the GitHub commit at each deadline, it queues the run emails in an
-outbox, it sends them, it mails the owner when stored bytes pass an alert level, and it deletes
+outbox, it sends them, and it deletes
 device requests that expired more than a day ago. A client sees none of this. Each outbox row is sent once through Resend
 (`server/worker/src/mail.ts`); the database writes the email, picks the member's address and checks
 suppression. A staging Worker is never given an address by the database and sends every email to

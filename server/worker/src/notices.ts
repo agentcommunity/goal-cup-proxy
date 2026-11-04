@@ -12,7 +12,7 @@
 import { type Ctx, makeCtx } from "./context.ts";
 import { type NoticeKind, type TickRun, endsAt, isReplaced, statusAt } from "./db.ts";
 import type { Env } from "./env.ts";
-import { sendAlert, sendNotices } from "./mail.ts";
+import { sendNotices } from "./mail.ts";
 import { GITHUB_SETTLE, judgedCommit } from "./github.ts";
 import { addSeconds, formatTime, isTime } from "./util.ts";
 
@@ -185,38 +185,6 @@ export async function queueNotices(ctx: Ctx, now: Date): Promise<number> {
   return batch.length === 0 ? 0 : ctx.db.queueNotices(batch);
 }
 
-/** The storage alert's marker `{ "at": <last mail> }`, beside HEALTH_KEY. */
-export const STORAGE_ALERT_KEY = "cron/storage-alert.json";
-/** At most one storage alert in this long. */
-export const STORAGE_ALERT_EVERY = 6 * 3600;
-
-/**
- * Mail the owner when the runs the cron reads (open, or ended within the lookback) hold at least
- * STORAGE_ALERT_BYTES, at most once per STORAGE_ALERT_EVERY. Off when that is 0 or unset, or without
- * ALERT_EMAIL. The text holds the sum, the level and the 3 largest run ids. Returns 1 when it sent.
- */
-export async function alertStorage(ctx: Ctx, now: Date): Promise<number> {
-  const raw = ctx.env.STORAGE_ALERT_BYTES ?? "";
-  const level = raw === "" ? 0 : Number(raw);
-  if (!Number.isFinite(level) || level < 0) throw new Error("STORAGE_ALERT_BYTES must be a number of bytes (0: off)");
-  if (level === 0 || !ctx.env.ALERT_EMAIL) return 0;
-  const runs = await ctx.db.runsForTick(formatTime(now));
-  const sum = runs.reduce((s, r) => s + r.stored_bytes, 0);
-  if (sum < level) return 0;
-  let last: unknown;
-  try {
-    last = ((await (await ctx.env.TRACES.get(STORAGE_ALERT_KEY))?.json()) as { at?: unknown } | null | undefined)?.at;
-  } catch (e) {
-    console.error(`tick alertStorage: cannot read ${STORAGE_ALERT_KEY}: ${message(e)}`);
-  }
-  if (isTime(last) && last > earlier(now, STORAGE_ALERT_EVERY)) return 0;
-  const top = [...runs].sort((a, b) => b.stored_bytes - a.stored_bytes).slice(0, 3);
-  const text = `The runs the cron reads (open, or ended in the last 48 hours) hold ${sum} bytes in R2; the alert level (STORAGE_ALERT_BYTES) is ${level}.\n\nLargest runs:\n${top.map((r) => `${r.run_id} ${r.stored_bytes} bytes`).join("\n")}\n`;
-  if (!(await sendAlert(ctx, "Goal Cup server: stored bytes over the alert level", text))) return 0;
-  await ctx.env.TRACES.put(STORAGE_ALERT_KEY, JSON.stringify({ at: formatTime(now) }));
-  return 1;
-}
-
 /** One cron tick. Each step is on its own: one that fails is logged and the others still run. */
 export async function runTick(env: Env): Promise<void> {
   // While the maintenance switch is on no goalcup can beat, so silence would be false news. The
@@ -237,7 +205,7 @@ export async function runTick(env: Env): Promise<void> {
     return;
   }
   const now = ctx.now();
-  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices], ["sendNotices", sendNotices], ["alertStorage", alertStorage], ["purgeDevices", purgeDevices]] as const) {
+  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices], ["sendNotices", sendNotices], ["purgeDevices", purgeDevices]] as const) {
     try {
       await step(ctx, now);
     } catch (e) {
