@@ -1,11 +1,11 @@
 # Connector schema
 
 A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A new
-connector is its TOML file plus one `entry!("<id>")` line in `crates/goalcup/src/connector/builtin.rs`, the
-one source file that names connector files; `tests/connector_builtin.rs` fails on a file missing from that
-list or an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
-connector. Nothing is pinned. The `start` event names the connector (`connector`, `connector_source`,
-`connector_sha256`) and the host list's hash (`hosts_sha256`).
+connector is its TOML file alone; `crates/goalcup-format/build.rs` builds every `connectors/*.toml`
+into both binaries, and `tests/connector_builtin.rs` fails on an `id` that differs from the file name.
+Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a connector. Nothing is
+pinned. The `start` event names the connector (`connector`, `connector_source`, `connector_sha256`)
+and the host list's hash (`hosts_sha256`).
 
 ## The connector contract
 
@@ -49,6 +49,39 @@ it. Settings rows write `.json`, `.toml`, `.yaml` and `.yml` files only (`.jsonc
 are not writable), never through a link, keeping the other keys; there, as in `skills_dir`, a `*` is
 a literal name. `"true"` and `"false"` become the format's boolean, any other value a string. A row
 not written is a log line, not a refusal.
+
+## The usage table
+
+`[usage]` says where a harness keeps its threads. The recorder accepts it and never reads it;
+`goalcup-verify usage` does. Every key is optional, and an unknown key is refused. A connector
+without the table is wire only.
+
+| Key | Type | What it says |
+|---|---|---|
+| `readers` | list of `{row, file, reader}` | The reader of a `native` row's files. `reader` is `codex-rollout`, `claude-transcript`, `claude-meta`, `hermes-db`, `hermes-task`, `hermes-manifest`, `gemini-chat`, `qwen-chat` or `kimi-wire`. The first row that fits wins |
+| `thread` | string list | Where a wire request names its thread: a request header name (any case), or a `/`-led JSON pointer into a WebSocket `response.create`. The first key present wins |
+| `parent` | string list | Where a wire request names its parent thread, as `thread` |
+| `join` | `"thread"`, `"reply-id"` or `"time"` | How native calls join the wire: by the request's thread (`thread` must not be empty), by the reply's request id, or by time |
+| `thread_rpc` | bool | The WebSocket is a thread socket of JSON-RPC frames that report each model turn |
+| `thread_db` | `{row, file, table, id, parent, xxh3}` | A session database copy read for parent links only: its table, id and parent columns, and whether the wire names a session by the xxh3-64 of its id |
+
+A `file` is a file name with at most one `*`. Rows are not checked against `native`, so a row of an
+earlier build still reads. `usage` is not allowed in a `[[versions]]` row: a release that changes
+its thread headers gets a second `thread` entry instead.
+
+A harness that writes a session format already read, or names its threads in request headers,
+needs data only. A new session format needs a reader in goalcup-verify, a core PR. The verifier
+reads `[usage]` from the built-in connector of that id, so a `--connector` file's table counts only
+in a build that includes the file.
+
+From [`connectors/crush-cli.toml`](../connectors/crush-cli.toml):
+
+```toml
+[usage]
+thread = ["x-session-id"]
+join = "thread"
+thread_db = { row = "db", file = "crush.db*", table = "sessions", id = "id", parent = "parent_session_id", xxh3 = true }
+```
 
 ## Load checks
 
