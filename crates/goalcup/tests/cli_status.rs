@@ -249,6 +249,38 @@ fn status_command_reads_the_files() {
     assert!(!String::from_utf8_lossy(&plain.stdout).contains(text::PART_RECORDED));
 }
 
+/// The first message's path comes back in `status` for the run's first part, and only when the
+/// file exists.
+#[test]
+fn status_shows_where_the_first_message_is() {
+    let home = TempHome::new();
+    let part = part(&home.goalcup_home());
+    let run_dir = part.parent().unwrap();
+    put(run_dir, "server.json", &server_json());
+    put(&part, "status.json", &status(Mode::Recording));
+    let none = goalcup(&home, &["status"]);
+    assert!(!String::from_utf8_lossy(&none.stdout).contains("first-message.txt"));
+    let file = run_dir.join("first-message.txt");
+    std::fs::write(&file, "push\n\nprompt").unwrap();
+    let shown = String::from_utf8_lossy(&goalcup(&home, &["status"]).stdout).into_owned();
+    assert!(shown.contains(&file.display().to_string()), "{shown}");
+}
+
+/// A run opened but never launched (Ctrl-C after the open: no part folder) says so and names
+/// `goalcup continue`, and does not send the participant to support.
+#[test]
+fn status_of_a_run_that_never_launched_says_so() {
+    let home = TempHome::new();
+    let part = part(&home.goalcup_home());
+    put(part.parent().unwrap(), "server.json", &server_json());
+    let out = goalcup(&home, &["status"]);
+    assert_eq!(out.status.code(), Some(1));
+    let all =
+        String::from_utf8_lossy(&out.stderr).into_owned() + &String::from_utf8_lossy(&out.stdout);
+    assert!(all.contains(&format!("goalcup continue {RUN}")), "{all}");
+    assert!(!all.contains(text::SUPPORT_ADDRESS), "{all}");
+}
+
 /// A sealed part shows its end screen after the block (point 6), so a recovered part's counts are
 /// reachable; `--json` is unchanged.
 #[test]

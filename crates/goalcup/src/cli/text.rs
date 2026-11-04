@@ -1055,6 +1055,18 @@ pub fn first_message(file: &Path, copied: bool) -> String {
     )
 }
 
+/// `status` of a run whose newest part was never started (Ctrl-C after the open).
+pub fn not_launched(run: &str, name: &str) -> String {
+    format!(
+        "Run {run} was opened but {name} was not started. To go on, run: goalcup continue {run}"
+    )
+}
+
+/// The `status` line for the file holding the first message.
+pub fn first_message_line(file: &Path) -> String {
+    format!("First message: {}", file.display())
+}
+
 pub fn prompt_not_utf8(file: &Path) -> String {
     format!(
         "{} is not UTF-8 text, so goalcup cannot send it as your prompt.",
