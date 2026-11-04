@@ -9,6 +9,7 @@ pub(crate) mod hints;
 pub mod hosts;
 pub mod launch;
 pub mod schema;
+pub mod version;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
