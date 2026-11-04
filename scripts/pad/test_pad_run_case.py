@@ -431,3 +431,14 @@ class PadOnly(unittest.TestCase):
         r, text = self.setup_for("0.22.6")
         self.assertIn("goalcup-ca", text)
         self.assertEqual(r.st["pad_only"], ["needs the CA block"])
+
+
+class VersionCmdEnv(unittest.TestCase):
+    def test_version_cmd_sees_pad_version(self):
+        seen = []
+        r = bare()
+        r.s, r.h = {"harness_id": "opencode-cli", "version": "1.18.0"}, {"version_cmd": "opencode --version"}
+        with mock.patch.object(padrun, "sh", lambda argv, **kw: seen.append(kw) or mock.Mock(stdout="", returncode=0)):
+            with self.assertRaises(padrun.Step):  # no version printed: setup stops after the first call
+                r.setup(None)
+        self.assertEqual(seen[0]["env"]["PAD_VERSION"], "1.18.0")

@@ -9,7 +9,7 @@
 #
 # Same program name as OpenCode 1: see opencode-cli.toml for the version link that version_cmd sets.
 version = "2.2.2"
-version_cmd = 'if [ -x "$HOME/.opencode/2.2.2/bin/opencode" ]; then mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/2.2.2/bin/opencode" "$HOME/.local/bin/opencode"; fi; opencode --version'
+version_cmd = 'v=${PAD_VERSION:-2.2.2}; if [ -x "$HOME/.opencode/$v/bin/opencode" ]; then mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/$v/bin/opencode" "$HOME/.local/bin/opencode"; fi; opencode --version'
 install = 'npm i -g --prefix "$HOME/.opencode/2.2.2" @opencode/cli@2.2.2 && mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/2.2.2/bin/opencode" "$HOME/.local/bin/opencode"'
 key_kind = "deepseek"
 # The config names the variable ({env:...}); the launch shell exports it from the key file, never echoed.

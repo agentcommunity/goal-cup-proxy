@@ -311,7 +311,7 @@ class Run:
 
     def setup(self, _):
         h, s, sec = self.h, self.s, self.sec
-        got = re.search(r"(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)", sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]]).stdout)
+        got = re.search(r"(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)", sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]], env=dict(os.environ, PAD_VERSION=s["version"])).stdout)
         version = got and got.group(1)  # section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
         if not version:
             raise Step("FAIL", "%s not installed" % s["harness_id"])
