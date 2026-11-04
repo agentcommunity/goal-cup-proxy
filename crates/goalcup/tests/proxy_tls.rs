@@ -331,10 +331,8 @@ async fn an_upstream_signed_by_the_participants_ca_is_decrypted() {
     assert_eq!(conns(&calls, 1).await[0].1["mode"], "decrypt");
 }
 
-/// cr-proxy-5: a null boot relays a decrypted call without a parser, so no HTTP stream opens.
-#[tokio::test]
-async fn null_mode_relays_without_parsing() {
-    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+/// A null boot (`serve_null`) with `api.openai.com` sent to `up`, trusting its test CA.
+fn null_proxy(up: &Upstream) -> (ProxyHandle, SocketAddr, Calls, RunCa) {
     let dir = tempfile::tempdir().unwrap();
     let roots = up.pki().roots_file(dir.path()).display().to_string();
     let env = [
@@ -350,7 +348,33 @@ async fn null_mode_relays_without_parsing() {
     }
     let (listener, addr) = common::ports::held();
     let ca = RunCa::mint(&["openai.com".to_string()]).unwrap();
-    let (_h, calls) = serve_null(&listener, HOST_FILE, ca.clone());
+    // `serve` reads the roots file once, so the folder may go when this returns.
+    let (h, calls) = serve_null(&listener, HOST_FILE, ca.clone());
+    (h, addr, calls, ca)
+}
+
+/// The one `conn`, decrypted with `alpn`, moved bytes both ways, and nothing else opened.
+async fn relayed_unparsed(calls: &Calls, alpn: &str) {
+    let (_, meta, tail) = conns(calls, 1).await.remove(0);
+    assert_eq!(
+        (&meta["mode"], &meta["alpn"]),
+        (&json!("decrypt"), &json!(alpn))
+    );
+    let (up, down) = (tail["up"].as_u64(), tail["down"].as_u64());
+    assert!(up > Some(0) && down > Some(0), "{tail}");
+    assert!(
+        opens(calls)
+            .iter()
+            .all(|(_, kind, _)| *kind == StreamKind::Conn),
+        "a parser ran"
+    );
+}
+
+/// cr-proxy-5: a null boot relays a decrypted call without a parser, so no HTTP stream opens.
+#[tokio::test]
+async fn null_mode_relays_without_parsing() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let (_h, addr, calls, ca) = null_proxy(&up);
     let c = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]));
     let mut t = c
         .connect(name("api.openai.com"), through(addr, TARGET).await)
@@ -358,13 +382,40 @@ async fn null_mode_relays_without_parsing() {
         .unwrap();
     get(&mut t).await;
     drop(t);
-    assert_eq!(conns(&calls, 1).await[0].1["mode"], "decrypt");
-    assert!(
-        opens(&calls)
-            .iter()
-            .all(|(_, kind, _)| *kind == StreamKind::Conn),
-        "a parser ran"
-    );
+    relayed_unparsed(&calls, "http/1.1").await;
+}
+
+/// cr-proxy-5 over h2: the null boot relays the h2 connection without the h2 parser.
+#[tokio::test]
+async fn null_mode_relays_h2_without_parsing() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[H2]));
+    let (_h, addr, calls, ca) = null_proxy(&up);
+    let c = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[b"h2"]));
+    let t = c
+        .connect(name("api.openai.com"), through(addr, TARGET).await)
+        .await
+        .unwrap();
+    let (send, conn) = h2::client::handshake(t).await.unwrap();
+    let driver = tokio::spawn(conn);
+    let mut send = send.ready().await.unwrap();
+    let req = http::Request::get("https://api.openai.com/v1/models")
+        .body(())
+        .unwrap();
+    let mut body = send
+        .send_request(req, true)
+        .unwrap()
+        .0
+        .await
+        .unwrap()
+        .into_body();
+    let mut got = Vec::new();
+    while let Some(piece) = body.data().await {
+        got.extend_from_slice(&piece.unwrap());
+    }
+    assert_eq!(got, b"hi");
+    drop(send);
+    driver.abort();
+    relayed_unparsed(&calls, "h2").await;
 }
 
 /// GAP 14: an upstream that rejects the offered ALPN is an `alpn_other` tunnel.
