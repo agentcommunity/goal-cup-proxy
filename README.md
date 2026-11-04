@@ -65,8 +65,9 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
 **The end.** At the deadline goalcup stops the agent, finishes the record and uploads the rest. The
 end screen says what was written and what was lost. What is judged is the last push to your
 repository's default branch that GitHub received before the deadline. Your agent must push its own
-work; goalcup never pushes. Then hand in your two videos and the questionnaire on the event site
-([rules](docs/RULES.md#submission), [the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
+work; goalcup never pushes. Then hand in the demo and the questionnaire on the event site.
+The setup video was due before the run ([rules](docs/RULES.md#submission),
+[the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
 
 ## Commands
 
