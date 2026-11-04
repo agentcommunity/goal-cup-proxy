@@ -401,7 +401,7 @@ describe("what a seal needs", () => {
   }, {});
 });
 
-describe("no per-run size limit (ledger R5)", () => {
+describe("per-run size: no limit, but a ceiling on practice runs (ledger R5)", () => {
   lifecycle("a run that already holds more than the old 64 GiB limit still gets its next chunk stored", async (r) => {
     const alice = await r.cred("alice");
     const a = await r.start(alice, "s1");
