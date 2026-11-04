@@ -107,6 +107,19 @@ Real harness runs share one signed-in home and key budgets, so they run one at a
 6. G.23: version-matrix rows for the other CORE harnesses.
 7. G.14 at the freeze: all CORE release rows on the frozen head, then `--release-check`.
 
+## Owner answers (4 Nov)
+
+- Start: placeholder 5 December 2026, 00:00 UTC (OWNER-Q stays next to it). Run length may become 48 h instead of 24 h: state it in one place.
+- Hermes base-URL trust entry (H.3): approved as an exception to AGENTS.md:60.
+- Practice/test runs capped at 1 GiB; NO total storage alert or ceiling (collect everything) (J).
+- Old plans go to a public `archive` branch (K.6).
+- Release requires Hermes 0.22.6 verified (G, as data).
+- Three Hermes builds may be installed on the Mac for H.7.
+- Company proxy networks: NOT supported. Lane B drops B.1-B.4 and B.9; B.8 becomes a plain refusal when `HTTPS_PROXY`/`ALL_PROXY` is set; B.5-B.7 stay. Docs say "not supported" in one sentence.
+- Hermes trust lines (H.5): not a fixed list of 9. goalcup writes a trust entry for whatever provider address the participant's Hermes actually uses (its built-in provider or a custom `base_url`), read at start and continue. The 9 built-in routes are only the fallback when nothing can be read. A route proven on one provider (DeepSeek) counts as "works"; others show "not verified" until a row proves them. H.5 must test a custom `base_url`.
+- Split of work: cloud sessions write code; real harness runs and macOS checks run on the owner's Mac.
+- `PAD_STAGING_URL` (G), installer refusal on unreadable output (C.8) and the `build` field (C.11): defaults stand (env var; refuse unless the old goalcup clearly reports no live run, with a plain-English message; drop, since the version string already carries the commit).
+
 ## Owner questions (answer before the lane that needs it starts)
 
 Blocking wave 1:
