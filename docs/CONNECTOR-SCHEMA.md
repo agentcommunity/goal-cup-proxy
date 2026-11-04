@@ -1,10 +1,9 @@
 # Connector schema
 
-A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A
-harness PR adds that file plus one line, `entry!("<id>")`, to the list in
-`crates/goalcup/src/connector/builtin.rs`, the only `.rs` change it may make and the one source file
-that names connector files. `tests/connector_builtin.rs` fails on a file missing from that list or
-an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
+A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A new
+connector is its TOML file plus one `entry!("<id>")` line in `crates/goalcup/src/connector/builtin.rs`, the
+one source file that names connector files; `tests/connector_builtin.rs` fails on a file missing from that
+list or an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
 connector. The `start` event names the connector (`connector`, `connector_source`,
 `connector_sha256`) and the host list's hash (`hosts_sha256`).
 
@@ -54,18 +53,18 @@ not written is a log line, not a refusal.
 ## Harness versions
 
 Goal Cup Proxy reads the harness version, records it and says one plain line. The policy is that no
-version refuses a start; one exception remains today and is being removed (lane F).
+version refuses a start; one exception remains today and is being removed.
 
-- Read: today the first non-empty line of `<program> --version`; planned (lane F): its first
+- Read: today the first non-empty line of `<program> --version`; planned: its first
   version-looking token.
 - Recorded: `harness_version` in the `start` event of every boot, a continue included (see
-  [RECORD-FORMAT](RECORD-FORMAT.md)). Planned (lane I): a version read at seal too.
+  [RECORD-FORMAT](RECORD-FORMAT.md)). Planned: a version read at seal too.
 - Refused: today only the `version` key of `opencode-cli` and `opencode2-cli`, on a version that
-  does not match its prefix. Lane F removes that refusal.
+  does not match its prefix. That refusal is being removed.
 - A known problem: today a `[[version_notes]]` row (`versions`, `say`), said at start and recorded;
-  planned (lane I): a `[[versions]]` note.
+  planned: a `[[versions]]` note.
 - "Verified" is not a connector field. [`connectors/tiers.toml`](../connectors/tiers.toml) is
-  written from pad rows; (version, os) pairs are planned (lane G).
+  written from pad rows; (version, os) pairs are planned.
 
 ## Load checks
 

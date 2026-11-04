@@ -38,8 +38,7 @@ All times are UTC.
   limited to any window. The release is published before the start window; it is not a cutoff, and
   releases may follow (D70).
 - **Start window:** opens 5 December 2026, 00:00 UTC (placeholder, OWNER-Q date: confirm) and lasts
-  24 hours (OWNER-Q length: may become 48 hours). This line is the one place that states the date
-  and the length; the event site shows the same.
+  24 hours (OWNER-Q length: may become 48 hours).
 - **During the window:** you finalize your prompt and start your run.
 - **The run's start:** the server opens the run, stamps its official start on its own clock, and
   sets its deadline 168 hours later.
@@ -409,11 +408,11 @@ supported recording path and its runs do not count.
   material. Ask for it in your prompt: the goal-cup skill tells Codex and Claude Code, but not every
   harness gets that skill.
 - **Two videos and a questionnaire.** Both the setup video and the demo video are required. The
-  setup video comes before the run: the goal, the harness, the model and the plan. It is due by
-  OWNER-Q setup-due. The demo comes after the run and shows the product; it and the questionnaire
-  are due 24 hours after your own 168 hours end. You hand in both videos and the questionnaire on the
-  event site (OWNER-Q setup-upload: where the setup video goes), not through Goal Cup Proxy. Nothing
-  is added to your repository for them.
+  setup video comes before the run: the goal, the harness, the model and the plan. Its due time is
+  not set yet (OWNER-Q setup-due). The demo comes after the run and shows the product; it and the
+  questionnaire are due 24 hours after your own 168 hours end. You hand in both videos and the
+  questionnaire on the event site (OWNER-Q setup-upload: where the setup video goes), not through
+  Goal Cup Proxy. Nothing is added to your repository for them.
 - A local product may run for demonstration, and ordinary runtime data and caches are allowed. Source,
   history and submitted artifacts must stay unchanged through judging. Online services may not be
   rebuilt or redeployed with changed code.
