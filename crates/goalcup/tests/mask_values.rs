@@ -802,6 +802,7 @@ fn the_start_line_with_32_long_values_fits() -> Res {
             workspace: project.clone(),
             connector: to_value(&plan.connector)?,
             harness_version: Some("1.2.3 (fake)".into()),
+            version_row: None,
             keep: true,
             build: Some("f".repeat(40)),
             hosts: to_value(&plan.hosts)?,

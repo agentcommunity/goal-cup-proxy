@@ -109,6 +109,21 @@ impl World {
         prepare(&a, &self.gc(), &self.project, &vars, &mut Vec::new())
     }
 
+    /// Makes the connector's program a script with `body`.
+    fn program(&self, body: &str) {
+        let script = self.t.home().join("tester-bin");
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let toml = std::fs::read_to_string(&self.connector).unwrap();
+        let program = format!("program = \"{}\"", script.display());
+        std::fs::write(
+            &self.connector,
+            toml.replace("program = \"true\"", &program),
+        )
+        .unwrap();
+    }
+
     fn prepare(&self) -> Result<Ready, Stop> {
         self.go(Some(&self.connector), None)
     }
@@ -371,6 +386,36 @@ fn the_push_lines_come_back_after_a_ctrl_c_after_the_open() {
     assert!(!said.contains(text::PUSH_FRAME), "{said}");
 }
 
+/// A build that changed since the last part is said and recorded as one `version_read` note.
+#[test]
+fn a_changed_version_at_continue_is_a_note() {
+    let worker = FakeWorker::start();
+    next_part(&worker);
+    let mut w = World::new(Some(worker.url()));
+    w.program("#!/bin/sh\necho tester 1.2.4\n");
+    w.part(1, false, Some(World::sealed(json!({"model_requests": 1}))));
+    w.parts[0]["harness_version"] = json!("tester 1.2.3");
+    w.save();
+    let a = Args {
+        run: None,
+        connector: Some(&w.connector),
+        hosts: None,
+    };
+    let vars = [("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())].into();
+    let mut out = Vec::new();
+    let ready =
+        prepare(&a, &w.gc(), &w.project, &vars, &mut out).unwrap_or_else(|s| panic!("{}", s.text));
+    let notes: Vec<&Value> = (ready.facts.notes.iter())
+        .filter(|n| n["what"] == "version_read")
+        .collect();
+    let want = json!({"ev": "note", "what": "version_read", "line": "tester 1.2.4",
+        "version": "1.2.4", "before": "1.2.3"});
+    assert_eq!(notes, [&want]);
+    let shown = String::from_utf8(out).unwrap();
+    let updated = text::updated("Tester", "tester 1.2.3", "tester 1.2.4");
+    assert!(shown.contains(&updated), "{shown}");
+}
+
 /// An unreadable harness version goes up on the continue call as the string "unknown", never null.
 #[test]
 fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
@@ -407,18 +452,7 @@ fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
     });
     let mut w = World::new(Some(format!("http://{addr}")));
     // A program whose version probe fails: the version is unread.
-    let script = w.t.home().join("tester-none");
-    std::fs::write(&script, "#!/bin/sh\nexit 1\n").unwrap();
-    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let body = std::fs::read_to_string(&w.connector).unwrap();
-    std::fs::write(
-        &w.connector,
-        body.replace(
-            "program = \"true\"",
-            &format!("program = \"{}\"", script.display()),
-        ),
-    )
-    .unwrap();
+    w.program("#!/bin/sh\nexit 1\n");
     w.part(1, false, Some(World::sealed(json!({"model_requests": 2}))));
     w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
     assert_eq!(seen.join().unwrap()["harness_version"], json!("unknown"));

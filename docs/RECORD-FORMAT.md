@@ -201,6 +201,16 @@ A `recovered` seal (a dead entry closed later) is the `seal` event inside the re
 Recovery). The `seal` event also carries `server_reason` when the server gave one. Nothing follows
 the seal's LINK.
 
+Some `start` keys:
+
+- `harness_semver`: the build parsed from `harness_version` (`1.2.3`, suffix kept), or null.
+- `version_row`: the `match` of the connector's `[[versions]]` row that set the rules, or null for the base.
+
+Some `note` kinds (`what`):
+
+- `version_read`: `line`, `version`, `before`: the harness build changed since the last part
+  (written at `continue`).
+
 ## Compression, chunks and crash recovery
 
 - Each part file is one zstd frame (plus recovery frames): level 3 (`LEVEL`), window 2^27

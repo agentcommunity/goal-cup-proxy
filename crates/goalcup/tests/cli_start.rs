@@ -361,17 +361,17 @@ fn an_unread_harness_version_is_said_and_the_run_starts() {
     assert!(!logs(read.t.home()).contains("version_unread"));
 }
 
-/// Runs a real start whose harness reports `version`, with a note for 1.2.3. Returns the start
-/// screen and every `version_note` event in the record.
-fn start_with_note(version: &str) -> (String, usize) {
+/// Runs a real start whose harness script is `body`, with a note for 1.2.3. Returns the start
+/// screen, the number of `version_note` events in the record and the `start` event.
+fn start_with_note(body: &str) -> (String, usize, Value) {
     let note = "[[versions]]\nmatch = \"1.2.3\"\nsay = \"Tester 1.2.3 loses calls.\"\n";
-    let fix = scripted(&format!("#!/bin/sh\necho tester v{version}\n"), note);
+    let fix = scripted(&format!("#!/bin/sh\n{body}\n"), note);
     let w = FakeWorker::start();
     let out = spawn_start(&fix, &w.url());
     let shown = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(out.status.code(), Some(0), "{shown}");
     let entries = std::fs::read_dir(fix.gc().join("runs").join(RUN_ID)).unwrap();
-    let recorded = entries
+    let events: Vec<Value> = entries
         .flatten()
         .filter(|e| e.path().join("rec").is_dir())
         .flat_map(|e| common::recorder::records(&e.path()))
@@ -381,16 +381,19 @@ fn start_with_note(version: &str) -> (String, usize) {
             }
             _ => None,
         })
-        .filter(|ev| ev["ev"] == "note" && ev["what"] == "version_note")
-        .count();
-    (shown, recorded)
+        .collect();
+    let notes = events
+        .iter()
+        .filter(|ev| ev["ev"] == "note" && ev["what"] == "version_note");
+    let start = events.iter().find(|ev| ev["ev"] == "start").cloned();
+    (shown, notes.count(), start.unwrap_or_default())
 }
 
 /// A version with a note is told to the participant and recorded as a note event, and the run
 /// still opens.
 #[test]
 fn a_version_note_is_said_and_recorded_and_the_run_still_opens() {
-    let (shown, recorded) = start_with_note("1.2.3");
+    let (shown, recorded, _) = start_with_note("echo tester v1.2.3");
     assert!(shown.contains("Tester 1.2.3 loses calls."), "{shown}");
     assert!(shown.contains(text::PART_RECORDED), "{shown}");
     assert_eq!(recorded, 1);
@@ -400,9 +403,28 @@ fn a_version_note_is_said_and_recorded_and_the_run_still_opens() {
 #[test]
 fn another_version_gets_no_note() {
     for version in ["1.2.4", "1.2.30"] {
-        let (shown, recorded) = start_with_note(version);
+        let (shown, recorded, _) = start_with_note(&format!("echo tester v{version}"));
         assert!(!shown.contains("loses calls"), "{shown}");
         assert_eq!(recorded, 0);
+    }
+}
+
+/// The start event names the parsed build and the `[[versions]]` row that set the rules; null
+/// for the base rules and for a version that could not be read.
+#[test]
+fn the_start_event_names_the_build_and_the_row() {
+    // The last case prints nothing and exits 1 for `--version`, and runs as a clean harness.
+    for (body, semver, row) in [
+        ("echo tester v1.2.3", json!("1.2.3"), json!("1.2.3")),
+        ("echo tester v1.2.4", json!("1.2.4"), Value::Null),
+        ("[ \"$1\" != --version ]", Value::Null, Value::Null),
+    ] {
+        let (_, _, start) = start_with_note(body);
+        assert_eq!(
+            (&start["harness_semver"], &start["version_row"]),
+            (&semver, &row),
+            "{start}"
+        );
     }
 }
 

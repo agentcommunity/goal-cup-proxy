@@ -298,6 +298,15 @@ pub fn prepare(
     if let (Some(a), Some(b)) = (before, now) {
         lines.extend((a != b).then(|| text::updated(&name, a, b)));
     }
+    let parsed = |line: Option<&str>| line.and_then(connector::version::parse).map(|v| v.text);
+    let (was, is) = (parsed(before), parsed(now));
+    if let Some(line) = now
+        && is != was
+    {
+        plan.notes
+            .push(json!({"ev": "note", "what": "version_read", "line": line,
+            "version": is, "before": was}));
+    }
     lines.extend(plan.effective.first_screen.clone());
     lines.extend(first_message(
         &found.run_dir,

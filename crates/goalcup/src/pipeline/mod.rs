@@ -713,6 +713,7 @@ fn test_facts(dir: &std::path::Path) -> (crate::watchdog::StartFacts, crate::wat
         workspace: dir.to_path_buf(),
         connector: Value::Null,
         harness_version: None,
+        version_row: None,
         keep: true,
         build: None,
         hosts: Value::Null,

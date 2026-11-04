@@ -403,6 +403,7 @@ pub(super) fn start_facts(
         // Each of these five becomes the typed field of the same name (S17) with one edit.
         connector: to_value(&plan.connector).unwrap_or_default(),
         harness_version: plan.harness_version.clone(),
+        version_row: plan.version_row.clone(),
         keep: vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
         build: None,
         hosts: to_value(&plan.hosts).unwrap_or_default(),

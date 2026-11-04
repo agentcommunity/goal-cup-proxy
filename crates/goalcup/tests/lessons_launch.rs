@@ -183,6 +183,7 @@ fn watchdog_world() -> std::process::ExitCode {
         workspace: entry.clone(),
         connector: serde_json::to_value(&connector).unwrap(),
         harness_version: None,
+        version_row: None,
         keep: true,
         build: None,
         hosts: serde_json::to_value(&hosts).unwrap(),

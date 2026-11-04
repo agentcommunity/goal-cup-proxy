@@ -148,6 +148,9 @@ pub struct StartFacts {
     pub connector: serde_json::Value,
     /// `LaunchPlan.harness_version`; null when it could not be read.
     pub harness_version: Option<String>,
+    /// `LaunchPlan.version_row`: the `[[versions]]` row that set the rules; null for the base.
+    #[serde(default)]
+    pub version_row: Option<String>,
     /// `GOALCUP_KEEP_PARTS=1`.
     pub keep: bool,
     /// The 40-hex commit the binary was built from, or null. The version is the binary's own
@@ -1187,6 +1190,7 @@ mod tests {
                 workspace: env.workspace.clone(),
                 connector: to_value(&plan.connector).unwrap(),
                 harness_version: Some("1.2.3 (fake)".into()),
+                version_row: None,
                 keep: true,
                 build: Some("f".repeat(40)),
                 hosts: to_value(&plan.hosts).unwrap(),

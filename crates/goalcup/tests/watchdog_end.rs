@@ -120,6 +120,7 @@ impl Fixture {
             workspace: self.d.clone(),
             connector: to_value(&plan.connector).unwrap(),
             harness_version: None,
+            version_row: None,
             keep: true,
             build: None,
             hosts: to_value(&plan.hosts).unwrap(),
