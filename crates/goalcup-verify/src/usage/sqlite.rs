@@ -285,9 +285,18 @@ fn query<T>(db: &[u8], wal: &[u8], f: impl FnOnce(&Connection) -> Option<T>) -> 
     #[cfg(unix)]
     std::os::unix::fs::DirBuilderExt::mode(&mut mk, 0o700);
     mk.create(&dir).ok()?;
-    let got = open(&dir, db, wal).and_then(|c| f(&c));
-    let _ = std::fs::remove_dir_all(&dir);
-    got
+    // Removed on return and on a panic in `f`, after the connection (dropped inside the closure).
+    let dir = Rm(dir);
+    open(&dir.0, db, wal).and_then(|c| f(&c))
+}
+
+/// A private copy's directory, removed when dropped.
+struct Rm(std::path::PathBuf);
+
+impl Drop for Rm {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 /// The copy opened read-only, its schema untrusted: a view or trigger the record's author wrote
