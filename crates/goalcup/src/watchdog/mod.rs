@@ -252,6 +252,10 @@ const QUICK_NS: u64 = SEC;
 /// the listener is soon served again; growing, so a boot that always dies never spins.
 const SPACE_MAX_NS: u64 = NULL_WAITS[0] * SEC;
 
+/// A recorder that cannot be spawned this long after the harness exit is given up: the entry is
+/// left for `close_dead_entry`. While the harness runs the tries never stop.
+const SPAWN_GIVE_UP_NS: u64 = 30 * SEC;
+
 /// A null recorder that has not exited this long after the `restart` line is killed.
 const RESTART_KILL_NS: u64 = 10 * SEC;
 
@@ -428,6 +432,8 @@ fn watch(
     let mut restarts = Restarts::default();
     // Whether the next boot runs `--null`, decided when the last one ended.
     let mut next_null = false;
+    // Since when the next recorder cannot be spawned.
+    let mut failing_since: Option<Mono> = None;
     // After a server `stop` the seal may come first: the harness is waited for all the same.
     while !(sealed || left) || harness_pid.is_some() {
         let next = boot.next();
@@ -584,20 +590,30 @@ fn watch(
             }
             // A new boot takes the seal after `ready`.
             (restarts.hold, left) = (None, false);
-            let mut failed = false;
-            boot = loop {
-                match Boot::start(recorder_exe, listener, &facts, recorder_pid, next_null) {
-                    Ok(next) => break next,
-                    Err(e) => {
-                        if !failed {
-                            line(&dir, "recorder_spawn_failed", &[("io", Fact::Io(e.kind()))]);
+            // One try a tick; the ended boot stays (its `next` sleeps the tick).
+            match Boot::start(recorder_exe, listener, &facts, recorder_pid, next_null) {
+                Ok(next) => {
+                    (boot, failing_since) = (next, None);
+                    boots += 1;
+                }
+                Err(e) => {
+                    let now = Mono::now();
+                    if failing_since.is_none() {
+                        line(&dir, "recorder_spawn_failed", &[("io", Fact::Io(e.kind()))]);
+                    }
+                    // While the harness runs the clock stays at now: the give-up counts from
+                    // its exit.
+                    match failing_since {
+                        Some(t) if harness_pid.is_none() => {
+                            if now.0.saturating_sub(t.0) >= SPAWN_GIVE_UP_NS {
+                                line(&dir, "recorder_spawn_gave_up", &[]);
+                                left = true;
+                            }
                         }
-                        failed = true;
-                        thread::sleep(spawn::TICK);
+                        _ => failing_since = Some(now),
                     }
                 }
-            };
-            boots += 1;
+            }
         }
         restarts.tick(&mut boot, seal.is_some());
     }

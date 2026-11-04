@@ -348,6 +348,59 @@ fn watchdog_end_real_killed_recorder_restarts() {
     orphan_ended(&f);
 }
 
+/// Point 3 (review focus 2): a recorder that can no longer be spawned never ends the watch while
+/// the harness runs, and never wedges it after: the watchdog gives up 30 s after the harness
+/// exit, and the entry is left for `close_dead_entry`.
+#[test]
+fn watchdog_end_real_unspawnable_recorder_ends_after_the_harness() {
+    let f = Fixture::new();
+    // Every boot after the first fails with ENOENT.
+    let rec = f.m("rec.sh");
+    let text = format!(
+        "#!/bin/sh\nrm -f \"$0\"\nexec \"{}\" \"$@\"\n",
+        real().display()
+    );
+    std::fs::write(&rec, text).unwrap();
+    std::fs::set_permissions(&rec, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let (entry_dir, stop) = (f.entry_dir.clone(), f.m("stop"));
+    let (stopped_tx, stopped_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        f.run(&rec, move || {
+            let pid = until("the recorder", || {
+                let s: serde_json::Value = cli::read_json(&cli::status_json(&entry_dir))?;
+                let counts = std::fs::metadata(entry_dir.join("counts.jsonl")).ok()?;
+                s["pid"].as_u64().filter(|p| *p > 0 && counts.len() > 0)
+            });
+            // SAFETY: a signal to one pid, the recorder's.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            let log = entry_dir.join("goalcup.log");
+            until("recorder_spawn_failed", || {
+                let l = std::fs::read_to_string(&log).ok()?;
+                l.contains("recorder_spawn_failed").then_some(())
+            });
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            stopped_tx.send(std::time::Instant::now()).unwrap();
+            std::fs::write(stop, "").unwrap();
+        });
+        let _ = done_tx.send(f);
+    });
+    let f = done_rx.recv_timeout(WAIT).expect("the watchdog wedged");
+    let stopped = stopped_rx.recv().unwrap();
+    assert!(stopped.elapsed() >= std::time::Duration::from_secs(29));
+    assert!(stopped.elapsed() < std::time::Duration::from_secs(60));
+    let log = std::fs::read_to_string(f.entry_dir.join("goalcup.log")).unwrap();
+    assert!(log.contains("recorder_spawn_gave_up"), "{log}");
+    assert!(matches!(
+        goalcup::pipeline::close_dead_entry(&f.entry_dir),
+        Ok(goalcup::pipeline::Closed::Sealed(_))
+    ));
+    for name in ["child.pid", "orphan.pid"] {
+        // SAFETY: a signal to one pid this test started.
+        unsafe { libc::kill(pid_in(&f.m(name)).unwrap() as libc::pid_t, libc::SIGKILL) };
+    }
+}
+
 /// Point 3 (PRD-02 section 8 step 10): at the deadline (boot time, from the start facts) the
 /// harness, its child and its orphan get SIGTERM, then SIGKILL; the recorder is never signalled
 /// (it seals as boot 0 with reason `deadline`, not `signal`), nor is the watchdog (this test).
