@@ -228,5 +228,32 @@ class TierOs(unittest.TestCase):
         self.assertIn('os = "darwin-arm64"\nreason', table.render_tiers({"hermes-cli": self.tier(hermes_rows())}))
 
 
+class ReleaseVersions(Repo):
+    HERMES = 'release_versions = ["0.22.5", "0.22.6"]\n[gateway]\n'
+
+    def test_listed_version_without_rows_fails(self):
+        code, out = self.check(self.repo(green_rows(), harness={"hermes-cli": self.HERMES}))
+        self.assertEqual(code, 1, out)
+        self.assertIn("hermes-cli direct full 0.22.6 on darwin-arm64: missing", out)
+        self.assertNotIn("0.22.5 on darwin-arm64", out)
+
+    def test_every_listed_version_verified_passes(self):
+        rows = green_rows()
+        rows += [dict(r, harness_version="0.22.6", started=r["started"].replace("T19", "T21"))
+                 for r in rows if r["connector"] == "hermes-cli"]
+        code, out = self.check(self.repo(rows, harness={"hermes-cli": self.HERMES}))
+        self.assertEqual(code, 0, out)
+
+    def test_other_system_does_not_count(self):
+        rows = green_rows()
+        rows += [dict(r, harness_version="0.22.6", os="linux-x86_64", started=r["started"].replace("T19", "T21"))
+                 for r in rows if r["connector"] == "hermes-cli"]
+        code, out = self.check(self.repo(rows, harness={"hermes-cli": self.HERMES}))
+        self.assertIn("hermes-cli gateway full 0.22.6 on darwin-arm64: missing", out)
+
+    def test_the_hermes_file_requires_0_22_6(self):
+        self.assertIn("0.22.6", table.release_versions(table.harness_lines("hermes-cli")))
+
+
 if __name__ == "__main__":
     unittest.main()

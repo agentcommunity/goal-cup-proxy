@@ -68,6 +68,12 @@ def passed(r):  # PASS, or every check PASS but C3 not exercised (Hermes sends n
 def counts(r): return passed(r) and not g(r.get("facts"), "masked_upstream") and not r.get("pad_only")
 
 NO_TIER_ROW = {("claude-code-cli", "gateway")}  # the owner's 3 Nov exemption: no tier or release row for it
+RELEASE_OS = "darwin-arm64"  # the release check's system for release_versions
+
+def release_versions(lines):
+    """`release_versions = ["<v>", ...]` in a harness file: the versions a release needs verified ([] if absent)."""
+    m = next(filter(None, map(re.compile(r"release_versions\s*=\s*\[(.*)\]").fullmatch, lines)), None)
+    return re.findall(r'"([^"]+)"', m.group(1)) if m else []
 
 def has_gateway(cid, rows, lines=None):
     # gateway is n/a, and does not block, when the harness file has no [gateway] table (no documented route).
@@ -169,8 +175,12 @@ def release_check(commit):
         if r is not None and ok(r):
             return used.append((name, r))
         items.append("%s: %s" % (name, "missing" if r is None else say(r)))
-    for cid, case in [(cid, case) for cid in CORE for case in CASES if (cid, case) not in NO_TIER_ROW]:
-        need("%s %s full" % (cid, case), tier_row((cid,), case))
+    for cid in CORE:  # release_versions in the harness file (owner, 4 Nov): each listed version on RELEASE_OS
+        for v in release_versions(harness_lines(cid, sha)) or [None]:  # no key: the latest rows, any version
+            for case in [c for c in CASES if (cid, c) not in NO_TIER_ROW]:
+                want = tier_row((cid,), case)
+                need("%s %s full%s" % (cid, case, " %s on %s" % (v, RELEASE_OS) if v else ""), want if v is None else
+                     lambda r, w=want, v=v: w(r) and r.get("harness_version") == v and r.get("os") == RELEASE_OS)
     need("codex-cli direct full kill-recorder", lambda r: r.get("connector") == "codex-cli"
          and r.get("case") == "direct" and r.get("mode") == "full" and kills(r)
          and "connector copy" not in (r.get("variant") or []))  # section 9 means the shipped connector
