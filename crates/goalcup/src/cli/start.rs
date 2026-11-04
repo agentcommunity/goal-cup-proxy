@@ -470,16 +470,33 @@ struct Row {
     /// Where it was verified, as the pad's `os_id` (`darwin-arm64`); absent or `""` is unknown.
     #[serde(default)]
     os: String,
+    /// The verified builds, newest first; with none, a non-empty `(version, os)` is the one build.
+    #[serde(default)]
+    builds: Vec<Build>,
+}
+
+/// One verified `[[<id>.builds]]` entry.
+#[derive(serde::Deserialize)]
+struct Build {
+    version: String,
+    #[serde(default)]
+    os: String,
 }
 
 /// Section 6: the tier line of the connector, from `tiers.toml`.
 fn tier_line(name: &str, probed: Option<&str>, id: &str) -> String {
     let mut rows: BTreeMap<String, Row> = toml::from_str(TIERS).unwrap_or_default();
     let row = rows.remove(id).unwrap_or_default();
+    let text = |v: &str| connector::version::parse(v).map_or(v.to_owned(), |p| p.text);
+    let mut builds: Vec<(String, String)> = (row.builds.iter())
+        .map(|b| (text(&b.version), b.os.clone()))
+        .collect();
+    if builds.is_empty() && !row.version.is_empty() {
+        builds.push((text(&row.version), row.os));
+    }
     let version = probed.and_then(connector::version::parse).map(|v| v.text);
-    let verified = connector::version::parse(&row.version).map_or(row.version.clone(), |v| v.text);
     let os = std::env::consts::OS;
-    text::tier_line(name, version.as_deref(), &row.tier, &verified, &row.os, os)
+    text::tier_line(name, version.as_deref(), &row.tier, &builds, os)
 }
 
 pub(super) fn wall_ms() -> u64 {
@@ -501,8 +518,12 @@ mod tests {
     /// A tiers file that stops parsing would turn every agent into "not verified" without a word.
     #[test]
     fn tiers_file_parses() {
-        let rows = toml::from_str::<std::collections::BTreeMap<String, super::Row>>(super::TIERS);
+        type Rows = std::collections::BTreeMap<String, super::Row>;
+        let rows = toml::from_str::<Rows>(super::TIERS);
         assert!(rows.is_ok_and(|r| !r.is_empty()));
+        let with = "[x]\ntier = \"verified\"\nversion = \"\"\n[[x.builds]]\nversion = \"1.0.0\"\nos = \"linux-x86_64\"\n";
+        let rows = toml::from_str::<Rows>(with).unwrap();
+        assert_eq!(rows["x"].builds[0].version, "1.0.0");
     }
 
     // Harness names are stand-ins: rule_code bans real ones in core code.
@@ -521,40 +542,45 @@ mod tests {
     #[test]
     fn tier_line_says_build_and_os() {
         use crate::cli::text::tier_line;
-        let row = |v, host| tier_line("Fakev", v, "verified", "0.22.6", "darwin-arm64", host);
+        let b: Vec<(String, String)> = [
+            ("0.22.6", "darwin-arm64"),
+            ("0.22.5", "darwin-arm64"),
+            ("0.22.5", "linux-x86_64"),
+        ]
+        .map(|(v, os)| (v.to_owned(), os.to_owned()))
+        .into();
+        let row = |v, b: &[_], host| tier_line("Fakev", v, "verified", b, host);
         assert_eq!(
-            row(Some("0.22.6"), "macos"),
-            "Fakev 0.22.6: verified with goalcup on 0.22.6 (macOS)."
+            row(Some("0.22.5"), &b, "macos"),
+            "Fakev 0.22.5: verified with goalcup on 0.22.5 (macOS)."
         );
         assert_eq!(
-            row(Some("0.22.7"), "macos"),
-            "Fakev 0.22.7: not verified on 0.22.7; verified with goalcup on 0.22.6 (macOS). goalcup records it the same way; goalcup status says if model requests are missing."
+            row(Some("0.22.7"), &b, "macos"),
+            "Fakev 0.22.7: not verified on 0.22.7; verified with goalcup on 0.22.6, 0.22.5 (macOS). goalcup records it the same way; goalcup status says if model requests are missing."
         );
         assert_eq!(
-            row(Some("0.22.6"), "linux"),
+            row(Some("0.22.6"), &b, "linux"),
+            "Fakev 0.22.6: not verified on 0.22.6; verified with goalcup on 0.22.5 (Linux). goalcup records it the same way; goalcup status says if model requests are missing."
+        );
+        assert_eq!(
+            row(Some("0.22.6"), &b[..2], "linux"),
             "Fakev 0.22.6: verified with goalcup on 0.22.6 (macOS), not on Linux. goalcup records it the same way; goalcup status says if model requests are missing."
         );
         assert_eq!(
-            row(None, "macos"),
-            "Fakev: verified with goalcup on 0.22.6 (macOS); the version here could not be read, so goalcup cannot say it is that build."
+            row(None, &b, "macos"),
+            "Fakev: verified with goalcup on 0.22.6, 0.22.5 (macOS); the version here could not be read, so goalcup cannot say it is that build."
         );
+        let one = [("2.1.312".to_owned(), String::new())];
         assert_eq!(
-            tier_line(
-                "Fake Code",
-                Some("2.1.312"),
-                "verified",
-                "2.1.312",
-                "",
-                "linux"
-            ),
+            tier_line("Fake Code", Some("2.1.312"), "verified", &one, "linux"),
             "Fake Code 2.1.312: verified with goalcup on 2.1.312."
         );
         assert_eq!(
-            tier_line("Fakev", Some("0.22.6"), "not verified", "", "", "linux"),
+            tier_line("Fakev", Some("0.22.6"), "not verified", &[], "linux"),
             "Fakev 0.22.6: not verified. goalcup records what reaches it; goalcup status says if model requests are missing."
         );
         assert_eq!(
-            tier_line("Fakev", None, "not supported", "", "", "linux"),
+            tier_line("Fakev", None, "not supported", &[], "linux"),
             "Fakev: not supported. goalcup records its session files and the connections it can see, not its model calls."
         );
     }
