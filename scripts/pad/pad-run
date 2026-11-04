@@ -313,7 +313,7 @@ class Run:
     def setup(self, _):
         h, s, sec = self.h, self.s, self.sec
         r = sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]])
-        version = harness_version.parse(next((l for l in r.stdout.splitlines() if l.strip()), ""))  # section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
+        version = harness_version.parse(next((l for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()), ""))  # stdout's first line, else stderr's, as goalcup; section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
         if not version:
             raise Step("FAIL", "%s not installed" % s["harness_id"])
         self.st.update(harness_version=version, plain_planted=True)

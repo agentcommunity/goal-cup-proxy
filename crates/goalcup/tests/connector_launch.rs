@@ -203,12 +203,20 @@ fn opencode_ids_share_a_program() {
 
 #[test]
 fn a_wrong_opencode_pick_names_the_other_connector() {
-    let fake = |d: &Path, body: &str| {
+    let fake_on = |d: &Path, body: &str, resume: bool| {
         let program = d.join("opencode");
         std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        finished("opencode-cli", &env(d, &[]), d)
+        finished(
+            "opencode-cli",
+            &Env {
+                resume,
+                ..env(d, &[])
+            },
+            d,
+        )
     };
+    let fake = |d: &Path, body: &str| fake_on(d, body, false);
     let dir = tempfile::tempdir().unwrap();
     let refusal = fake(dir.path(), "echo opencode v2.2.2").refusal.unwrap();
     let want = Refusal::VersionMismatch {
@@ -226,6 +234,12 @@ fn a_wrong_opencode_pick_names_the_other_connector() {
     let plan = fake(dir.path(), "echo boom; exit 1");
     assert_eq!(plan.refusal, None);
     let say = "goalcup could not read opencode --version, so it could not check this is opencode 1.x. If it is 2.x, run: goalcup setup --harness opencode2-cli";
+    assert_eq!(plan.version_notes, vec![say]);
+    // A run being continued keeps its connector: the 2.x pick is a note, never a refusal.
+    let dir = tempfile::tempdir().unwrap();
+    let plan = fake_on(dir.path(), "echo opencode v2.2.2", true);
+    assert_eq!(plan.refusal, None);
+    let say = "opencode 2.2.2 is not the version this connector was written for (1.x). goalcup records it the same way; goalcup status says if model requests are missing.";
     assert_eq!(plan.version_notes, vec![say]);
 }
 

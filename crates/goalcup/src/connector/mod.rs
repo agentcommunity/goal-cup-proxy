@@ -241,10 +241,11 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         .then(|| launch::harness_version(&program, &harness_env))
         .flatten();
     let read = harness_version.as_deref().and_then(version::parse);
-    let others: Vec<_> = version::same_program(&connector.program)
-        .into_iter()
-        .filter(|(id, _)| *id != connector.id)
-        .collect();
+    // Only a connector with a `version` key asks, so a start does not read every built-in.
+    let others = || -> Vec<_> {
+        let all = version::same_program(&connector.program).into_iter();
+        all.filter(|(id, _)| *id != connector.id).collect()
+    };
     let said = |n: &&schema::VersionNote| {
         let hit = |spec: &String| read.as_ref().is_some_and(|v| version::matches(v, spec));
         n.versions.iter().any(hit)
@@ -254,7 +255,10 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         .collect();
     let version_refusal = match (&connector.version, &read) {
         (Some(want), Some(v)) if !version::matches(v, want) => {
-            let sibling = others.iter().find(|(_, spec)| version::matches(v, spec));
+            // A run being continued keeps its connector: a note, never a refusal mid-run.
+            let others = others();
+            let sibling =
+                (others.iter().filter(|_| !env.resume)).find(|(_, spec)| version::matches(v, spec));
             if sibling.is_none() {
                 version_notes.push(version::untested_say(&connector.program, &v.text, want));
             }
@@ -265,8 +269,12 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
                 sibling: id.to_string(),
             })
         }
+        // Unread with no other connector to name: start's own "could not be read" line says it.
         (Some(want), None) if free => {
-            version_notes.push(version::unchecked_say(&connector.program, want, &others));
+            let others = others();
+            if !others.is_empty() {
+                version_notes.push(version::unchecked_say(&connector.program, want, &others));
+            }
             None
         }
         _ => None,

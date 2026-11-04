@@ -144,8 +144,8 @@ pub(crate) fn resolve_program(program: &str, vars: &BTreeMap<String, String>) ->
 }
 
 /// The first non-empty line of `program --version` run with exactly `vars`, from stdout, else from
-/// stderr. A stderr line counts only if it holds a version; on a failed exit only a line that
-/// also names the program (its file name, any case) counts. `None` on a spawn failure, 5 s without an exit, or no such line. Never logged.
+/// stderr. A stderr line, or any line on a failed exit, counts only if its first word is the
+/// program's file name (any case) and it holds a version. `None` on a spawn failure, 5 s without an exit, or no such line. Never logged.
 pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -> Option<String> {
     let mut command = Command::new(program);
     command.arg("--version").env_clear().envs(vars);
@@ -175,11 +175,14 @@ pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -
     // A stderr line or a failed exit counts only with a version in it: never record a stray error.
     let checked = out.is_none() || !status.success();
     let line = out.or_else(|| first_line(child.stderr.take()?))?;
+    // The first word must be the program's file name (any case): "hermes: needs Python 3.11.4"
+    // and "warning: node 2.0.1" name some other version.
     let name = program.file_name().and_then(|n| n.to_str()).unwrap_or("/");
     let named = line
-        .to_ascii_lowercase()
-        .contains(&name.to_ascii_lowercase());
-    let held = super::version::parse(&line).is_some() && (status.success() || named);
+        .split_whitespace()
+        .next()
+        .is_some_and(|w| w.eq_ignore_ascii_case(name));
+    let held = named && super::version::parse(&line).is_some();
     (!checked || held).then_some(line)
 }
 
