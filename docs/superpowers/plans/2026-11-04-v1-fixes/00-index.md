@@ -107,6 +107,12 @@ Real harness runs share one signed-in home and key budgets, so they run one at a
 6. G.23: version-matrix rows for the other CORE harnesses.
 7. G.14 at the freeze: all CORE release rows on the frozen head, then `--release-check`.
 
+## Owner answers (4 Nov)
+
+- Start: placeholder 5 December 2026, 00:00 UTC (OWNER-Q stays next to it). Run length may become 48 h instead of 24 h: state it in one place.
+- Hermes base-URL trust entry (H.3): approved as an exception to AGENTS.md:60.
+- `PAD_STAGING_URL` (G), installer refusal on unreadable output (C.8) and the `build` field (C.11): defaults stand (env var; refuse; drop, since the version string already carries the commit).
+
 ## Owner questions (answer before the lane that needs it starts)
 
 Blocking wave 1:
