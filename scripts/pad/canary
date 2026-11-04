@@ -1,0 +1,67 @@
+#!/usr/bin/env python3
+"""Canary: name a harness build that no pad row has verified. It never refuses a build; it only tells the maintainer.
+
+Runs on the maintainer's Mac. Python 3.11 for tomllib; needs npm and curl on PATH. No keys.
+Usage: scripts/pad/canary [--tiers PATH] [--only ID]. Exit 0 nothing new, 1 a new build, 2 a lookup failed.
+"""
+import argparse, json, re, subprocess, sys, tomllib
+from pathlib import Path
+
+SOURCES = {"claude-code-cli": ("npm", "@anthropic-ai/claude-code"), "codex-cli": ("npm", "@openai/codex"),
+           "amp-cli": ("npm", "@ampcode/cli"), "hermes-cli": ("github", "NousResearch/hermes-agent")}
+
+
+def norm(text) -> str:
+    m = re.search(r"\d+(\.\d+)+(-[0-9A-Za-z.]+)?", text or "")
+    return m.group(0) if m else ""
+
+
+def known(tiers: dict, cid: str) -> list[tuple[str, str]]:
+    row = tiers.get(cid, {})
+    pairs = [(v.get("version", ""), v.get("os", "?")) for v in row.get("verified", [])] or [(row.get("version", ""), "?")]
+    return [(norm(v), o) for v, o in pairs if norm(v)]
+
+
+def latest(cid: str, run) -> str:
+    kind, name = SOURCES[cid]
+    if kind == "npm":
+        out = run(["npm", "view", name, "version"])
+    else:
+        out = json.loads(run(["curl", "-fsS", f"https://api.github.com/repos/{name}/releases/latest"]))["tag_name"]
+    if not norm(out):
+        raise ValueError(f"no version in {out.strip()[:80]!r}")
+    return norm(out)
+
+
+def report(tiers, run, only=None) -> tuple[list[str], int]:
+    lines, new, failed = [], False, False
+    for cid in only or SOURCES:
+        try:
+            v = latest(cid, run)
+        except Exception as e:
+            failed = True
+            lines.append(f"{cid} lookup failed: {str(e).strip() or type(e).__name__}")
+            continue
+        seen = known(tiers, cid)
+        hit = any(k == v for k, _ in seen)
+        new = new or not hit
+        shown = ", ".join(f"{k} ({o})" for k, o in seen) or "none"
+        lines.append(f"{cid} latest {v} verified {shown} {'known' if hit else 'NEW'}")
+    return lines, 1 if new else 2 if failed else 0
+
+
+def run(argv: list[str]) -> str:
+    p = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    if p.returncode:
+        raise RuntimeError((p.stderr.strip().splitlines() or [f"{argv[0]} exit {p.returncode}"])[-1])
+    return p.stdout
+
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser(description="Name harness builds no pad row has verified.")
+    ap.add_argument("--tiers", default=Path(__file__).resolve().parents[2] / "connectors" / "tiers.toml")
+    ap.add_argument("--only", choices=list(SOURCES))
+    a = ap.parse_args()
+    lines, code = report(tomllib.loads(Path(a.tiers).read_text()), run, [a.only] if a.only else None)
+    print("\n".join(lines))
+    sys.exit(code)
