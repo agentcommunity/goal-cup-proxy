@@ -436,9 +436,11 @@ fn server_stop(e: &ServerError, refused: fn(&str) -> String) -> Stop {
     }
 }
 
-/// Opens `url` in the browser unless `GOALCUP_NO_BROWSER=1`; whether a program started.
+/// Opens `url` in the browser unless `GOALCUP_NO_BROWSER=1` or it is not an https link (the real
+/// approval page always is; a test server's `http://127.0.0.1/...` never opens a tab); whether a
+/// program started.
 pub fn browser(url: &str) -> bool {
-    if std::env::var("GOALCUP_NO_BROWSER").is_ok_and(|v| v == "1") {
+    if std::env::var("GOALCUP_NO_BROWSER").is_ok_and(|v| v == "1") || !openable(url) {
         return false;
     }
     let tool = if cfg!(target_os = "macos") {
@@ -453,6 +455,11 @@ pub fn browser(url: &str) -> bool {
         .stderr(Stdio::null())
         .spawn()
         .is_ok()
+}
+
+/// Only an `https://` link may open a browser.
+fn openable(url: &str) -> bool {
+    url.starts_with("https://")
 }
 
 /// Waits `d` in short steps, ending early on Ctrl-C.
@@ -488,5 +495,21 @@ impl Drop for Ctrl {
     fn drop(&mut self) {
         // SAFETY: puts back the handler `signal` returned.
         unsafe { libc::signal(libc::SIGINT, self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::openable;
+
+    #[test]
+    fn only_https_approval_links_open_a_browser() {
+        assert!(openable(
+            "https://agentcommunity.org/goalcup/approve?code=BCDF-GHJK"
+        ));
+        assert!(!openable("http://127.0.0.1/approve?code=BCDF-GHJK"));
+        assert!(!openable("HTTPS-not-a-url"));
+        assert!(!openable("file:///etc/passwd"));
+        assert!(!openable(""));
     }
 }
