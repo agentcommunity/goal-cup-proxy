@@ -71,15 +71,24 @@ fn chat_file(session: &str, at: u64, prompt: u64, cached: u64) -> String {
 
 /// A sealed Qwen Code entry with two wire calls and a main and a subagent chat file.
 fn entry(name: &str) -> PathBuf {
+    entry_with(name, "", |_| {})
+}
+
+/// [`entry`] with `tail` appended to the main chat file and `f` applied to the start event.
+fn entry_with(name: &str, tail: &str, f: impl FnOnce(&mut Value)) -> PathBuf {
     let mut e = Entry::new(name);
     chat(&mut e);
     chat(&mut e);
     // The subagent row carries the parent's session id, as Qwen writes it.
-    file(&mut e, MAIN_FILE, &chat_file(MAIN, 1, 1200, 1000));
+    let main = chat_file(MAIN, 1, 1200, 1000) + tail;
+    file(&mut e, MAIN_FILE, &main);
     file(&mut e, &kid_file(), &chat_file(MAIN, 2, 900, 500));
     e.count();
     let dir = e.seal();
-    let set = |v: &mut Value| v["connector"] = "qwen-cli".into();
+    let set = |v: &mut Value| {
+        v["connector"] = "qwen-cli".into();
+        f(v);
+    };
     mutate(&dir, None, |r| edit_event(r, "start", 0, set))
 }
 
@@ -146,4 +155,26 @@ fn wire_calls_take_their_thread_by_time() {
 fn the_check_sees_a_thread_with_a_parent() {
     let (_, v) = check(&entry("qc-check"), &[]);
     assert_eq!(result(&v, "subagents_present"), "pass");
+}
+
+#[test]
+fn a_qwen_record_names_build_rules_and_unread_lines() {
+    let t = call_table(&entry_with("qc-v", "not json\n", |v| {
+        v["harness_semver"] = "0.27.0".into();
+        v["version_row"] = Value::Null;
+    }));
+    assert_eq!(t.harness_semver.as_deref(), Some("0.27.0"));
+    assert_eq!(t.version_row, None);
+    assert_eq!(t.native_checked_on.as_deref(), Some("0.26.4"));
+    assert_eq!(t.lines_unread, 1);
+    let base = call_table(&entry("qc-v0"));
+    let calls = |t: &CallTable| -> Vec<_> {
+        let r = rows(t, Leg::Native);
+        r.iter()
+            .map(|r| (r.thread.clone(), r.parent.clone(), r.tokens, r.join))
+            .collect()
+    };
+    assert_eq!(calls(&t), calls(&base));
+    assert_eq!((base.harness_semver, base.version_row), (None, None));
+    assert_eq!(base.lines_unread, 0);
 }

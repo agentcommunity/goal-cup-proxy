@@ -32,6 +32,8 @@ pub(super) struct NativeLeg {
     pub(super) repeats_skipped: u64,
     /// Child rollout lines timed before the child's own `session_meta` (copied parent records).
     pub(super) copied_skipped: u64,
+    /// Session file lines that are not JSON.
+    pub(super) lines_unread: u64,
     /// The Hermes rows lack times or counts: the totals form, not per call.
     pub(super) totals: bool,
     /// Hermes database copies were recorded and none opened.
@@ -67,6 +69,8 @@ pub(super) struct Native {
     /// delegation manifest names, by delegation id.
     tasks: BTreeSet<String>,
     manifests: BTreeMap<String, BTreeSet<u64>>,
+    /// Session file lines that are not JSON.
+    lines_unread: u64,
 }
 
 /// What a stream carries: a session file (path, gen), or a meta snapshot (`None` after a hole).
@@ -169,6 +173,7 @@ impl Native {
                     for (boot, line) in f.data(ctx.boot, *off, bytes) {
                         let first = std::mem::take(&mut f.head);
                         let Ok(v) = serde_json::from_slice::<Value>(&line) else {
+                            self.lines_unread += 1;
                             continue;
                         };
                         let at = v["timestamp"].as_str().and_then(ts);
@@ -405,6 +410,7 @@ impl Native {
             threads: threads.into_values().chain(h.threads).collect(),
             repeats_skipped,
             copied_skipped,
+            lines_unread: self.lines_unread,
             totals: h.totals,
             unreadable: h.unreadable,
             set: h.set,

@@ -77,10 +77,12 @@ enum JoinBy {
     Time,
 }
 
-/// A connector file: its id and `[usage]`; every other key is the recorder's.
+/// A connector file: its id, the build its reader was last checked on and `[usage]`; every other
+/// key is the recorder's.
 #[derive(Deserialize)]
 struct File {
     id: String,
+    checked: Option<String>,
     #[serde(default)]
     usage: Usage,
 }
@@ -88,8 +90,9 @@ struct File {
 /// A connector file's id and `[usage]` table, refused when a `file` holds a `/` or more than one
 /// `*`, when `join` is missing although another key is set (or is `"thread"` with no `thread`
 /// key), or when `thread_db` sits beside `readers` (the native reader keeps one or the other).
-fn parse(text: &str) -> Result<(String, Usage), String> {
-    let File { id, usage: u } = toml::from_str(text).map_err(|e| e.to_string())?;
+fn parse(text: &str) -> Result<File, String> {
+    let f: File = toml::from_str(text).map_err(|e| e.to_string())?;
+    let (id, u) = (&f.id, &f.usage);
     let files = u.readers.iter().map(|r| &r.file);
     if let Some(f) = files
         .chain(u.thread_db.iter().map(|d| &d.file))
@@ -115,18 +118,29 @@ fn parse(text: &str) -> Result<(String, Usage), String> {
         .then_some("has both `readers` and `thread_db`"));
     match bad {
         Some(b) => Err(format!("{id}: usage {b}")),
-        None => Ok((id, u)),
+        None => Ok(f),
     }
 }
 
-/// The `[usage]` table of a built-in connector. One that does not parse reads as none (the
+/// A built-in connector file, by its current id. One that does not parse reads as none (the
 /// `every_builtin_usage_table_parses` test keeps the built-in ones parsing).
-pub(super) fn usage(connector: Option<&str>) -> Option<&'static Usage> {
-    static USAGE: LazyLock<BTreeMap<String, Usage>> = LazyLock::new(|| {
+fn file(connector: Option<&str>) -> Option<&'static File> {
+    static FILES: LazyLock<BTreeMap<String, File>> = LazyLock::new(|| {
         let all = goalcup_format::connectors::CONNECTORS.iter();
-        all.filter_map(|(_, text)| parse(text).ok()).collect()
+        let ok = all.filter_map(|(_, text)| parse(text).ok());
+        ok.map(|f| (f.id.clone(), f)).collect()
     });
-    USAGE.get(goalcup_format::connectors::current_id(connector?))
+    FILES.get(goalcup_format::connectors::current_id(connector?))
+}
+
+/// The `[usage]` table of a built-in connector.
+pub(super) fn usage(connector: Option<&str>) -> Option<&'static Usage> {
+    file(connector).map(|f| &f.usage)
+}
+
+/// The harness build a built-in connector's reader was last checked on (its `checked` key).
+pub(super) fn checked(connector: Option<&str>) -> Option<&'static str> {
+    file(connector)?.checked.as_deref()
 }
 
 /// True when `name` fits `pat`: equal, or with one `*` standing for any run of characters.
@@ -377,7 +391,7 @@ mod tests {
     #[test]
     fn every_builtin_usage_table_parses() {
         for (id, text) in goalcup_format::connectors::CONNECTORS {
-            assert_eq!(parse(text).map(|u| u.0).as_deref(), Ok(*id));
+            assert_eq!(parse(text).map(|f| f.id).as_deref(), Ok(*id));
         }
     }
 

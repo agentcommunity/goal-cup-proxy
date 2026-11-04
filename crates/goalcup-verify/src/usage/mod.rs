@@ -269,11 +269,18 @@ pub struct CallTable {
     /// Child rollout lines skipped as copied parent records (timed before the child's own
     /// `session_meta`).
     pub copied_skipped: u64,
+    /// Native file lines that are not JSON, not read.
+    pub lines_unread: u64,
     /// From the `start` event, the entry of the last PART, and whether a `seal` event was read.
     pub run: Option<String>,
     pub entry: String,
     pub connector: Option<String>,
     pub harness_version: Option<String>,
+    /// From the `start` event: the parsed build and the `[[versions]]` row the recorder applied.
+    pub harness_semver: Option<String>,
+    pub version_row: Option<String>,
+    /// The build the connector's native reader was last checked on (its `checked` key).
+    pub native_checked_on: Option<String>,
     pub sealed: bool,
     /// Listed hosts the harness reached through a tunnel (host, reason, connections): their calls
     /// are not on the wire.
@@ -296,10 +303,14 @@ impl Default for CallTable {
             joined_by_time: 0,
             repeats_skipped: 0,
             copied_skipped: 0,
+            lines_unread: 0,
             run: None,
             entry: String::new(),
             connector: None,
             harness_version: None,
+            harness_semver: None,
+            version_row: None,
+            native_checked_on: None,
             sealed: false,
             not_on_wire: Vec::new(),
         }
@@ -331,6 +342,8 @@ struct Ctx {
     connector: Option<String>,
     run: Option<String>,
     harness_version: Option<String>,
+    harness_semver: Option<String>,
+    version_row: Option<String>,
     sealed: bool,
     boot: u64,
     /// The `start` event's `segment`: 0 for `start`, then 1, 2 for each `continue`.
@@ -364,11 +377,15 @@ impl Ctx {
         let label = |k: &str| ev[k].as_str().and_then(hints::id);
         (self.connector, self.run) = (label("connector"), label("run"));
         self.segment = ev["segment"].as_u64().unwrap_or(0);
-        // The first line of `<harness> --version`: printable ASCII, spaces kept, at most 128 bytes.
-        self.harness_version = ev["harness_version"]
-            .as_str()
-            .filter(|v| v.len() <= 128 && v.bytes().all(|b| (b' '..=b'~').contains(&b)))
-            .map(str::to_string);
+        // Printable ASCII, spaces kept: the first line of `<harness> --version` (at most 128
+        // bytes), the build parsed from it and the version row applied (at most 64 each).
+        let text = |k: &str, max: usize| {
+            let ok = |v: &&str| v.len() <= max && v.bytes().all(|b| (b' '..=b'~').contains(&b));
+            ev[k].as_str().filter(ok).map(str::to_string)
+        };
+        self.harness_version = text("harness_version", 128);
+        self.harness_semver = text("harness_semver", 64);
+        self.version_row = text("version_row", 64);
         let lists = ev
             .get("hosts")
             .and_then(Value::as_object)
@@ -443,6 +460,9 @@ impl Calls {
             entry: c.entry.clone(),
             connector: c.connector.clone(),
             harness_version: c.harness_version.clone(),
+            harness_semver: c.harness_semver.clone(),
+            version_row: c.version_row.clone(),
+            native_checked_on: hints::checked(c.connector.as_deref()).map(str::to_string),
             sealed: c.sealed,
             not_on_wire: self.wire.not_on_wire(),
             ..CallTable::default()
@@ -594,6 +614,7 @@ impl Calls {
             joined_by_time,
             repeats_skipped: leg.repeats_skipped,
             copied_skipped: leg.copied_skipped,
+            lines_unread: leg.lines_unread,
             ..base
         }
     }
