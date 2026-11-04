@@ -15,7 +15,7 @@ RESULTS = ROOT / "docs" / "plans" / "2026-10-30-v1.0" / "PAD-RESULTS.md"
 CASES, CHECKS = ("direct", "gateway", "dodger"), ("C1", "C2", "C3", "C4", "C5", "C6")
 CORE = ("claude-code-cli", "codex-cli", "hermes-cli")
 GUARDED = ["crates/", "server/worker/src/", "connectors/", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
-           ":(exclude)connectors/tiers.toml"]
+           ":(exclude)connectors/tiers.toml", ":(glob,exclude)crates/*/tests/**"]  # tests are not in the binary
 # The 16 connector ids, PRD-11 section 5.
 CONNECTOR_IDS = ["amp-cli", "claude-code-cli", "cline-cli", "codex-cli", "copilot-cli", "crush-cli", "droid-cli",
                  "gemini-cli", "goose-cli", "hermes-cli", "kilo-cli", "kimi-code-cli", "openclaw-cli",
