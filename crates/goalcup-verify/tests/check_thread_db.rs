@@ -204,3 +204,79 @@ fn an_empty_crush_parent_is_no_parent_not_the_hash_of_nothing() {
     linked(&t, ROOT_HASH, KID_HASH, 2);
     assert!(!format!("{t:?}").contains(EMPTY_HASH));
 }
+
+/// A database file built by `sql` alone, as copied (no WAL).
+fn raw_db(name: &str, sql: &str) -> Vec<(String, Vec<u8>)> {
+    let p = tmp(name).join(name);
+    rusqlite::Connection::open(&p)
+        .unwrap()
+        .execute_batch(sql)
+        .unwrap();
+    vec![(name.to_string(), std::fs::read(&p).unwrap())]
+}
+
+/// The private copies of this process left in the temp dir (nextest runs one test per process).
+fn copies_left() -> Vec<String> {
+    let mine = format!("goalcup-sqlite-{}-", std::process::id());
+    let names = std::fs::read_dir(std::env::temp_dir()).unwrap().flatten();
+    let names = names.map(|d| d.file_name().to_string_lossy().into_owned());
+    names.filter(|n| n.starts_with(&mine)).collect()
+}
+
+/// Goose sessions ROOT and KID as rows of `table`.
+fn goose_rows(table: &str) -> String {
+    format!(
+        "CREATE TABLE {table}(id TEXT PRIMARY KEY, parent_session_id TEXT);
+         INSERT INTO {table} VALUES ('{GOOSE_ROOT}', NULL), ('{GOOSE_KID}', '{GOOSE_ROOT}');"
+    )
+}
+
+#[test]
+fn a_database_with_a_trigger_or_view_function_still_reads_its_table() {
+    // Schema objects the reader never names: a trigger, a view calling `load_extension` and a
+    // view over a virtual table. The reader still reads the real table and leaves no copy.
+    let sql = goose_rows("sessions")
+        + "CREATE TABLE log(x);
+           CREATE TRIGGER t AFTER INSERT ON sessions BEGIN INSERT INTO log VALUES (new.id); END;
+           CREATE VIEW ext AS SELECT load_extension('/nonexistent/evil');
+           CREATE VIEW vt AS SELECT * FROM pragma_database_list;";
+    let files = raw_db("sessions.db", &sql);
+    let dir = entry(
+        "thread-db-extra-schema",
+        "goose-cli",
+        "sessions",
+        &files,
+        |e| {
+            chat(e, &[("agent-session-id", GOOSE_ROOT)]);
+            chat(e, &[("agent-session-id", GOOSE_KID)]);
+        },
+    );
+    let before = copies_left();
+    let t = call_table(&dir);
+    linked(&t, GOOSE_ROOT, GOOSE_KID, 2);
+    assert_eq!(copies_left(), before);
+}
+
+#[test]
+fn a_database_with_a_view_over_a_virtual_table_is_not_run() {
+    // `sessions` is a view the record's author wrote, reaching a virtual table SQLite does not
+    // call innocuous. With `trusted_schema=OFF` the view does not run, so no parent is read.
+    let sql = goose_rows("s")
+        + "CREATE VIEW sessions AS SELECT s.id, s.parent_session_id
+             FROM s, pragma_database_list AS d WHERE d.name = 'main';";
+    let files = raw_db("sessions.db", &sql);
+    let dir = entry(
+        "thread-db-view-vtab",
+        "goose-cli",
+        "sessions",
+        &files,
+        |e| {
+            chat(e, &[("agent-session-id", GOOSE_ROOT)]);
+            chat(e, &[("agent-session-id", GOOSE_KID)]);
+        },
+    );
+    let t = call_table(&dir);
+    assert_eq!(t.threads.len(), 2);
+    assert!(t.threads.iter().all(|x| x.parent.is_none()));
+    assert_eq!(t.children, None);
+}
