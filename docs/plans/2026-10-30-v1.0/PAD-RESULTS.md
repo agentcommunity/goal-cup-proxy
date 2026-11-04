@@ -5,9 +5,9 @@ Written by scripts/pad/table (PRD-12 section 9) from pad-rows.jsonl. Do not edit
 | Harness | Tier | Version | direct | gateway | dodger | Kill row | Date |
 |---|---|---|---|---|---|---|---|
 | amp-cli | not verified: no key | - | - | - | - | - | - |
-| claude-code-cli | not verified: not yet run on the pad | - | - | - | - | - | - |
+| claude-code-cli | not verified: no full gateway row | - | PASS | - | - | - | 2026-11-04 |
 | cline-cli | not verified: needs sign-in (no provider config file or env route; the auth command puts the key in argv) | - | - | - | - | - | - |
-| codex-cli | not verified: not yet run on the pad | - | - | - | - | - | - |
+| codex-cli | not verified: no full direct row | - | - | PASS | - | - | 2026-11-04 |
 | copilot-cli | not verified: no full direct row | - | - | - | - | - | 2026-11-02 |
 | crush-cli | not verified: no full direct row | - | - | - | - | - | 2026-11-02 |
 | droid-cli | not verified: no key | - | - | - | - | - | - |
@@ -19,6 +19,19 @@ Written by scripts/pad/table (PRD-12 section 9) from pad-rows.jsonl. Do not edit
 | openclaw-cli | not verified: no full direct row | - | - | - | - | - | 2026-11-02 |
 | opencode | not verified: no full direct row | - | - | - | - | - | 2026-11-02 |
 | qwen-cli | not verified: no full direct row | - | - | - | - | - | 2026-11-02 |
+
+## claude-code-cli, runs
+
+| Started | Case | Mode | Variant | Result | C1 | C2 | C3 | C4 | C5 | C6 | Wire / harness calls | Subagents | Tokens in / out | Gaps | Why |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-04T00:32:50+00:00 | direct | full | - | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 124 / 90 | 5 | 61398 / 281724 | - | - |
+| 2026-11-03T21:02:47+00:00 | direct | full | - | FAIL | PASS | INCONCLUSIVE | PASS | FAIL | INCONCLUSIVE | PASS | None / None | 0 | None / None | - | C3 PASS: stated loss: shape in streamed reply: generic_secret_assignment in ed92698b9d59dd415/0.188/deltas, ed92698b9d59dd415/0.255/deltas, ed92698b9d59dd415/0.286/deltas; C4 FAIL: server copy not fetched; C2 INCONCLUSIVE: no usage summary; C5 INCONCLUSIVE: no usage summary |
+
+## codex-cli, runs
+
+| Started | Case | Mode | Variant | Result | C1 | C2 | C3 | C4 | C5 | C6 | Wire / harness calls | Subagents | Tokens in / out | Gaps | Why |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-04T00:32:50+00:00 | gateway | full | - | PASS | PASS | PASS | PASS | PASS | PASS | PASS | 321 / 317 | 7 | 609746 / 525060 | - | - |
 
 ## copilot-cli, runs
 
@@ -48,6 +61,7 @@ Written by scripts/pad/table (PRD-12 section 9) from pad-rows.jsonl. Do not edit
 
 | Started | Case | Mode | Variant | Result | C1 | C2 | C3 | C4 | C5 | C6 | Wire / harness calls | Subagents | Tokens in / out | Gaps | Why |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-11-03T20:53:56+00:00 | gateway | full | - | INCONCLUSIVE | PASS | PASS | INCONCLUSIVE | PASS | PASS | PASS | 349 / None | 5 | 404089 / 472557 | - | C3 PASS: stated loss: shape in streamed reply: generic_secret_assignment, masked_key in e67c5e01586a09bf6/0.209/deltas, e67c5e01586a09bf6/0.221/deltas, e67c5e01586a09bf6/0.256/deltas, e67c5e01586a09bf6/0.312/deltas, e67c5e01586a09bf6/0.90/deltas; C3 PASS: masked upstream, before the wire: no MASK of openai_key, github_token; C3 INCONCLUSIVE: not exercised; shape only in joined streamed replies (stated loss) of google_key: no MASK; C3 INCONCLUSIVE: not exercised; shape only in joined streamed replies (stated loss) of jwt: no MASK; C3 INCONCLUSIVE: not exercised; shape only in joined streamed replies (stated loss) of private_key: no MASK; subagents shown by their task logs, not tied to calls |
 | 2026-11-03T20:23:09+00:00 | dodger | full | - | INCONCLUSIVE | PASS | PASS | INCONCLUSIVE | PASS | PASS | PASS | 0 / None | 5 | None / None | pinned 403 | C3 INCONCLUSIVE: secret exercise not done: no MASK of a planted shape; subagents shown by their task logs, not tied to calls |
 | 2026-11-03T20:01:17+00:00 | direct | full | - | INCONCLUSIVE | PASS | PASS | INCONCLUSIVE | PASS | PASS | PASS | 325 / None | 5 | 421668 / 442992 | - | C3 PASS: stated loss: shape in streamed reply: bearer, generic_secret_assignment in eea0526888253d7b2/0.163/deltas, eea0526888253d7b2/0.588/deltas; C3 PASS: masked upstream, before the wire: no MASK of openai_key, github_token; C3 INCONCLUSIVE: not exercised; shape only in joined streamed replies (stated loss) of google_key: no MASK; C3 INCONCLUSIVE: not exercised; shape only in joined streamed replies (stated loss) of jwt: no MASK; C3 INCONCLUSIVE: not exercised; shape only in joined streamed replies (stated loss) of private_key: no MASK; subagents shown by their task logs, not tied to calls |
 | 2026-11-03T19:33:23+00:00 | gateway | full | - | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | INCONCLUSIVE | 2 / None | 0 | None / None | - | C3 INCONCLUSIVE: secret exercise not done: no MASK of a planted shape; C1 INCONCLUSIVE: provider_refused: 401 or 403 from the model host; C2 INCONCLUSIVE: provider_refused: 401 or 403 from the model host; C4 INCONCLUSIVE: provider_refused: 401 or 403 from the model host; C5 INCONCLUSIVE: provider_refused: 401 or 403 from the model host; C6 INCONCLUSIVE: provider_refused: 401 or 403 from the model host; faults INCONCLUSIVE: provider_refused: 401 or 403 from the model host |
