@@ -1,5 +1,5 @@
 # The test pad's own settings (PRD-12 sections 1, 7 and "Overridable defaults").
-# The staging address comes from PAD_STAGING_URL, never from the repo; loopback is fixed in `pad` (ledger B4).
+# The staging address comes from PAD_STAGING_URL (or staging_url in an untracked settings file), never from the repo; loopback is fixed in `pad` (ledger B4).
 cap_usd = 10              # per run, ledger T6: at this estimate the spend check seals the run
 spend_every_min = 5       # the live spend check (section 7)
 per_key = 2               # sandboxes at once per provider key

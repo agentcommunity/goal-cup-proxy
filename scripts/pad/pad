@@ -25,21 +25,24 @@ sys.path.insert(0, HERE)
 import check as pc  # noqa: E402  S7 models are read through check.py's SEAM only
 REPO = os.path.dirname(os.path.dirname(HERE))
 SBX = os.path.join(HERE, "sbx.mjs")
-# The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker (its address is PAD_STAGING_URL,
-# read only when staging is used) and loopback. There is no server address setting, and production is never one.
+# The only servers (ledger B4; scripts/matrix.sh:253-258): the one staging Worker (its address is PAD_STAGING_URL or the
+# settings file's staging_url, read only when staging is used, checked to be a staging host) and loopback. Never production.
 SERVERS = {"local": "http://127.0.0.1:8787"}
 
 
-def staging_url():
-    u = os.environ.get("PAD_STAGING_URL", "")
+def staging_url(s=None):
+    """The staging Worker address: the settings file's staging_url, else the PAD_STAGING_URL variable. Never in the repo."""
+    u = (s or {}).get("staging_url") or os.environ.get("PAD_STAGING_URL", "")
+    if not u:
+        raise Usage("server = \"staging\" needs PAD_STAGING_URL (environment) or staging_url in the settings file")
     h = urllib.parse.urlsplit(u)
     if h.scheme != "https" or "staging" not in (h.hostname or "").split(".")[0]:
         raise Usage("PAD_STAGING_URL must name the staging Worker (https, a host with 'staging' in its first label)")
-    return u.rstrip("/")
+    return "https://" + h.netloc.rpartition("@")[2]
 
 
-def server_url(name):
-    return staging_url() if name == "staging" else SERVERS.get(name)
+def server_url(name, s=None):
+    return staging_url(s) if name == "staging" else SERVERS.get(name)
 
 
 NOT = "server copy not fetched: "
@@ -61,7 +64,7 @@ LIMITS = {"setup": 5, "pre": 3, "start": 3, "wait-calls": 4, "look": 1, "wait-re
           "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
 KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
         "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going", "keep_going_count",
-        "cap_usd", "box_extra_minutes", "box_vcpus", "goalcup_home", "model_host", "pre_keys"}
+        "cap_usd", "box_extra_minutes", "box_vcpus", "goalcup_home", "model_host", "pre_keys", "staging_url"}
 OVERRIDES = ("cap_usd", "box_extra_minutes", "box_vcpus")  # a row may replace these pad.toml values for itself
 FAULTS, SPAN = pc.FAULTS, pc.SPAN  # section 3.1: kind to the minutes it lasts by default; the kinds that take +<minutes>
 # pad-run's box steps: the faults of section 3.1, the watcher steps, and the mode's own
@@ -362,7 +365,9 @@ def load_settings(raw, pad):
     if s["case"] not in ("direct", "gateway", "dodger", "all"):
         raise Usage("case is direct, gateway, dodger or all")
     if s["server"] != "off" and s["server"] not in (*SERVERS, "staging"):
-        raise Usage("server is off, local or staging (there is no server address setting)")
+        raise Usage("server is off, local or staging")
+    if not isinstance(s.get("staging_url", ""), str):
+        raise Usage("staging_url is a string (https://<staging host>)")
     if s["where"] not in ("sandbox", "here"):
         raise Usage("where is sandbox or here")
     if "goalcup_home" in s and (s["where"] != "here" or not isinstance(s["goalcup_home"], str) or not os.path.isabs(os.path.expanduser(s["goalcup_home"]))):
@@ -504,13 +509,13 @@ def price(models, rates, key):
     return usd, sorted(unpriced)
 
 
-def approve(server, code):
+def approve(server, code, s=None):
     """Section 3, 0:03: PRD-07's test approval, from this process. The key and the member id are read from the
     APPROVAL variables here at the call, and go into the request only."""
     key, member = map(os.environ.get, APPROVAL)
     if not (key and member):
         return "approval key or member id not set"
-    req = urllib.request.Request(server_url(server) + "/v1/device/approve", method="POST", data=json.dumps(
+    req = urllib.request.Request(server_url(server, s) + "/v1/device/approve", method="POST", data=json.dumps(
         {"user_code": code, "member_id": member, "approve": True}).encode(),
         headers={"authorization": "Bearer " + key, "content-type": "application/json", "user-agent": UA})
     try:
@@ -689,7 +694,7 @@ class Run:
             self.hosts_sha = hashlib.sha256(data).hexdigest()
         with open(os.path.join(stage, "settings.json"), "w") as f:  # pad-run's input: names, never a value
             json.dump(dict({k: v for k, v in s.items() if k != "plan"}, harness_id=s["harness"], harness=self.harness,
-                           session=self.name, limits=runner_limits(s), server_url=server_url(s["server"]),
+                           session=self.name, limits=runner_limits(s), server_url=server_url(s["server"], s),
                            case=self.case, version=s.get("version") or self.harness["version"], key_files=names,
                            route_key=names[-1] if names else None, home_vars=con.get("home") or {},
                            native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in con.get("native", [])],
@@ -787,7 +792,7 @@ class Run:
         result, saw, d = self.box(step, limit + 120)  # pad-run works to `limit`
         if step == "start" and result == "ok" and self.s["server"] != "off":  # off: start pasted too
             self.log("approve " + self.name)  # section 3, 0:03; the device code stays out of the log and the table
-            got = approve(self.s["server"], d.get("code"))
+            got = approve(self.s["server"], d.get("code"), self.s)
             if got != "approved":
                 return "INCONCLUSIVE", got
             result, saw, _ = self.box("paste", limit + 120)

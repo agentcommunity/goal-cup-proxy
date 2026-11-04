@@ -78,6 +78,18 @@ class StagingUrl(unittest.TestCase):
     def test_staging_host_accepted(self):
         self.assertEqual(self.url("https://goalcup-ingest-staging.example.workers.dev"), "https://goalcup-ingest-staging.example.workers.dev")
 
+    def test_unset_names_the_setting(self):
+        with self.assertRaisesRegex(pad.Usage, "PAD_STAGING_URL.*staging_url"):
+            self.url("")
+
+    def test_settings_file_value_wins(self):
+        with mock.patch.dict(os.environ, {"PAD_STAGING_URL": "https://other-staging.example.dev"}):
+            self.assertEqual(pad.staging_url({"staging_url": "https://pad-staging.example.dev/x?y"}), "https://pad-staging.example.dev")
+
+    def test_userinfo_does_not_hide_the_host(self):
+        with self.assertRaises(pad.Usage):
+            self.url("https://staging@goalcup-ingest.example.workers.dev")
+
     def test_local_and_off_need_no_variable(self):
         env = {k: x for k, x in os.environ.items() if k != "PAD_STAGING_URL"}
         with mock.patch.dict(os.environ, env, clear=True):
