@@ -384,3 +384,19 @@ fn every_problem_line_says_what_to_do() {
     assert!(seen >= 5, "the variants no longer render PROBLEM lines");
     assert!(text::no_request_yet().contains("goalcup status"));
 }
+
+/// Terminal text says "goalcup" and plain words: no product jargon, no "pin" talk (usability-16).
+#[test]
+fn no_jargon() {
+    let all = [
+        text::masking(None),
+        text::gap_words("pinned"),
+        text::no_request_written("Agent", Some("h.example")),
+    ];
+    for t in &all {
+        for bad in ["Goal Cup Proxy", "pinned", "pins"] {
+            assert!(!t.contains(bad), "{bad:?} in {t:?}");
+        }
+    }
+    assert!(all[2].starts_with("No model request was written."));
+}

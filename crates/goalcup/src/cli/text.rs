@@ -343,7 +343,7 @@ pub fn masking(db: Option<&str>) -> String {
         ("", format!(", and {n}'s database"))
     });
     format!(
-        "Goal Cup Proxy hides known secret shapes in memory, before anything is saved: API keys with a \
+        "goalcup hides known secret shapes in memory, before anything is saved: API keys with a \
          known prefix, login headers, cookies, passwords in URLs, private keys, login tokens, values \
          named like `api_key`, `secret`, `token` or `password`, and your project's GitHub token. The \
          values of known keys found in your project's own files and in your environment are hidden \
@@ -485,7 +485,7 @@ pub fn gap_words(name: &str) -> String {
         "protocol_other" => "a connection in a form goalcup does not read",
         "source_changed" => "a session file was replaced or cut short",
         "tls_refused" => "the program refused the recorder",
-        "pinned" => "the host list pins it",
+        "pinned" => "the host list says to pass it through unread",
         "cut_at_seal" => "still arriving when the part ended",
         "mask_failed" => "goalcup could not check it for secrets, so it dropped it",
         "upstream_untrusted" => "the model service's certificate was not one goalcup trusts",
@@ -772,7 +772,7 @@ pub fn continue_now(run: &str) -> String {
 pub fn no_request_written(name: &str, pinned: Option<&str>) -> String {
     match pinned {
         Some(host) => format!(
-            "No model request was written. The host list pins {host}, so its traffic passed through unread."
+            "No model request was written. The host list says to pass {host} through unread, so its traffic was not recorded."
         ),
         None => format!(
             "No model request was written. {name} may not use the recording proxy, or it made no call."
