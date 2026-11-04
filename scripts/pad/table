@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """The pad's table (PRD-12 section 9).
 
-With no row.json under pad-out/, write the seed connectors/tiers.toml; with rows, also pad-rows.jsonl and
+With no row.json under pad-out/, write connectors/tiers.toml from the committed pad-rows.jsonl (the seed if none); with rows, also pad-rows.jsonl and
 PAD-RESULTS.md. `--release-check <commit>` reads only pad-rows.jsonl as committed at <commit>: exit 0 when the release
 rows hold, 1 naming each missing or differing item, 2 on a usage error. Python 3.9: no tomllib.
 """
@@ -49,9 +49,15 @@ def tier_row(cids, case):
     return lambda r: (r.get("connector") in cids and r.get("case") == case and r.get("mode") == "full"
                       and not is_fault(r))
 
-def harness_lines(cid):
-    f = ROOT / "scripts" / "pad" / "harnesses" / (cid + ".toml")
-    return [ln.strip() for ln in f.read_text(encoding="utf-8").splitlines()] if f.is_file() else []
+def harness_lines(cid, sha=None):
+    """The harness file's stripped lines: as committed at sha when given, else the working tree. [] if absent."""
+    rel = "scripts/pad/harnesses/%s.toml" % cid
+    if sha:
+        got = subprocess.run(["git", "-C", str(ROOT), "show", "%s:%s" % (sha, rel)], capture_output=True, text=True)
+        text = got.stdout if not got.returncode else ""
+    else:
+        text = (ROOT / rel).read_text(encoding="utf-8") if (ROOT / rel).is_file() else ""
+    return [ln.strip() for ln in text.splitlines()]
 
 def passed(r):  # PASS, or every check PASS but C3 not exercised (Hermes sends no plant back: owner, ask 4, 3 Nov)
     c3 = [w for w in r.get("why") or [] if str(w).startswith("C3 INCONCLUSIVE")]
@@ -180,6 +186,11 @@ def release_check(commit):
         elif d.stdout.strip():
             items.append("%s differs from %s under %s: %s" % (
                 c[:12], commit, ", ".join(d.stdout.split()[:5]), ", ".join(names)))
+    tiers = git("show", sha + ":connectors/tiers.toml")
+    if tiers.returncode:
+        items.append("connectors/tiers.toml missing at %s" % sha)
+    elif tiers.stdout != render_tiers({c: tier_for(c, rows, lambda c: harness_lines(c, sha)) for c in CONNECTOR_IDS}):
+        items.append("connectors/tiers.toml differs from the rows; run scripts/pad/table and commit it")
     print("\n".join(items) if items else "release check: pass at %s" % sha)
     return 1 if items else 0
 
@@ -200,7 +211,10 @@ def main(argv):
             rows.append(r)
         else:
             print("table: skipped unreadable %s" % p.relative_to(ROOT), file=sys.stderr)
-    tiers = {cid: tier_for(cid, rows) for cid in CONNECTOR_IDS}  # no rows: the phase 0 seed
+    committed = not found and (ROOT / ROWS_REL).is_file()  # no pad-out: render the committed rows, rewrite nothing else
+    if committed:
+        rows = [r for r in map(json.loads, (ROOT / ROWS_REL).read_text(encoding="utf-8").splitlines()) if isinstance(r, dict)]
+    tiers = {cid: tier_for(cid, rows) for cid in CONNECTOR_IDS}  # neither: the phase 0 seed
     write(TIERS, render_tiers(tiers))
     if found:
         lines = sorted(((str(r.get("connector") or ""), str(r.get("case") or ""), started(r)),
@@ -208,7 +222,8 @@ def main(argv):
         write(ROOT / ROWS_REL, "".join(line + "\n" for _, line in lines))
         write(RESULTS, results_md(rows, tiers))
     print("table: %d of %d rows read; wrote %s%s" % (len(rows), len(found), TIERS.relative_to(ROOT),
-                                                     ", %s, PAD-RESULTS.md" % ROWS_REL if found else " (seed)"))
+                                                     ", %s, PAD-RESULTS.md" % ROWS_REL if found
+                                                     else " (from %s)" % ROWS_REL if committed else " (seed)"))
     return 0
 
 if __name__ == "__main__":

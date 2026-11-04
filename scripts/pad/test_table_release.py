@@ -39,9 +39,9 @@ def commit(root, files, msg):
 
 
 def mkrepo(tmp, rows, tiers_text=None, harness=None):
-    """Repo in tmp: a base commit (a guarded file), then a second commit with the rows at ROWS_REL, tiers_text at
-    connectors/tiers.toml and harness {cid: text} under scripts/pad/harnesses (Repo.repo also patches table.ROOT).
-    A row goalcup ending "+BASE" (green_rows' default) names the base commit. Returns the sha."""
+    """Repo in tmp: a base commit (a guarded file), then a commit with the rows at ROWS_REL and harness {cid: text}
+    under scripts/pad/harnesses, then connectors/tiers.toml: tiers_text, or None for the file those rows render,
+    or False for none. A row goalcup ending "+BASE" (green_rows' default) names the base commit. Returns the sha."""
     root = Path(tmp)
     git(root, "init", "-q")
     base = commit(root, {"crates/x/lib.rs": "// base\n"}, "base")
@@ -49,11 +49,17 @@ def mkrepo(tmp, rows, tiers_text=None, harness=None):
     if rows is not None:
         files[table.ROWS_REL] = "".join(json.dumps({k: v.replace("+BASE", "+" + base) if k == "goalcup" else v for k, v in r.items()}) + "\n"
                                         for r in rows)
-    if tiers_text is not None:
-        files["connectors/tiers.toml"] = tiers_text
     for cid, text in (harness or {}).items():
         files["scripts/pad/harnesses/%s.toml" % cid] = text
-    return commit(root, files or {"README": "x\n"}, "rows")
+    sha = commit(root, files or {"README": "x\n"}, "rows")
+    if tiers_text is None and rows is not None:
+        with mock.patch.object(table, "ROOT", root):
+            lines = lambda c: table.harness_lines(c, sha)
+            got = [json.loads(ln) for ln in (root / table.ROWS_REL).read_text(encoding="utf-8").splitlines()]
+            tiers_text = table.render_tiers({c: table.tier_for(c, got, lines) for c in table.CONNECTOR_IDS})
+    if tiers_text:
+        sha = commit(root, {"connectors/tiers.toml": tiers_text}, "tiers")
+    return sha
 
 
 def green_rows(base_sha="BASE"):
@@ -141,6 +147,44 @@ class Agreement(Repo):
         rows = green_rows()
         rows[-1] = {k: v for k, v in rows[-1].items() if k != "exec"}
         self.assertIn("exec h2-parallel.sh verdict PASS: missing", self.check(self.repo(rows))[1])
+
+
+class TiersDiff(Repo):
+    DIFFERS = "connectors/tiers.toml differs from the rows; run scripts/pad/table and commit it"
+    NOTE = '[gateway]\ntier_note = "%s"\n'
+
+    def test_matching_tiers_pass(self):
+        code, out = self.check(self.repo(green_rows()))
+        self.assertEqual(code, 0, out)
+
+    def test_seed_tiers_fail(self):
+        seed = table.render_tiers({c: table.tier_for(c, []) for c in table.CONNECTOR_IDS})
+        code, out = self.check(self.repo(green_rows(), tiers_text=seed))
+        self.assertEqual(code, 1)
+        self.assertIn(self.DIFFERS, out)
+
+    def test_missing_tiers_file(self):
+        sha = self.repo(green_rows(), tiers_text=False)
+        code, out = self.check(sha)
+        self.assertEqual(code, 1)
+        self.assertIn("connectors/tiers.toml missing at %s" % sha, out)
+
+    def test_harness_files_read_at_the_commit(self):
+        sha = self.repo(green_rows(), harness={"hermes-cli": self.NOTE % "n1"})
+        (table.ROOT / "scripts/pad/harnesses/hermes-cli.toml").write_text(self.NOTE % "n2", encoding="utf-8")
+        self.assertIn('reason = "n1"', git(table.ROOT, "show", sha + ":connectors/tiers.toml"))
+        code, out = self.check(sha)
+        self.assertEqual(code, 0, out)
+
+    def test_main_renders_from_committed_rows(self):
+        self.repo(green_rows(), tiers_text=False)
+        with mock.patch.object(table, "PAD_OUT", table.ROOT / "pad-out"), \
+                mock.patch.object(table, "TIERS", table.ROOT / "connectors" / "tiers.toml"), \
+                mock.patch.object(table, "RESULTS", table.ROOT / "PAD-RESULTS.md"), redirect_stdout(io.StringIO()):
+            self.assertEqual(table.main([]), 0)
+        text = (table.ROOT / "connectors" / "tiers.toml").read_text(encoding="utf-8")
+        self.assertIn('[codex-cli]\ntier = "verified"', text)
+        self.assertFalse((table.ROOT / "PAD-RESULTS.md").exists())
 
 
 class TierOs(unittest.TestCase):
