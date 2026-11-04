@@ -399,10 +399,11 @@ environment. `DATABASE_URL` is the website database URL: set it from `DATABASE_U
 
 1. Run `sh scripts/delete-test-runs.sh`. This is a dry run. It prints what would go and changes nothing.
 2. Read the list. If it is right, run `sh scripts/delete-test-runs.sh --yes`.
-3. To keep recent runs, add `--older-than '7 days'`. If the script reports objects not deleted, run it
-   again without `--older-than`. That run deletes every test run. (With `--older-than`, a second run no longer
-   knows the runs, because the rows are gone.) A test run still uploading while the script runs can leave
-   objects behind; a run without `--older-than` removes them too.
+3. To keep recent runs, add `--older-than '7 days'`. If the script reports objects not deleted, it lists
+   them in `delete-test-runs.failed` (the database rows are already gone). Retry only those with
+   `sh scripts/delete-test-runs.sh --objects delete-test-runs.failed --yes`; without `--yes` it prints the
+   count. A test run still uploading while the script runs can leave objects behind; a run without
+   `--older-than` removes them too.
 
 More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 
