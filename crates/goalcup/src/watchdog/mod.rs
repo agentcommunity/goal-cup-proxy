@@ -503,14 +503,19 @@ fn watch(
             }
         }
         // Orphans of its own harness, reaped. The `before` helpers are done and the `after` ones
-        // not started, so the only children kept are the harness and the recorder.
+        // not started, so the only children kept are the harness, the recorder and those from
+        // before the harness (`start`'s sleep lock, whose `Child` waits for it).
         if own.is_some()
             && harness_pid.is_some()
             && after.is_none()
             && Mono::now().0.saturating_sub(reaped_at.0) >= REAP_NS
         {
             reaped_at = Mono::now();
-            spawn::reap_orphans(&|p| Some(p) == harness_pid || spare(p));
+            spawn::reap_orphans(&|p| {
+                Some(p) == harness_pid
+                    || spare(p)
+                    || cli::proc_start_id(p).is_none_or(|s| s < harness_start)
+            });
         }
         let gone = match own {
             Some(_) => harness_pid.and_then(spawn::look),
