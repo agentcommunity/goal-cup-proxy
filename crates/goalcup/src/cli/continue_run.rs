@@ -298,7 +298,7 @@ pub fn prepare(
     if let (Some(a), Some(b)) = (before, now) {
         lines.extend((a != b).then(|| text::updated(&name, a, b)));
     }
-    lines.extend(connector.first_screen.clone());
+    lines.extend(plan.effective.first_screen.clone());
     lines.extend(first_message(
         &found.run_dir,
         resumed,

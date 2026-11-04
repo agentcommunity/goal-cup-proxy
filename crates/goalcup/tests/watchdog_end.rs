@@ -100,6 +100,8 @@ impl Fixture {
             secret_values: Vec::new(),
             notes: Vec::new(),
             version_notes: Vec::new(),
+            version_row: None,
+            effective: Default::default(),
             unread: Vec::new(),
             log: Vec::new(),
             refusal: None,

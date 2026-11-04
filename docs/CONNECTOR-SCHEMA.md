@@ -19,8 +19,8 @@ is the participant's project folder.
 | `id` | string `[a-z0-9-]{1,32}` | | The connector id: `goalcup start --harness <id>` |
 | `name` | string | | Shown to the participant |
 | `program` | string | | The executable, found on the participant's `PATH` |
-| `version` | string | none | A word of the first non-empty line of `program --version`, with a leading `v` stripped, must start with it, else the start refuses, naming the program. A version that cannot be read (no output, a failed exit, 5 s without an exit) refuses nothing |
-| `version_notes` | list of `{versions, say}` | `[]` | When the read version has a word starting with one of `versions` (as `version` matches, but no digit may follow it: `0.22.6` is not `0.22.60`), `say` is printed by `goalcup start`, `continue` and `setup` and recorded as a `note` event (`what = "version_note"`). It never refuses a run; an unread version prints nothing |
+| `checked` | string | none | The build these values were checked on, as `version` parsing reads it (`2.2.2`, no `v`). Said when the version cannot be read on a connector with `[[versions]]` rows |
+| `versions` | list of rows | `[]` | Per-version overrides. A row has `match` (a version spec: `1.x`, `0.22.6`, `>=1.2,<2`), an optional `say` (printed at start, continue and setup, and recorded as a `note` event, `what = "version_note"`), and any of `args`, `resume`, `env`, `unset`, `host_hints`, `secret_files`, `no_prompts`, `update_off`, `native`, `first_screen`, `before`, `after`. The first row whose `match` holds wins; a list or string replaces the base value, `env` merges key by key, `first_screen = ""` clears it. Any other key fails the load. The merged connector passes the same checks as the base. An unread version gets the base. Never refuses a run |
 | `args` | string list | `[]` | Arguments for `goalcup start`. Template `{workspace}` only |
 | `resume` | string list | `[]` | Appended to `args` for `goalcup continue`. Template `{workspace}` only |
 | `home` | map, variable to template | empty | Variables pointed into the isolated home; each value starts with `{home}`. The folders are created with mode 0700. Where it sets `HOME`, goalcup also writes `$HOME/.profile`, putting the handed `PATH` back after a login shell resets it: replaced only when goalcup wrote it, else kept with a log line |
@@ -86,16 +86,14 @@ thread_db = { row = "db", file = "crush.db*", table = "sessions", id = "id", par
 
 ## Harness versions
 
-Goal Cup Proxy reads the harness version, records it and says one plain line. The policy is that no
-version refuses a start; one exception remains today and is being removed.
+Goal Cup Proxy reads the harness version, records it and says one plain line. No version refuses
+a start.
 
 - Read: the first version-looking token of `<program> --version` (stdout, else stderr).
 - Recorded: `harness_version` in the `start` event of every boot, a continue included (see
-  [RECORD-FORMAT](RECORD-FORMAT.md)). Planned: a version read at seal too.
-- Refused: only at start and setup, when another built-in connector fits the version better
-  (OpenCode 1 vs 2). That refusal is being removed.
-- A known problem: today a `[[version_notes]]` row (`versions`, `say`), said at start and recorded;
-  planned: a `[[versions]]` note.
+  [RECORD-FORMAT](RECORD-FORMAT.md)).
+- Rules per version: `[[versions]]` rows over the base keys (table above). Order rows most
+  specific first.
 - "Verified" is not a connector field. [`connectors/tiers.toml`](../connectors/tiers.toml) is
   written from pad rows; (version, os) pairs are planned.
 

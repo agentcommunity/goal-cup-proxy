@@ -339,7 +339,7 @@ fn scripted(body: &str, extra: &str) -> Fix {
 /// version says nothing of the kind, and neither says a version note.
 #[test]
 fn an_unread_harness_version_is_said_and_the_run_starts() {
-    let note = "[[version_notes]]\nversions = [\"1.2.3\"]\nsay = \"Tester 1.2.3 loses calls.\"\n";
+    let note = "[[versions]]\nmatch = \"1.2.3\"\nsay = \"Tester 1.2.3 loses calls.\"\n";
     let screen = |fix: &Fix| {
         let w = FakeWorker::start();
         let mut out = Vec::new();
@@ -361,7 +361,7 @@ fn an_unread_harness_version_is_said_and_the_run_starts() {
 /// Runs a real start whose harness reports `version`, with a note for 1.2.3. Returns the start
 /// screen and every `version_note` event in the record.
 fn start_with_note(version: &str) -> (String, usize) {
-    let note = "[[version_notes]]\nversions = [\"1.2.3\"]\nsay = \"Tester 1.2.3 loses calls.\"\n";
+    let note = "[[versions]]\nmatch = \"1.2.3\"\nsay = \"Tester 1.2.3 loses calls.\"\n";
     let fix = scripted(&format!("#!/bin/sh\necho tester v{version}\n"), note);
     let w = FakeWorker::start();
     let out = spawn_start(&fix, &w.url());

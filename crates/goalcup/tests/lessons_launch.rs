@@ -219,6 +219,8 @@ fn watchdog_world() -> std::process::ExitCode {
         secret_values: vec![],
         notes: vec![],
         version_notes: vec![],
+        version_row: None,
+        effective: Default::default(),
         unread: vec![],
         log: vec![],
         refusal: None,

@@ -307,7 +307,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     // Step 9: the launch block.
     let (local_wall, deadline) = deadline_ms(opened.deadline);
     let mut lines = vec![text::run_kind(mode).to_owned()];
-    lines.extend(connector.first_screen.clone());
+    lines.extend(plan.effective.first_screen.clone());
     lines.extend(first_message(a, c, prompt.as_deref(), &opened.run)?);
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(c.server.host()));
