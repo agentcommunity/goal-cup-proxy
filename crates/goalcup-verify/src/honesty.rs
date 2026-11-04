@@ -3,6 +3,7 @@
 //! dropped at its END and at a new boot. A record of a stream never seen open is ignored here
 //! (integrity reports it); a crafted record must not panic (L-VR3).
 
+use crate::hosts;
 use crate::integrity::{At, Check, Res, has_extent};
 use crate::legs::Cover;
 use goalcup_format::{EndReason, GapReason, Item, Record, StreamKind};
@@ -47,6 +48,7 @@ struct Counts {
     listed: u64,
     decrypted: u64,
     sign_in: u64,
+    sign_in_big: u64,
     conn_gaps: u64,
     unnamed: u64,
     empty: u64,
@@ -96,6 +98,8 @@ pub struct Honesty {
     refused: BTreeSet<(String, String)>,
     hosts: BTreeSet<String>,
     tunnels_named: BTreeMap<String, u64>,
+    /// The start event's `hosts_sha256` is not this build's (an absent one is not judged).
+    other_list: bool,
     n: Counts,
     checks: Checks,
 }
@@ -210,9 +214,12 @@ impl Honesty {
                 &mut self.long
             };
             set.insert(h.into());
-        } else if is("ev", "start")
-            && let Some(Value::Object(by_source)) = e.get("hosts")
-        {
+        } else if is("ev", "start") {
+            let sha = e.get("hosts_sha256").and_then(Value::as_str);
+            self.other_list |= sha.is_some_and(|h| h != hosts::sha256());
+            let Some(Value::Object(by_source)) = e.get("hosts") else {
+                return;
+            };
             let all = by_source
                 .iter()
                 .filter_map(|(src, hs)| Some((src, hs.as_array()?)))
@@ -255,12 +262,15 @@ impl Honesty {
             let (on_kind, on_src) = on.unwrap_or_default();
             let host_kind = s("kind").unwrap_or(on_kind);
             let src = s("listed").unwrap_or(on_src);
-            // Listed by the conn's word or the start event's (a mislabelled host must not hide a
-            // blind relay); by the participant's or config's word it is the model host.
-            let listed = s("listed").is_some() || on.is_some();
-            let model = listed
-                && (matches!(host_kind, "provider" | "gateway")
-                    || matches!(src, "participant" | "config"));
+            // Listed by the conn's word, the start event's or this build's host file (a
+            // mislabelled host must not hide a blind relay); by the participant's or config's
+            // word it is the model host.
+            let built = hosts::kind(host).is_some_and(|k| k != "vendor");
+            let listed = s("listed").is_some() || on.is_some() || built;
+            let model = built
+                || listed
+                    && (matches!(host_kind, "provider" | "gateway")
+                        || matches!(src, "participant" | "config"));
             let mut c = Conn {
                 host: host.into(),
                 reason: s("reason").unwrap_or("unknown").into(),
@@ -369,22 +379,30 @@ impl Honesty {
         }
     }
 
-    /// A listed tunnel is judged at its END: a sign-in is no loss, a GAP of its own reason is
-    /// `named`, none is a silent loss.
+    /// A listed tunnel is judged at its END: a sign-in to a `never` host is no loss, a GAP of
+    /// its own reason is `named`, none is a silent loss. A sign-in tunnel over 1 MiB is `named`.
     fn tunnel_end(&mut self, c: &Conn, tail: &Map<String, Value>, at: At) {
         let check = &mut self.checks.listed;
+        let size = |k: &str| tail.get(k).and_then(Value::as_u64);
+        let sign_in = c.reason == "sign_in";
+        let moved = size("up")
+            .unwrap_or(0)
+            .saturating_add(size("down").unwrap_or(0));
+        if sign_in && moved > MIB {
+            inc(&mut self.n.sign_in_big, 1);
+            check.raise(Res::Named, "", Some(at));
+        }
         if c.after_trust && !c.quiet {
             check.raise(Res::Warn, "", Some(at));
             let fp = c.fp.clone().unwrap_or_default();
             self.refused.insert((c.host.clone(), fp));
         }
-        if !c.listed || c.reason == "sign_in" {
+        if !c.listed || sign_in && hosts::never(&c.host) {
             return;
         }
         // Nothing moved, nothing lost: the recorder writes no GAP then (a GAP present is still
         // judged). Such a tunnel stays out of `hosts` too, so the host list equals the recorder's
         // count. A tail without `up` or `down` is an unknown size and is still judged.
-        let size = |k: &str| tail.get(k).and_then(Value::as_u64);
         if size("up") == Some(0) && size("down") == Some(0) && c.gaps == 0 {
             inc(&mut self.n.empty, 1);
             return;
@@ -443,7 +461,7 @@ impl Honesty {
             mut bytes,
             mut mask,
         } = self.checks;
-        if !long.is_empty() {
+        if !long.is_empty() || self.other_list {
             listed.raise(Res::Warn, "", None);
         }
         // Nothing judged, or a decrypted connection with no plain byte count, is no evidence.
@@ -461,21 +479,25 @@ impl Honesty {
         let hosts = (self.hosts.iter().chain(long.iter().copied())).cloned();
         let hosts = hosts.chain(expected).collect::<Vec<_>>().join(", ");
         let blind = self.tunnels_named.values().sum::<u64>() + n.unnamed;
-        let why = format!(
+        let mut why = format!(
             "{} listed connections: {} decrypted, {} sign-in, {} tunnels that moved no byte, {blind} blind ({} with no GAP \
-             of their reason), {} conn GAPs on decrypted ones, {} long tunnels to unlisted hosts, \
+             of their reason), {} sign-in tunnels over 1 MiB, {} conn GAPs on decrypted ones, {} long tunnels to unlisted hosts, \
              {} refusals after trust; hosts: {hosts}",
             n.listed,
             n.decrypted,
             n.sign_in,
             n.empty,
             n.unnamed,
+            n.sign_in_big,
             n.conn_gaps,
             long.len(),
             refused.len()
         );
+        if self.other_list {
+            why += "; the record's host list differs from this verifier's";
+        }
         let facts = json!({"listed_conns": n.listed, "decrypted": n.decrypted,
-            "sign_in": n.sign_in, "tunnels_empty": n.empty, "tunnels_named": self.tunnels_named,
+            "sign_in": n.sign_in, "sign_in_big": n.sign_in_big, "tunnels_empty": n.empty, "tunnels_named": self.tunnels_named,
             "tunnels_unnamed": n.unnamed, "conn_gaps": n.conn_gaps,
             "long_tunnel_unlisted": long, "long_tunnel_expected": self.long_expected,
             "refusal_after_trust": refused});

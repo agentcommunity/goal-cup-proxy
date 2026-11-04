@@ -261,9 +261,14 @@ fn listed_tunnels_with_a_named_reason_are_named_and_without_a_gap_fail() {
         assert_eq!(result(&v, "listed_hosts_decrypted"), "named", "{reason}");
         assert_eq!(code, 1, "{reason}");
     }
-    for (reason, res) in [("pinned", "fail"), ("sign_in", "pass")] {
+    // A sign-in is free only to a `never` host of connectors/model-hosts.toml.
+    for (host, reason, res) in [
+        ("t.example.test", "pinned", "fail"),
+        ("t.example.test", "sign_in", "fail"),
+        ("auth.openai.com", "sign_in", "pass"),
+    ] {
         let mut e = Entry::new("listed-tunnel-no-gap");
-        tunnel_bytes(&mut e, "t.example.test", reason, None, USUAL);
+        tunnel_bytes(&mut e, host, reason, None, USUAL);
         let (code, v) = sealed(e);
         assert_eq!(result(&v, "listed_hosts_decrypted"), res, "{reason}");
         assert_eq!(code == 2, res == "fail", "{reason}");

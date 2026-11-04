@@ -16,6 +16,7 @@ use goalcup_format::{
 use goalcup_format::{StreamKind, index_name, part_name};
 use goalcup_verify::usage::{CallTable, Calls};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -718,14 +719,18 @@ pub fn clean(name: &str) -> PathBuf {
     e.seal()
 }
 
+/// The start event. `hosts_sha256` is the recorder's: SHA-256 of the shared host file's bytes,
+/// lowercase hex (crates/goalcup/src/connector/hosts.rs `HostList::from_file`).
 pub fn start(resume: bool) -> Value {
     let zeros = "0".repeat(64);
+    let hosts = include_str!("../../../../connectors/model-hosts.toml");
+    let hosts_sha256 = goalcup_format::hex(&Sha256::digest(hosts));
     json!({"ev": "start", "run": RUN, "entry": ENTRY, "segment": 0, "goalcup": "1.0.0",
         "build": null, "os": "linux", "arch": "x86_64", "connector": "fake",
         "connector_source": "file", "connector_sha256": zeros, "harness_version": null,
         "hosts": {"shared": [{"host": HOST, "kind": "provider", "pinned": false}],
                   "participant": [], "config": []},
-        "hosts_sha256": zeros, "mask_rules": MASK_RULES, "mask_values": {"skipped": 0},
+        "hosts_sha256": hosts_sha256, "mask_rules": MASK_RULES, "mask_values": {"skipped": 0},
         "fd_limit": 1024, "keep": true, "deadline": null, "server_time": null,
         "local_wall_at_server_time": null, "workspace_head": null, "resume": resume})
 }
