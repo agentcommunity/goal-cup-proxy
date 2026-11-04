@@ -75,7 +75,7 @@ pub struct Ask<'a> {
     pub hosts_file: Option<&'a Path>,
     /// The host lists in force; kept in `server.json` for `goalcup recover`.
     pub hosts: &'a crate::connector::HostList,
-    /// A flat object of machine facts (`os`, `cpus`, `ac_power`).
+    /// A flat object of machine facts (`os`, `cpus`).
     pub machine: Value,
 }
 

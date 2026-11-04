@@ -202,7 +202,7 @@ a run that exists is answered before the check. An empty minimum checks nothing.
 `500 misconfigured` for those two calls only. `wrangler.toml` sets `1.0.0` for staging and for
 production; production carries it from the owner's 1.0 deploy.
 
-`machine` is optional: facts about the machine, a flat JSON object whose values are strings,
+`machine` is optional: facts about the machine (goalcup sends `os` and `cpus` only), a flat JSON object whose values are strings,
 numbers, booleans or `null`, at most 4 KiB serialized (else `400`; `null` means absent). The server
 keeps it on the run and never shows it. It also keeps the connection's IP address and country (from
 Cloudflare) on the run: the open call's pair, which stays, and the latest pair, which each `continue`

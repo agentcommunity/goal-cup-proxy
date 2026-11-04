@@ -203,8 +203,11 @@ the seal's LINK.
 
 Some `start` keys:
 
-- `harness_semver`: the build parsed from `harness_version` (`1.2.3`, suffix kept), or null.
+- `harness_version` (the first line of `<harness> --version`, or null) and `harness_semver`: the
+  build parsed from it (`1.2.3`, suffix kept), or null.
 - `version_row`: the `match` of the connector's `[[versions]]` row that set the rules, or null for the base.
+- `os`, `arch`: the machine's. There is no `build`, `server_time` or `local_wall_at_server_time`
+  (the `goalcup` version string carries the commit); an old record that has them still reads.
 
 Some `note` kinds (`what`):
 
@@ -278,7 +281,7 @@ LINK stamped by a new boot after a reboot) is not compared.
 and a link: 998 raw bytes, 10 records. `crates/goalcup-format/tests/golden.rs` checks it. The file
 is raw and `goalcup-verify` reads only zstd input, so its dump (`worked-example.dump.jsonl`, below)
 is `goalcup-verify dump --text` on a zstd copy (`zstd -c worked-example.gcr > rec-0.gcr.zst`). Its
-`conn` meta predates the `kind` key; readers ignore a missing optional key.
+`conn` meta predates the `kind` key and its `start` carries the old `build` key; readers ignore a missing or extra optional key.
 
 ```json
 {"o":0,"k":"part","entry":"e0123456789abcdef","boot":0,"part":0,"raw_offset":0,"wall":"2026-11-07T00:00:00Z","mono":5000000000,"next_link":0}

@@ -4,7 +4,7 @@ This repository holds Goal Cup Proxy (`goalcup`), the recorder for Goal Cup runs
 participant's machine records every model request a coding agent's harness makes, through a loopback
 proxy, plus the harness's own session files, and writes every loss as a gap with a start and an end.
 It uploads the record while the run goes on. `goalcup-verify` checks a record and reads usage from
-it later. Linux and macOS (arm64, tested on the owner's Mac); Windows through WSL2, untested. Open work is in
+it later. Tested: Linux x86_64 (sandboxes) and macOS arm64 (the owner's Mac). Built, not tested: macOS Intel, Linux arm64. Windows through WSL2, untested ([README](README.md#platforms)). Open work is in
 [TODO.md](TODO.md).
 
 ## The seven points
@@ -22,12 +22,12 @@ Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), t
 
 | Path | What it is |
 |---|---|
-| `crates/goalcup-format` | The record format (GCR1): records, links, part writer, reader, dump. No async, no TLS. Spec: [RECORD-FORMAT](docs/RECORD-FORMAT.md). |
-| `crates/goalcup` | `goalcup`: the eight commands, the watchdog, the recorder process (proxy, session-file reader, masking, writer, uploader) and the connector loader. |
+| `crates/goalcup-format` | The record format (GCR1): records, links, part writer, reader, dump, and what both binaries share (`shared`, and `connectors`, built from `connectors/*.toml` by `build.rs`). No async, no TLS. Spec: [RECORD-FORMAT](docs/RECORD-FORMAT.md). |
+| `crates/goalcup` | `goalcup`: the eight commands, the watchdog, the recorder process (proxy, session-file reader, masking, writer, uploader) and the connector loader. `connector/version.rs` parses harness versions and picks the `[[versions]]` row. |
 | `crates/goalcup-verify` | `goalcup-verify`: `check`, `dump`, `secrets`, `usage`. Every judgement about the bytes lives here. |
-| `connectors/` | One `<id>.toml` per harness, `model-hosts.toml` (the one host list) and `tiers.toml` (written by the test pad). Data: the connector files are compiled into both binaries, the two list files into `goalcup`. |
+| `connectors/` | One `<id>.toml` per harness, `model-hosts.toml` (the one host list) and `tiers.toml` (written by the test pad). Data: the connector files are compiled into both binaries by `crates/goalcup-format/build.rs`, the two list files into `goalcup`, `shapes.tsv` (the masker's shapes) into both. |
 | `server/worker` | The upload server, a Cloudflare Worker. It stores bytes and interprets nothing. |
-| `scripts/` | The gate, release, `fetch-run.sh` and the test pad (`scripts/pad/`): [scripts/README.md](scripts/README.md). |
+| `scripts/` | The gate, release, `fetch-run.sh`, the test pad (`scripts/pad/`) and its canary (`scripts/pad/canary`, new harness builds): [scripts/README.md](scripts/README.md). |
 | `skills/` | `goal-cup` (copied into the harness home) and `adding-a-capture-harness` (contributors). |
 | `docs/` | By reader: the [docs map](README.md#docs-map). Plans: `docs/plans/`. History: `docs/archive/`, `docs/research/`. |
 | `packaging/` | Release packaging and `install.sh`. |

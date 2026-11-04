@@ -59,7 +59,7 @@ Coverage: [TEST-COVERAGE](docs/plans/2026-10-30-v1.0/TEST-COVERAGE.md). Findings
 [MAC-LEARNINGS](docs/plans/2026-10-30-v1.0/MAC-LEARNINGS.md).
 
 Before release:
-- 🔴 Freeze; release rows on the frozen head (Claude Code, Codex, Hermes at least).
+- 🔴 Freeze; release rows on the frozen head (Claude Code, Codex, Hermes), then `scripts/pad/table --release-check`. Hermes needs 0.22.5 and 0.22.6 both verified on macOS arm64 (only 0.22.6 has rows today).
 - 🔴 Release path end to end: GitHub release, `install.sh` from it, production Worker smoke run.
 - 🟡 A one-hour PASS. Best so far INC on both systems; misses were harness subagent counts, not loss.
   Option: set the subagent target to what harnesses really start (about 10).
@@ -70,10 +70,9 @@ After 1.0:
 - Restated passwords stay raw (OpenClaw, stated loss): server-side scrub, or `.git/config` remote
   passwords as exact values at launch (MAC-LEARNINGS 7a).
 - Copilot and Droid subagent readers.
-- Hermes 0.22.6 (hermes-agent#148241): drop the version note once a fixed Hermes ships.
 - `hermes gateway stop` helper times out on every run (MAC-LEARNINGS 3).
 - Codex in its private home reads `~/.agents/skills` (MAC-LEARNINGS 7d).
-- Cline and Factory Droid rows; gateway and dodger cases on macOS; Windows (WSL2).
+- Cline and Factory Droid rows; Windows (WSL2).
 - A competition run from scratch with a public repo; a newcomer reads the docs.
 - RULES lists banned Cursor flags; there is no Cursor connector.
 

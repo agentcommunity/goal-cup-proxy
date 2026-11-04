@@ -2,7 +2,7 @@
 
 A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A new
 connector is its TOML file alone; `crates/goalcup-format/build.rs` builds every `connectors/*.toml`
-into both binaries, and `tests/connector_builtin.rs` fails on an `id` that differs from the file name.
+into both binaries, and the connector tests fail on an `id` that differs from the file name.
 Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a connector.
 The `start` event names the connector (`connector`, `connector_source`, `connector_sha256`)
 and the host list's hash (`hosts_sha256`).
@@ -20,8 +20,8 @@ is the participant's project folder.
 | `name` | string | | Shown to the participant |
 | `program` | string | | The executable, found on the participant's `PATH` |
 | `old_ids` | string list | `[]` | Built-in ids this connector had before. `--harness`, `goalcup continue` and the usage reader take a run that names one as this connector |
-| `checked` | string | none | The build these values were checked on, as `version` parsing reads it (`2.2.2`, no `v`). Said when the version cannot be read on a connector with `[[versions]]` rows |
-| `versions` | list of rows | `[]` | Per-version overrides. A row has `match` (a version spec: `1.x`, `0.22.6`, `>=1.2,<2`), an optional `say` (printed at start, continue and setup, and recorded as a `note` event, `what = "version_note"`), and any of `args`, `resume`, `env`, `unset`, `host_hints`, `secret_files`, `no_prompts`, `update_off`, `native`, `first_screen`, `before`, `after`. The first row whose `match` holds wins; a list or string replaces the base value, `env` merges key by key, `unset` only adds, `first_screen = ""` clears it. Any other key fails the load. The merged connector passes the same checks as the base. An unread version gets the base. Never refuses a run |
+| `checked` | string | none | The build these values were checked on, as `version` parsing reads it (`2.2.2`, no `v`). Named in the line printed when the version cannot be read on a connector with `[[versions]]` rows (no row may match it) |
+| `versions` | list of rows | `[]` | Per-version overrides. A row has `match` (a version spec: `1.x`, `0.22.6`, `>=1.2,<2`), an optional `say` (printed at start, continue and setup, and recorded as a `note` event, `what = "version_note"`), and any of `args`, `resume`, `env`, `unset`, `host_hints`, `secret_files`, `no_prompts`, `update_off`, `native`, `first_screen`, `before`, `after`. The first row whose `match` holds wins; a list or string replaces the base value, `env` merges key by key, `unset` only adds, `first_screen = ""` clears it. Any other key fails the load, among them `id`, `name`, `program`, `old_ids`, `checked`, `home`, `ca_env`, `ca_settings`, `refuse_if_set`, `mask`, `hint_env`, `end_note`, `skills_dir` and `usage`. The merged connector passes the same checks as the base. An unread version gets the base. Never refuses a run |
 | `args` | string list | `[]` | Arguments for `goalcup start`. Template `{workspace}` only |
 | `resume` | string list | `[]` | Appended to `args` for `goalcup continue`. Template `{workspace}` only |
 | `home` | map, variable to template | empty | Variables pointed into the isolated home; each value starts with `{home}`. The folders are created with mode 0700. Where it sets `HOME`, goalcup also writes `$HOME/.profile`, putting the handed `PATH` back after a login shell resets it: replaced only when goalcup wrote it, else kept with a log line |
@@ -39,7 +39,7 @@ is the participant's project folder.
 | `first_screen` | string | none | One line printed just before the harness opens: a first-run question to expect |
 | `no_prompts` | list of `{file, key, value}` | `[]` | Settings `goalcup setup` writes into the isolated home after its one question, so the harness never stops to ask approval |
 | `update_off` | list of `{file, key, value}` | `[]` | An auto-update switch that exists only as a setting. Written into the isolated home with no question, again at every `goalcup start` and `continue`. Where an env switch exists, it goes in `env` |
-| `ca_settings` | table `{file, entries, uses, add, key, value, fallback}` | none | Trust per model address, written at every `goalcup start` and `continue`, never by setup. Each `https` address in `file` (not local) gets `key = value` beside it: at each `entries` key (one `*` part for the entry; an entry already holding another CA value keeps it), and for each other address at a `uses` key on a new entry, `add` with its `*` as `goalcup-trust-<address>`. When `file` names no address, the new entries are for the `fallback` addresses: each `https` on a shared-list host. `value` is never an address |
+| `ca_settings` | table `{file, entries, uses, add, key, value, fallback}` | none | Trust per model address, written at every `goalcup start` and `continue`, never by setup. Each `https` address in `file` (not local) gets `key = value` beside it: at each `entries` key (one `*` part for the entry; an entry already holding another CA value keeps it), and for each other address at a `uses` key on a new entry, `add` with its `*` as `goalcup-trust-<address>`. When `file` names no address, the new entries are for the `fallback` addresses: each `https` on a shared-list host (Hermes: its nine built-in routes). The participant's own addresses come first; `fallback` is used only when `file` names none. `value` is never an address |
 | `skills_dir` | template | none | Where the goal-cup skill is installed, under `{home}`. Absent: no skill is installed |
 
 A key is dotted (`env.HTTPS_PROXY`); in a hint or refusal key a part may hold `*`, matching any key
@@ -94,10 +94,21 @@ a start.
 - Read: the first version-looking token of `<program> --version` (stdout, else stderr).
 - Recorded: `harness_version` in the `start` event of every boot, a continue included (see
   [RECORD-FORMAT](RECORD-FORMAT.md)).
-- Rules per version: `[[versions]]` rows over the base keys (table above). Order rows most
-  specific first.
+- Rules per version: `[[versions]]` rows over the base keys (table above). The first row whose
+  `match` holds wins, so order rows most specific first. An unread version gets the base.
 - "Verified" is not a connector field. [`connectors/tiers.toml`](../connectors/tiers.toml) is
-  written from pad rows; (version, os) pairs are planned.
+  written from pad rows, as (version, os) pairs under `builds`.
+
+From [`connectors/opencode-cli.toml`](../connectors/opencode-cli.toml): the base is OpenCode 2
+(`checked = "2.2.2"`); this row overrides the keys OpenCode 1 reads differently.
+
+```toml
+[[versions]]
+match = "1.x"
+args = []
+first_screen = ""
+no_prompts = [{ file = "{home}/.config/opencode/opencode.json", key = "permission", value = "allow" }]
+```
 
 ## Load checks
 

@@ -15,7 +15,7 @@ Source words: "docs" is [opencode.ai/docs](https://opencode.ai/docs/cli/) for 1.
 ## 2. Install and record a version
 
 - 1.x: `curl -fsSL https://opencode.ai/install | bash`. 2.x: `curl -fsSL https://opencode.ai/v2/install | bash` or `npm install -g @opencode/cli` ([docs](https://opencode.ai/v2/docs)). A mise install older than 2026.10.9 gets OpenCode 1.
-- Both print the version with `opencode --version`. The two connectors share the program name and are told apart only by the version word-prefix rule: `"1."` for 1.x, `"2."` for 2.x. A mismatch refuses the start and names the program; the pad's first row of each is the proof on a real binary.
+- Both print the version with `opencode --version`. One connector serves both: the base keys are for 2.x and the `1.x` `[[versions]]` row replaces what 1.x reads differently. No version refuses a start; an unread version gets the 2.x base.
 - 1.x releases about weekly, 2.x often twice a day (npm, 29 Oct); expect several builds in a run.
 
 ## 3. Where it keeps things, per OS
@@ -66,7 +66,7 @@ Both connectors set the four XDG folders under the isolated home and read `openc
 
 ## Run without permission prompts
 
-1.x: `"permission": "allow"` in `opencode.json`; `external_directory`, `doom_loop` and `.env` reads default to `ask` otherwise ([docs](https://opencode.ai/docs/permissions/)). The `opencode-cli` connector's `no_prompts` row writes it. 2.x names the key `permissions`, an ordered rule list ([docs](https://opencode.ai/v2/docs/config)), so `opencode2-cli` has no `no_prompts` row. The 2.x CLI has a switch `--auto`: "Auto-approve permissions that are not explicitly denied" ([docs](https://opencode.ai/v2/docs/cli); listed by `opencode --help` on 2.2.2). The connector does not pass it: a switch in `args` would apply on every start whatever the participant answered to the setup question, and the `first_screen` line says approvals stay on. An unattended 2.x run therefore waits at the first approval. A switch that setup adds to `args` only after the participant says yes is not available yet.
+1.x: `"permission": "allow"` in `opencode.json`; `external_directory`, `doom_loop` and `.env` reads default to `ask` otherwise ([docs](https://opencode.ai/docs/permissions/)). The `opencode-cli` connector's `no_prompts` row writes it. 2.x names the key `permissions`, an ordered rule list ([docs](https://opencode.ai/v2/docs/config)), so the base (2.x) has no `no_prompts` row; only the `1.x` row has one. The 2.x CLI has a switch `--auto`: "Auto-approve permissions that are not explicitly denied" ([docs](https://opencode.ai/v2/docs/cli); listed by `opencode --help` on 2.2.2). The connector does not pass it: a switch in `args` would apply on every start whatever the participant answered to the setup question, and the `first_screen` line says approvals stay on. An unattended 2.x run therefore waits at the first approval. A switch that setup adds to `args` only after the participant says yes is not available yet.
 
 ## Pad result
 

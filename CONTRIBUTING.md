@@ -91,7 +91,7 @@ A connector is trusted data compiled into every build, so a code owner reads eac
 - `env` holds no key, token or user path, and no variable that names a command, hook or host;
 - every host added to `connectors/model-hosts.toml` has a vendor doc link, and is a model host,
   not a registry or an unrelated service;
-- the pad row is attached, from a run of the version the connector names, and its table passes;
+- the pad row is attached, from a run of any installed version (the pad records it), and its table passes;
 - the PR holds no `.rs` file and no real trace.
 
 ## Maintainer-owned files

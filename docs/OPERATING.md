@@ -108,10 +108,10 @@ The pad answers whether a connector, on this build, against staging, records and
 server holds whole. `python3.11 scripts/pad/pad scripts/pad/runs/<mode>.toml` runs it in a build sandbox
 and prints one table; the ladder is `micro`, `cycle` and `full`, and the other files in
 `scripts/pad/runs/` are acceptance (`a1` to `a5`), release-check (`core-*`), a template (`mini`) and a fallback (`kill-codex`) rows. Exit 0 means every row passed, 1 a
-failure, 3 inconclusive, 2 a usage error. Model keys are named in `scripts/pad/pad.toml` and read by name
+failure, 3 inconclusive, 2 a usage error. The staging Worker's address is not in the repo: set `PAD_STAGING_URL` (an `https` address whose first host label contains `staging`) or `staging_url` in an untracked settings file. Model keys are named in `scripts/pad/pad.toml` and read by name
 from the conductor's environment; they and the staging approval and database credentials never enter the
 sandbox. `scripts/pad/table` writes the rows and `PAD-RESULTS.md`, and
-`scripts/pad/table --release-check <commit>` is the release gate ([Releasing](#releasing)). Design and
+`scripts/pad/table --release-check <commit>` is the release gate ([Releasing](#releasing)). For the core harnesses it needs a passing `full` row for every build in the harness file's `release_versions` on macOS arm64 (`darwin-arm64`): for Hermes, **0.22.5 and 0.22.6 both verified**. Design and
 settings: `scripts/pad/pad.toml` and the mode files in `scripts/pad/runs/`.
 
 Delete every test run, database rows and R2 objects, in one go (from `server/worker`):
@@ -230,7 +230,7 @@ Classify a new build within 2 hours, on the pad (serial, one Mac). Install that 
 `install` line of `scripts/pad/harnesses/<id>.toml`, the version changed (for Hermes, the tag and the `--commit`
 hash). Copy `scripts/pad/runs/micro.toml`, set its `harness` and `key` lines for that harness (`key` names one
 in `scripts/pad/pad.toml`), add `where = "here"`, and run `python3.11 scripts/pad/pad <your copy>`. Without
-`where = "here"` the row runs in the sandbox image, on the build pinned there, not the new one. Amp has no pad key (`key_kind = "none"`): install the build by hand
+`where = "here"` the row runs in the sandbox image, on the build pinned there, not the new one. On the Mac, a row for one installed build sets `versions = ["<v>"]` and `here_path = ["<dir of that install's bin>"]` (absolute, put first on PATH for that run only; example: `scripts/pad/runs/here-hermes-0.22.6.toml`). Amp has no pad key (`key_kind = "none"`): install the build by hand
 and run it as in [Amp section 1](harnesses/amp-cli.md#1-run-one-prompt-in-chat-mode-first).
 
 | Outcome | Do |

@@ -27,7 +27,7 @@ goalcup setup --record-host HOST  # add a model host to $GOALCUP_HOME/record-hos
 Without `--harness` it uses the harness saved in `setup.json`, or asks.
 With a terminal and no `--yes`, it:
 
-1. Prints the harness name, version and path; prints any `version_notes` line that holds.
+1. Prints the harness name, version and path; prints the `say` of a `[[versions]]` row that matches.
 2. Opens the harness once in its private home, for sign-in. Quit it to go on.
 3. Writes the connector's `update_off` rows.
 4. Asks one question, then writes the `no_prompts` rows on yes.
@@ -68,14 +68,14 @@ The harness gets the `PATH` of the terminal that ran `goalcup start`. `goalcup` 
 to run `goalcup time-left`.
 
 Before launch the connector's `refuse_if_set` files are read: a proxy or CA value there refuses the start,
-naming the file and key. The goal-cup skill is copied into `skills_dir` when the connector has one. The connector's `first_screen` line is printed before the harness opens. `before` and
+naming the file and key. `ca_settings` rows are written into the private home (see [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md#the-connector-contract)). The goal-cup skill is copied into `skills_dir` when the connector has one. The connector's `first_screen` line is printed before the harness opens. `before` and
 `after` commands (Cline `hub stop`, Hermes `gateway stop -y`) run around the harness.
 
 ## What setup writes, per harness
 
 From `connectors/*.toml`. "Prompts" is the `no_prompts` rows; "Update" the `update_off` rows (an env switch
 in `env` is set at launch instead). A blank means the connector has none: for Amp, Cline, Crush, Gemini, Goose,
-OpenClaw and OpenCode 2 the facts sheet says what to set yourself.
+OpenClaw (and OpenCode 2.x) the facts sheet says what to set yourself.
 
 | Id | Home variable | Prompts (file: key = value) | Update |
 |---|---|---|---|
@@ -88,15 +88,17 @@ OpenClaw and OpenCode 2 the facts sheet says what to set yourself.
 | `gemini-cli` | `GEMINI_CLI_HOME` | | `.gemini/settings.json`: `general.enableAutoUpdate = false` |
 | `kilo-cli` | `XDG_*` | `.config/kilo/opencode.json`: `permission = allow` | env |
 | `kimi-code-cli` | `KIMI_CODE_HOME` | `config.toml`: `default_permission_mode = auto` | env |
-| `opencode-cli` | `XDG_*` | `.config/opencode/opencode.json`: `permission = allow` | env |
+| `opencode-cli` | `XDG_*` | 1.x only: `.config/opencode/opencode.json`: `permission = allow` (a `[[versions]]` row) | env |
 | `qwen-cli` | `QWEN_HOME` | `settings.json`: `tools.approvalMode = yolo` | `settings.json`: `general.enableAutoUpdate = false` |
-| `cline-cli`, `crush-cli`, `goose-cli`, `openclaw-cli`, `opencode2-cli` | see the connector | | env, where the connector has one |
+| `cline-cli`, `crush-cli`, `goose-cli`, `openclaw-cli` | see the connector | | env, where the connector has one |
 
 Files are under the private home (`$GOALCUP_HOME/homes/<id>`).
 
 ## Hermes
 
 Before and after the harness, goalcup runs `hermes gateway stop -y` (`connectors/hermes-cli.toml`). Hermes
-0.22.6 is said not to reach its model through goalcup; the connector prints a note for it
-(`version_notes`). The first-run setup screen and its telemetry question are in the
+0.22.5, 0.22.6 and 0.22.7 work on macOS with no pad-only config. Since 0.21.6 its model calls on macOS
+do not read `SSL_CERT_FILE`, so at every start and continue the connector's `ca_settings` write
+`ssl_ca_cert` for each provider address `config.yaml` names (its own entries or a custom `base_url`),
+and use its nine built-in routes only when the file names none. The first-run setup screen and its telemetry question are in the
 [sheet](harnesses/hermes-cli.md).

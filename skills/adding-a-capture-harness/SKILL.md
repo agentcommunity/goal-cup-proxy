@@ -26,15 +26,17 @@ Rules that never bend:
    [docs/harnesses/README.md](../../docs/harnesses/README.md)). Then write `connectors/<id>.toml`:
    one flat file, data only. Every key and the rule that refuses it:
    [docs/CONNECTOR-SCHEMA.md](../../docs/CONNECTOR-SCHEMA.md). Copy a neighbour such as
-   `connectors/hermes-cli.toml`; the build picks the file up, so no other file names it. Where
+   `connectors/hermes-cli.toml`. A harness PR is that TOML file plus the facts page: `build.rs` globs `connectors/*.toml`, so no `.rs` file or list names it. Where
    the harness names its threads in request headers, or writes a session format already read, a
    `[usage]` table says so ([the usage table](../../docs/CONNECTOR-SCHEMA.md#the-usage-table)).
-   A version with a known problem gets a `[[version_notes]]` row (`versions`, `say`): said at
-   start, recorded, never a refusal
+   A version that needs other values gets a `[[versions]]` row (`match`, `say`, and the keys it
+   changes; the first match wins): said at start, recorded, never a refusal
    ([Harness versions](../../docs/CONNECTOR-SCHEMA.md#harness-versions)).
 2. **Write `scripts/pad/harnesses/<id>.toml`**, from
    [templates/pad-harness.toml](templates/pad-harness.toml): the pinned version and how to
-   install exactly that version, how the key reaches the harness (`login`, `file` or `env`, as
+   install exactly that version (the pad records any installed version, so another build runs
+   with `here_path` in the run file, a list of folders put first on `PATH`, for a build installed on
+   your Mac; `release_versions = ["<v>", ...]` lists the versions a release needs verified), how the key reaches the harness (`login`, `file` or `env`, as
    its docs say), the provider and model config it should start with, what to type to exit, and
    the host of its model calls (`model_host`). Look at `claude-code-cli.toml`,
    `codex-cli.toml` and `hermes-cli.toml` beside it. Launch facts (proxy and CA variables,

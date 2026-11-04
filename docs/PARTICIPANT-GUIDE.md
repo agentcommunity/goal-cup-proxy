@@ -22,8 +22,8 @@ It has eight commands: `setup`, `start`, `continue`, `recover`, `status`, `seal`
 - A Mac or a Linux machine ([platforms](../README.md#platforms)). On Windows use WSL2 (Ubuntu
   inside Windows) and do everything inside it. WSL1 is refused, and so is a project folder on a
   Windows drive.
-- A direct internet connection. Company proxy networks are not supported: goalcup refuses to set up
-  or start when `HTTPS_PROXY` or `ALL_PROXY` is set.
+- A direct internet connection: company proxy networks are not supported, so `goalcup setup` and
+  `goalcup start` refuse when `HTTPS_PROXY` or `ALL_PROXY` is set (`goalcup continue` does not).
 - `git`, and a GitHub account for the real run.
 - A harness from [the harness list](harnesses/README.md), and the account or API key it uses.
 - An Agent Community account signed up at [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup),
@@ -97,17 +97,20 @@ reaches its models, where it keeps its sessions, and the one thing to know befor
 tier column is written from the test pad's results. A tier does not decide whether you may take
 part. The three tiers:
 
-- **Verified on a version.** The test pad ran this harness at that version with a direct key, and
+- **Verified.** The test pad ran this harness, at one version on one operating system (a build), with a direct key, and
   through a gateway where it has one and in the "cannot read" case, and every check passed on `goalcup`'s own record: no unexplained
   gap, no missed model request, every subagent recorded, no secret found, the server's copy whole,
   usage readable, and the counts on screen true.
 - **Not verified.** `goalcup` records what reaches it, the same way, but the pad has not passed on
-  this harness yet. The list says why (for example, no key). `goalcup status` tells you if model
+  this harness, or on your version or system, yet. Recording does not depend on it. The list says why (for example, no key). `goalcup status` tells you if model
   requests seem to be missing.
 - **Not supported.** The harness ignores the proxy or refuses its certificate. Its session files are
   recorded and, if it refused the certificate, the connection as a tunnel; its model requests are not.
 
-The start screen names your harness, its version and its tier. The notes below hold for every
+The start screen names your harness, its version and its tier. `goalcup` never refuses a harness
+because of its version: it reads the version (the first version-looking token of the harness's
+`--version`) at start, at continue and at seal, records it and says one plain line. Hermes works on
+several versions on macOS; `goalcup` writes the certificate trust line for the provider your Hermes uses. The notes below hold for every
 harness; a fact about one harness is in its row or sheet in `docs/harnesses/`.
 
 **Run without permission prompts.** A prompt waits for an answer, answering is typing, and you may
@@ -466,7 +469,7 @@ Every folder problem is listed in one refusal, then "Nothing was created." Fix e
 | `It and goalcup's folder "<path>" hold each other or sit side by side.` | Use a folder elsewhere, or set `GOALCUP_HOME` to a folder away from it. |
 | `The prompt file "<path>" is inside the project folder. Move it out.` | Move the file out. |
 | `This is WSL1, which cannot run goalcup.` or `... is on a Windows drive (...)` | Convert to WSL2 (`wsl --set-version <distro> 2`), and use a folder in the Linux home. |
-| `--connector and --hosts are for practice and test runs. A competition run uses the connectors built into goalcup.` | Remove the flags. |
+| `--connector, --hosts and a connector file given to --harness are for practice and test runs. A competition run uses the connectors built into goalcup.` | Remove the flags. |
 | `goalcup cannot tell where to keep your runs: HOME is not set to a full path.` | Set `HOME`, or `GOALCUP_HOME`, to a full path outside your project. |
 | `"<file>" sets <key>, which routes around the recorder. Remove it, then run this again.` | Remove that setting from the file named. The line names the file and key, never the value. |
 | `a run uses "<home>" now. Run this again once it has ended.` | One run at a time can use a harness home. |
