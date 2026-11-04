@@ -167,6 +167,28 @@ class InstallTests(unittest.TestCase):
         self.assertIn(this_target(), result.stderr)
         self.assertEqual(list(self.home.iterdir()), [])
 
+    def test_wget_keeps_https_and_tls12(self) -> None:
+        # A PATH with no curl: only what install.sh runs before its first download, and a wget
+        # that logs its arguments and fails.
+        bin_dir = self.scratch()
+        for tool in ("sh", "uname", "mktemp", "rm", "grep", "sysctl", "ldd"):
+            found = shutil.which(tool)
+            if found:
+                (bin_dir / tool).symlink_to(found)
+        log = self.scratch() / "wget.log"
+        (bin_dir / "wget").write_text(f'#!/bin/sh\necho "$@" > "{log}"\nexit 1\n')
+        (bin_dir / "wget").chmod(0o755)
+        result = subprocess.run(
+            ["sh", str(INSTALL)],
+            env={"PATH": str(bin_dir), "HOME": str(self.home),
+                 "GOALCUP_RELEASE_BASE": "https://example.invalid/r"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("--https-only", log.read_text())
+        self.assertIn("--secure-protocol=TLSv1_2", log.read_text())
+
     # --- rollback -----------------------------------------------------------------------------
 
     def old_install(self, prefix: Path) -> dict[str, bytes | None]:

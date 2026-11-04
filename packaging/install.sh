@@ -65,7 +65,10 @@ fetch() {
         *) curl -fsSL --retry 3 -o "$2" "$1" || die "could not download $1" ;;
         esac
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$2" "$1" || die "could not download $1"
+        case "$1" in
+        https://*) wget -q --https-only --secure-protocol=TLSv1_2 -O "$2" "$1" || die "could not download $1" ;;
+        *) wget -q -O "$2" "$1" || die "could not download $1" ;;
+        esac
     else
         die "neither curl nor wget is installed"
     fi
