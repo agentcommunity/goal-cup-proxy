@@ -153,7 +153,7 @@ class RowOverrides(unittest.TestCase):
             pad.main(["pad", f])
         p, cases = seen[0]
         self.assertEqual((p["cap_usd"], p["box_vcpus"]), (3, 2))
-        self.assertEqual(cases, ["direct", "gateway", "dodger"])
+        self.assertEqual([c for c, _ in cases], ["direct", "gateway", "dodger"])
 
     def test_staging_without_address_is_usage_before_any_run(self):
         d = self.enterContext(tempfile.TemporaryDirectory())
@@ -1437,7 +1437,7 @@ class RunAll(unittest.TestCase):
                 return "PASS", self.case
 
         with mock.patch.object(pad, "Run", Fake):
-            pad.run_all(s, {}, {}, "/o", cases)
+            pad.run_all(s, {}, {}, "/o", [(c, "1") for c in cases])
         return log
 
     def test_signed_in_home_runs_cases_in_order(self):
@@ -1459,6 +1459,72 @@ class RunAll(unittest.TestCase):
 
         self.go({"goalcup_home": "/h"}, ["direct", "dodger"], walk)
         self.assertEqual(seen, [("direct", False), ("dodger", True)])
+
+
+class Matrix(unittest.TestCase):
+    """G.20: a versions list runs every case at every version, case-major; without one, the pin."""
+
+    HARNESS = dict(Walk.HARNESS, version="0.22.5")
+
+    def test_pairs(self):
+        s = pad.load_settings(dict(BASE, case="all", versions=["0.22.5", "0.22.6"]), PADCFG)
+        self.assertEqual(pad.case_list(s, self.HARNESS)[0], [(c, v) for c in ("direct", "gateway", "dodger") for v in ("0.22.5", "0.22.6")])
+
+    def test_version_and_versions_conflict(self):
+        with self.assertRaises(pad.Usage):
+            pad.load_settings(dict(BASE, version="0.22.5", versions=["0.22.6"]), PADCFG)
+
+    def test_bad_version_string(self):
+        for bad in (["1; rm"], [], "0.22.5", [5]):
+            with self.assertRaises(pad.Usage, msg=bad):
+                pad.load_settings(dict(BASE, versions=bad), PADCFG)
+
+    def test_no_list_gives_the_pin(self):
+        self.assertEqual(pad.case_list(pad.load_settings(dict(BASE), PADCFG), self.HARNESS)[0], [("direct", "0.22.5")])
+        self.assertEqual(pad.case_list(pad.load_settings(dict(BASE, version="0.1"), PADCFG), self.HARNESS)[0], [("direct", "0.1")])
+
+    def test_run_carries_its_version(self):
+        s = pad.load_settings(dict(BASE, versions=["0.22.5", "0.22.6"]), PADCFG)
+        r = pad.Run(s, "direct", PADCFG, self.HARNESS, self.enterContext(tempfile.TemporaryDirectory()), "0.22.6")
+        self.addCleanup(shutil.rmtree, r.tmp, True)
+        self.assertEqual((r.s["version"], r.s["version_required"]), ("0.22.6", True))
+
+
+class HerePath(unittest.TestCase):
+    """here_path: a here run's harness is the build in these folders, first on PATH for pad-run and the launch."""
+
+    def test_accepts_existing_dirs(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        self.assertEqual(pad.load_settings(dict(BASE, where="here", here_path=[d]), PADCFG)["here_path"], [d])
+
+    def test_refuses_relative_missing_or_sandbox(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        for where, got in (("here", ["bin"]), ("here", [d + "/none"]), ("here", d), ("sandbox", [d])):
+            with self.assertRaises(pad.Usage, msg=(where, got)):
+                pad.load_settings(dict(BASE, where=where, here_path=got), PADCFG)
+
+    def test_dirs_come_first_on_path(self):
+        d = self.enterContext(tempfile.TemporaryDirectory())
+        seen = []
+
+        def fake(argv, timeout=None, env=None):
+            seen.append(env)
+            return subprocess.CompletedProcess(argv, 0, 'PADSTEP {"result": "ok"}', "")
+        with tempfile.TemporaryDirectory() as out, mock.patch.dict(os.environ, {"PATH": "/usr/bin:/bin"}), \
+                mock.patch.object(pad, "call", fake):
+            r = pad.Run(pad.load_settings(dict(BASE, mode="micro", where="here", here_path=[d]), PADCFG), "direct", PADCFG, Walk.HARNESS, out)
+            self.addCleanup(shutil.rmtree, r.tmp, True)
+            r.box_dir = out
+            r.box("setup", 10)
+        self.assertEqual(seen[0]["PATH"], d + os.pathsep + "/usr/bin:/bin")
+        with tempfile.TemporaryDirectory() as run:  # pad-run: before ~/bin and ~/.local/bin, and in the launch shell
+            with open(os.path.join(run, "settings.json"), "w") as f:
+                json.dump({"here_path": [d], "harness": {}, "server": "off"}, f)
+            with open(os.path.join(run, "state.json"), "w") as f:
+                f.write("{}")
+            pr = padrun.Run(run, "start")
+            self.assertEqual(pr.gc_env(True)["PATH"].split(os.pathsep)[0], d)
+            self.assertEqual(pr.gc_env()["PATH"].split(os.pathsep)[0], d)
 
 
 class SnippetFill(unittest.TestCase):

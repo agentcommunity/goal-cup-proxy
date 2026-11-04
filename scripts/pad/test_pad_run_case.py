@@ -378,7 +378,7 @@ class SignedInHome(unittest.TestCase):
 
     def test_key_none_has_no_key_route_and_no_gateway(self):
         s = pad.load_settings(dict(self.ROW, case="all"), self.PADCFG)
-        self.assertEqual(pad.case_list(s, {"gateway": {}})[0], ["direct", "dodger"])
+        self.assertEqual([c for c, _ in pad.case_list(s, {"gateway": {}})[0]], ["direct", "dodger"])
         self.assertEqual(pad.Run(s, "direct", self.PADCFG, {}, self.enterContext(tempfile.TemporaryDirectory())).key_names(), [])
         with self.assertRaises(pad.Usage):
             pad.load_settings(dict(self.ROW, case="gateway"), self.PADCFG)

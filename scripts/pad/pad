@@ -64,7 +64,8 @@ LIMITS = {"setup": 5, "pre": 3, "start": 3, "wait-calls": 4, "look": 1, "wait-re
           "seal": 5, "wait-upload": 10, "fetch": 5, "check": 10, "cleanup": 5}  # minutes; seal and check add the run's
 KEYS = {"harness", "key", "case", "mode", "server", "prompt", "minutes", "steps", "where",
         "gateway_key", "version", "build", "connector", "hosts", "keep", "keep_going", "keep_going_count",
-        "cap_usd", "box_extra_minutes", "box_vcpus", "goalcup_home", "model_host", "pre_keys", "staging_url"}
+        "cap_usd", "box_extra_minutes", "box_vcpus", "goalcup_home", "model_host", "pre_keys", "staging_url",
+        "versions", "here_path"}
 OVERRIDES = ("cap_usd", "box_extra_minutes", "box_vcpus")  # a row may replace these pad.toml values for itself
 FAULTS, SPAN = pc.FAULTS, pc.SPAN  # section 3.1: kind to the minutes it lasts by default; the kinds that take +<minutes>
 # pad-run's box steps: the faults of section 3.1, the watcher steps, and the mode's own
@@ -377,6 +378,14 @@ def load_settings(raw, pad):
         raise Usage("goalcup_home is an absolute path, and only with where = \"here\"")  # the signed-in home, kept as is
     if "goalcup_home" in s:
         s["goalcup_home"] = os.path.expanduser(s["goalcup_home"])
+    if "here_path" in s:  # the harness build to run here, first on PATH (index ruling 2)
+        got = s["here_path"] if isinstance(s["here_path"], list) else [None]
+        s["here_path"] = [os.path.expanduser(d) if isinstance(d, str) else "" for d in got]
+        if s["where"] != "here" or not all(os.path.isabs(d) and os.path.isdir(d) for d in s["here_path"]):
+            raise Usage("here_path is a list of absolute directories, and only with where = \"here\"")
+    if "versions" in s and ("version" in s or not isinstance(s["versions"], list) or not s["versions"] or
+                            not all(isinstance(v, str) and re.fullmatch(r"[0-9][0-9A-Za-z.+-]*", v) for v in s["versions"])):
+        raise Usage("versions is a list of versions, not with version")  # G.21 puts them in a shell command
     if "model_host" in s and not re.fullmatch(r"[a-z0-9][a-z0-9.-]*", str(s["model_host"])):
         raise Usage("model_host is a host name")
     if "pre_keys" in s and not (isinstance(s["pre_keys"], list) and all(isinstance(k, str) for k in s["pre_keys"])):
@@ -569,7 +578,8 @@ def end_screen_from_panes(folder):
 
 
 class Run:
-    def __init__(self, s, case, pad, harness, out_root):
+    def __init__(self, s, case, pad, harness, out_root, version=None):
+        s = dict(s, version=version or s.get("version") or harness.get("version"), **{"version_required": True} if "versions" in s else {})
         self.s, self.case, self.pad, self.harness = s, case, pad, harness
         # tried: set before create, from then on cleanup removes the box by its name. create_late: create
         # hit its limit, the box may still appear after cleanup. meta: meta-box.json; row: check.py's result.
@@ -698,7 +708,7 @@ class Run:
         with open(os.path.join(stage, "settings.json"), "w") as f:  # pad-run's input: names, never a value
             json.dump(dict({k: v for k, v in s.items() if k != "plan"}, harness_id=s["harness"], harness=self.harness,
                            session=self.name, limits=runner_limits(s), server_url=server_url(s["server"], s),
-                           case=self.case, version=s.get("version") or self.harness["version"], key_files=names,
+                           case=self.case, version=s["version"], key_files=names,
                            route_key=names[-1] if names else None, home_vars=con.get("home") or {},
                            native=[{k: r.get(k) for k in ("name", "root", "pattern")} for r in con.get("native", [])],
                            ca_env=con.get("ca_env") or [],
@@ -758,7 +768,8 @@ class Run:
                 time.sleep(EXEC_RETRY_WAIT)
         else:
             r = call(argv or [sys.executable, os.path.join(HERE, "pad-run"), self.box_dir] + step.split(), timeout=limit,
-                     env=dict(env_without(), **({"PAD_BIN": self.build} if self.build else {})))  # here is the box, and check.py needs no organizer secret either
+                     env=dict(env_without(), **({"PAD_BIN": self.build} if self.build else {}),  # here_path: the harness build to run
+                              **({"PATH": os.pathsep.join(self.s["here_path"] + [os.environ.get("PATH", "")])} if self.s.get("here_path") else {})))  # here is the box, and check.py needs no organizer secret either
         got = [ln[len(tag) + 1:] for ln in (r.stdout or "").splitlines() if ln.startswith(tag + " ")]
         d = json.loads(got[-1]) if got else {"result": "error", "saw": said("%s: no %s line" % (step, tag), r)}
         self.meta.update({k: d[k] for k in ("entry", "run", "new_entry") if d.get(k)})
@@ -1101,15 +1112,16 @@ class Run:
 
 
 def case_list(s, harness):
-    """-> (cases to run, gateway n/a). Section 2: a harness with no documented gateway route gets n/a, never a made-up config."""
+    """-> ((case, version) pairs to run, case-major; gateway n/a). No versions list: the pin. Section 2: a harness with no documented gateway route gets n/a, never a made-up config."""
     cases = ["direct", "gateway", "dodger"] if s["case"] == "all" else [s["case"]]
     cases = [c for c in cases if not (s["key"] == "none" and c == "gateway")]  # no key: no gateway row, no n/a line
     na = "gateway" in cases and "gateway" not in harness
-    return [c for c in cases if not (na and c == "gateway")], na
+    versions = s.get("versions") or [s.get("version") or harness.get("version")]
+    return [(c, v) for c in cases if not (na and c == "gateway") for v in versions], na
 
 
-def run_all(s, pad, harness, out_root, cases):
-    runs = [Run(s, c, pad, harness, out_root) for c in cases]
+def run_all(s, pad, harness, out_root, pairs):
+    runs = [Run(s, c, pad, harness, out_root, v) for c, v in pairs]
     with concurrent.futures.ThreadPoolExecutor(max_workers=1 if s.get("goalcup_home") else None) as ex:  # one signed-in home: one case at a time; waits stay signal-interruptible on POSIX, so STOP is still set
         return list(ex.map(Run.walk, runs))
 
@@ -1138,8 +1150,8 @@ def main(argv):
         return 2
     for sig in (signal.SIGINT, signal.SIGTERM):
         signal.signal(sig, lambda *_: STOP.set())
-    cases, na = case_list(s, harness)
-    results = run_all(s, pad, harness, os.path.join(REPO, "pad-out"), cases)
+    pairs, na = case_list(s, harness)
+    results = run_all(s, pad, harness, os.path.join(REPO, "pad-out"), pairs)
     sys.stdout.write("".join(table for _, table in results))
     if na:
         print("gateway n/a: %s has no documented gateway route" % s["harness"])

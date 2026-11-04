@@ -302,11 +302,11 @@ class Run:
             raise Step("skip", "no entry")
 
     def gc_env(self, clean=False):
-        """The run's GOALCUP_* values; clean: with only HOME, PATH (BOX_BIN first) and TERM beside them (no proxy or
+        """The run's GOALCUP_* values; clean: with only HOME, PATH (here_path, then BOX_BIN, first) and TERM beside them (no proxy or
         CA variable): the participant's shell."""
         s, e = self.s, os.environ
-        path = os.pathsep.join([os.path.expanduser(d) for d in BOX_BIN] + [e.get("PATH", "")])
-        base = dict(HOME=e.get("HOME", ""), PATH=path, TERM=e.get("TERM") or "xterm") if clean else {}
+        path = os.pathsep.join(s.get("here_path", []) + [os.path.expanduser(d) for d in BOX_BIN] + [e.get("PATH", "")])  # here_path: the harness build to run
+        base = dict(HOME=e.get("HOME", ""), PATH=path, TERM=e.get("TERM") or "xterm") if clean else {"PATH": path} if s.get("here_path") else {}
         return dict(base, GOALCUP_HOME=self.env["GOALCUP_HOME"], GOALCUP_SERVER=self.env["GOALCUP_SERVER"],
                     GOALCUP_NO_BROWSER="1", **{"GOALCUP_KEEP_PARTS": "1"} if s.get("keep") else {})
 
