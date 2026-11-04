@@ -745,6 +745,17 @@ pub fn read_records(rec: &Path) -> Vec<Record> {
 /// with seq `bad_link`, which gets a wrong hash. Each part file is one zstd frame up to its last
 /// LINK, with one `E` index line there, and a second frame for anything after it.
 pub fn write_raw(rec: &Path, recs: &[Record], bad_link: Option<u64>) {
+    write_raw_with(rec, recs, bad_link, |_, _| {});
+}
+
+/// [`write_raw`], then `edit(n, part)` on the `n`th PART (from 0) after its fields are set to fit:
+/// the PART continuity mutations.
+pub fn write_raw_with(
+    rec: &Path,
+    recs: &[Record],
+    bad_link: Option<u64>,
+    edit: impl Fn(usize, &mut Record),
+) {
     for p in part_files(rec).unwrap() {
         fs::remove_file(&p).unwrap();
         let _ = fs::remove_file(p.with_extension("").with_extension("idx"));
@@ -752,6 +763,7 @@ pub fn write_raw(rec: &Path, recs: &[Record], bad_link: Option<u64>) {
     let (mut codec, mut chain, mut prev) = (Codec::default(), Chain::new(ZERO), ZERO);
     let (mut buf, mut start, mut off) = (Vec::new(), 0u64, 0u64);
     let mut last_link: Option<(u64, usize, [u8; 32])> = None;
+    let mut parts = 0;
     for (i, r) in recs.iter().enumerate() {
         let mut r = r.clone();
         if let Record::Part {
@@ -766,6 +778,8 @@ pub fn write_raw(rec: &Path, recs: &[Record], bad_link: Option<u64>) {
                 start = off;
             }
             (*raw_offset, *p) = (off, prev);
+            edit(parts, &mut r);
+            parts += 1;
         }
         let mut b = Vec::new();
         codec.encode(&r, &mut b).unwrap();
@@ -809,6 +823,25 @@ pub fn mutate(dir: &Path, bad_link: Option<u64>, f: impl FnOnce(&mut Vec<Record>
     let mut recs = read_records(&rec);
     f(&mut recs);
     write_raw(&rec, &recs, bad_link);
+    dir.to_path_buf()
+}
+
+/// Decodes an entry and writes it back with `f` applied to its `n`th PART (from 0), after the
+/// PART's `raw_offset` and `prev` are set to fit (see [`write_raw_with`]).
+pub fn mutate_part(dir: &Path, n: usize, f: impl Fn(&mut Record)) -> PathBuf {
+    let rec = dir.join("rec");
+    let recs = read_records(&rec);
+    assert!(
+        recs.iter()
+            .filter(|r| matches!(r, Record::Part { .. }))
+            .count()
+            > n
+    );
+    write_raw_with(&rec, &recs, None, |i, r| {
+        if i == n {
+            f(r)
+        }
+    });
     dir.to_path_buf()
 }
 
