@@ -1070,7 +1070,7 @@ def case_list(s, harness):
 
 def run_all(s, pad, harness, out_root, cases):
     runs = [Run(s, c, pad, harness, out_root) for c in cases]
-    with concurrent.futures.ThreadPoolExecutor() as ex:  # waits stay signal-interruptible on POSIX, so STOP is still set
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1 if s.get("goalcup_home") else None) as ex:  # one signed-in home: one case at a time; waits stay signal-interruptible on POSIX, so STOP is still set
         return list(ex.map(Run.walk, runs))
 
 

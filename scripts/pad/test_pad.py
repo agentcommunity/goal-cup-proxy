@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import threading
 import time
 import unittest
 import urllib.parse
@@ -1358,6 +1359,51 @@ class KeyFileMerge(unittest.TestCase):
         self.assertEqual(padrun.key_text("/iso/.env", "", "AI_GATEWAY_API_KEY=PADSENTINEL"), "AI_GATEWAY_API_KEY=PADSENTINEL\n")
         self.assertEqual(json.loads(padrun.key_text("/h/auth.json", "", '{"deepseek": {"type": "api", "key": "K"}}')),
                          {"deepseek": {"type": "api", "key": "K"}})
+
+
+class RunAll(unittest.TestCase):
+    def tearDown(self):
+        pad.STOP.clear()
+
+    def go(self, s, cases, walk=None):
+        log, gate = [], threading.Barrier(2)
+
+        class Fake:
+            def __init__(self, s, case, *_):
+                self.case = case
+
+            def walk(self):
+                log.append("s " + self.case)
+                if walk:
+                    walk(self, log, gate)
+                else:
+                    time.sleep(0.05)
+                log.append("e " + self.case)
+                return "PASS", self.case
+
+        with mock.patch.object(pad, "Run", Fake):
+            pad.run_all(s, {}, {}, "/o", cases)
+        return log
+
+    def test_signed_in_home_runs_cases_in_order(self):
+        self.assertEqual(self.go({"goalcup_home": "/h"}, ["direct", "dodger"]), ["s direct", "e direct", "s dodger", "e dodger"])
+
+    def test_without_home_runs_together(self):
+        def meet(run, log, gate):  # both walks must be inside at once, or the barrier breaks
+            gate.wait(5)
+
+        log = self.go({}, ["direct", "dodger"], meet)
+        self.assertEqual(log[:2], ["s direct", "s dodger"])
+
+    def test_stop_skips_later_case(self):
+        seen = []
+
+        def walk(run, log, gate):
+            seen.append((run.case, pad.STOP.is_set()))
+            pad.STOP.set()
+
+        self.go({"goalcup_home": "/h"}, ["direct", "dodger"], walk)
+        self.assertEqual(seen, [("direct", False), ("dodger", True)])
 
 
 class SnippetFill(unittest.TestCase):
