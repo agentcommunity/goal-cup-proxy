@@ -5,8 +5,6 @@
 
 use std::cmp::Ordering;
 
-use super::builtin;
-
 /// A version read from a `--version` line: the word as printed (suffix kept, `v` dropped) and its
 /// dotted numbers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,19 +48,29 @@ fn numbers(s: &str) -> Option<Vec<u64>> {
         .collect()
 }
 
+/// One `,`-separated part of a spec: its op (`""` for a prefix) and its numbers.
+fn spec_part(part: &str) -> Option<(&'static str, Vec<u64>)> {
+    let (op, value) = [">=", "<=", ">", "<", "="]
+        .iter()
+        .find_map(|op| part.strip_prefix(op).map(|rest| (*op, rest)))
+        .unwrap_or(("", part));
+    let value = value
+        .strip_suffix('x')
+        .unwrap_or(value)
+        .trim_end_matches('.');
+    numbers(value).map(|want| (op, want))
+}
+
+/// Whether every part of `spec` reads, so it can hold for some version.
+pub fn spec_ok(spec: &str) -> bool {
+    spec.split(',').all(|part| spec_part(part).is_some())
+}
+
 /// Whether `v` holds every `,`-separated part of `spec`: `>=1.2`, `<2`, `=1.0.105`, or a bare
 /// prefix such as `1.`, `1.x` or `0.22.6`. An empty spec or an unreadable part never holds.
 pub fn matches(v: &HarnessVersion, spec: &str) -> bool {
     spec.split(',').all(|part| {
-        let (op, value) = [">=", "<=", ">", "<", "="]
-            .iter()
-            .find_map(|op| part.strip_prefix(op).map(|rest| (*op, rest)))
-            .unwrap_or(("", part));
-        let value = value
-            .strip_suffix('x')
-            .unwrap_or(value)
-            .trim_end_matches('.');
-        let Some(want) = numbers(value) else {
+        let Some((op, want)) = spec_part(part) else {
             return false;
         };
         let order = (0..v.nums.len().max(want.len()))
@@ -78,48 +86,6 @@ pub fn matches(v: &HarnessVersion, spec: &str) -> bool {
             _ => v.nums.starts_with(&want),
         }
     })
-}
-
-/// The built-in connectors that run `program` and carry a `version` key, with that key.
-pub fn same_program(program: &str) -> Vec<(&'static str, String)> {
-    builtin::CONNECTORS
-        .iter()
-        .filter_map(|(id, _)| {
-            let c = super::load(id, None).ok()?;
-            (c.program == program).then_some((*id, c.version?))
-        })
-        .collect()
-}
-
-/// A spec as the participant reads it: `1.` and `1.x` show as `1.x`, anything else as written.
-pub(crate) fn show(spec: &str) -> String {
-    match spec.strip_suffix(".x").or(spec.strip_suffix('.')) {
-        Some(nums) => format!("{nums}.x"),
-        None => spec.to_string(),
-    }
-}
-
-/// The note for a version read but not the one the connector was written for.
-pub fn untested_say(program: &str, got: &str, want: &str) -> String {
-    format!(
-        "{program} {got} is not the version this connector was written for ({}). goalcup records it the same way; goalcup status says if model requests are missing.",
-        show(want)
-    )
-}
-
-/// The note for a version that could not be read, naming each other connector for `program`.
-pub fn unchecked_say(program: &str, want: &str, others: &[(&'static str, String)]) -> String {
-    let mut say = format!(
-        "goalcup could not read {program} --version, so it could not check this is {program} {}.",
-        show(want)
-    );
-    for (id, spec) in others {
-        say += &format!(
-            " If it is {}, run: goalcup setup --harness {id}",
-            show(spec)
-        );
-    }
-    say
 }
 
 #[cfg(test)]
@@ -166,22 +132,6 @@ mod tests {
     }
 
     #[test]
-    fn says_name_the_version_and_the_other_connector() {
-        assert_eq!(
-            untested_say("fakev", "1.9.0", "2."),
-            "fakev 1.9.0 is not the version this connector was written for (2.x). goalcup records it the same way; goalcup status says if model requests are missing."
-        );
-        assert_eq!(
-            unchecked_say("fakev", "1.", &[("fake2-cli", "2.".into())]),
-            "goalcup could not read fakev --version, so it could not check this is fakev 1.x. If it is 2.x, run: goalcup setup --harness fake2-cli"
-        );
-        assert_eq!(
-            unchecked_say("fakev", "1.", &[]),
-            "goalcup could not read fakev --version, so it could not check this is fakev 1.x."
-        );
-    }
-
-    #[test]
     fn probe_reads_stderr_and_a_named_version_on_a_failed_exit() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
@@ -200,6 +150,11 @@ mod tests {
         );
         assert_eq!(probe("echo 'error: needs Python 3.11.4' >&2; exit 1"), None);
         assert_eq!(probe("echo fakev 1.2.3; exit 1"), some("fakev 1.2.3"));
+        // Cut at a char boundary to 64 UTF-16 units.
+        let long = format!("fakev 1.2.3 {}", "é".repeat(5000));
+        let cut = crate::connector::launch::cut_version(&long);
+        assert_eq!(cut.encode_utf16().count(), 64);
+        assert!(cut.starts_with("fakev 1.2.3 "));
         assert_eq!(probe("echo warning: no config >&2"), None);
         assert_eq!(probe("echo 'warning: node 2.0.1 deprecated' >&2"), None);
         assert_eq!(probe("echo 'fakev: requires bun 2.1.0' >&2; exit 1"), None);

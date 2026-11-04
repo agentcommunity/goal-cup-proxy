@@ -100,6 +100,8 @@ impl Fixture {
             secret_values: Vec::new(),
             notes: Vec::new(),
             version_notes: Vec::new(),
+            version_row: None,
+            effective: Default::default(),
             unread: Vec::new(),
             log: Vec::new(),
             refusal: None,
@@ -118,6 +120,7 @@ impl Fixture {
             workspace: self.d.clone(),
             connector: to_value(&plan.connector).unwrap(),
             harness_version: None,
+            version_row: None,
             keep: true,
             build: None,
             hosts: to_value(&plan.hosts).unwrap(),
@@ -299,6 +302,47 @@ fn watchdog_end_real_seal_command_seals() {
     assert!(!status["harness"]["exit"].is_null());
     assert!(!f.entry_dir.join("rec").join(watchdog::KEY_FILE).exists());
     orphan_ended(&f);
+}
+
+/// Point 1: a harness updated while it ran is read again after it exits, and the sealed record
+/// holds one `version_read` note; a harness that did not change gets none.
+#[test]
+fn watchdog_end_real_seal_records_a_version_read_after_exit() {
+    for changed in [true, false] {
+        let f = Fixture::new();
+        let (d, fake) = (f.d.display().to_string(), f.m("fake"));
+        std::fs::write(f.m("version"), "fake 1.0.0\n").unwrap();
+        let update = if changed {
+            format!("echo 'fake 1.1.0' > {d}/version")
+        } else {
+            ":".into()
+        };
+        let script = format!(
+            "#!/bin/sh\nif [ \"$1\" = --version ]; then cat {d}/version; else {update}; fi\n"
+        );
+        std::fs::write(&fake, script).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let mut plan = f.plan();
+        (plan.program, plan.argv) = (fake, Vec::new());
+        (plan.before, plan.after) = (Vec::new(), Vec::new());
+        plan.harness_version = Some("fake 1.0.0".into());
+        let mut facts = f.facts(&plan);
+        facts.harness_version = plan.harness_version.clone();
+        f.run_plan(plan, facts, &real(), || {});
+        let notes: Vec<serde_json::Value> = records(&f.entry_dir)
+            .into_iter()
+            .filter_map(|r| match r {
+                Record::Event { json, .. } => serde_json::from_slice(&json).ok(),
+                _ => None,
+            })
+            .filter(|ev: &serde_json::Value| ev["what"] == "version_read")
+            .collect();
+        let want = changed.then(|| {
+            serde_json::json!({"ev": "note", "what": "version_read", "line": "fake 1.1.0",
+                "version": "1.1.0", "before": "1.0.0"})
+        });
+        assert_eq!(notes, Vec::from_iter(want));
+    }
 }
 
 /// Point 3, ledger R3 and L-P1 (PRD-02 section 8 step 8): a recorder killed mid-run is

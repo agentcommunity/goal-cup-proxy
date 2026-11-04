@@ -153,7 +153,7 @@ pub fn prepare(
         .connector
         .map_or_else(|| sj.connector.id.clone(), |_| sj.connector.source.clone());
     let connector = connector::load(&id, a.hosts).map_err(|e| refuse(e.to_string()))?;
-    if connector.id != sj.connector.id {
+    if connector.id != sj.connector.id && !connector.old_ids.contains(&sj.connector.id) {
         return Err(refuse(text::file_changed(
             "connector file",
             &sj.connector.source,
@@ -203,7 +203,8 @@ pub fn prepare(
         goalcup_home: home.to_path_buf(),
         server_host: server.host().unwrap_or_default().to_owned(),
     };
-    let mut plan = connector::plan(&connector, &env, &super::isolated_home(home, &connector.id));
+    let iso = super::run_home(home, &connector, &sj.connector.id);
+    let mut plan = connector::plan(&connector, &env, &iso);
     if let Some(r) = &plan.refusal {
         return Err(refuse(text::refusal(r)));
     }
@@ -298,7 +299,16 @@ pub fn prepare(
     if let (Some(a), Some(b)) = (before, now) {
         lines.extend((a != b).then(|| text::updated(&name, a, b)));
     }
-    lines.extend(connector.first_screen.clone());
+    let parsed = |line: Option<&str>| line.and_then(connector::version::parse).map(|v| v.text);
+    let (was, is) = (parsed(before), parsed(now));
+    if let Some(line) = now
+        && is != was
+    {
+        plan.notes
+            .push(json!({"ev": "note", "what": "version_read", "line": line,
+            "version": is, "before": was}));
+    }
+    lines.extend(plan.effective.first_screen.clone());
     lines.extend(first_message(
         &found.run_dir,
         resumed,
@@ -308,10 +318,14 @@ pub fn prepare(
     ));
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(server.host()));
-    lines.extend(plan.version_notes.clone());
+    // An unread version is said once: its note (recorded) is this line.
     if plan.harness_version.is_none() {
         log::line(&new_dir, "version_unread", &[]);
-        lines.push(text::version_unread(&name, server.host().is_some()));
+        let rules = connector.unread_rules();
+        let upload = server.host().is_some();
+        lines.push(text::version_unread(&name, upload, rules.as_deref()));
+    } else {
+        lines.extend(plan.version_notes.clone());
     }
     for (what, file) in [
         ("Connector", first.map(PathBuf::from)),

@@ -64,13 +64,6 @@ pub enum Refusal {
     SettingSet { file: PathBuf, key: String },
     /// Another run holds this harness's isolated home.
     HomeLocked { home: PathBuf },
-    /// `program --version` shows `got`, which another connector for that program (`sibling`) is for.
-    VersionMismatch {
-        program: String,
-        want: String,
-        got: String,
-        sibling: String,
-    },
 }
 
 /// How a session file is read (PRD-04 section 2).
@@ -98,6 +91,9 @@ pub struct NativeSource {
     /// The run start, the same for every row.
     pub since: SystemTime,
     pub warn_missing: bool,
+    /// The `home` variable this row's files sit under, named when the row finds nothing.
+    #[serde(default)]
+    pub redirect: Option<String>,
 }
 
 /// The connector's session-file rows, in file order (the first matching row reads a file).
@@ -109,6 +105,11 @@ pub struct NativeSources(pub Vec<NativeSource>);
 #[derive(Debug)]
 pub struct LaunchPlan {
     pub connector: ConnectorRef,
+    /// The connector with the `[[versions]]` row for the read version laid over it: read
+    /// `first_screen`, `no_prompts` and `update_off` from here.
+    pub effective: Connector,
+    /// The `match` of the row applied, if any.
+    pub version_row: Option<String>,
     pub harness_version: Option<String>,
     /// Resolved on the participant's `PATH`, else the bare name.
     pub program: PathBuf,
@@ -136,8 +137,8 @@ pub struct LaunchPlan {
     pub secret_values: Vec<(String, Vec<u8>)>,
     /// `note` events (`local_model`, `version_note`), written once per entry after `start`.
     pub notes: Vec<serde_json::Value>,
-    /// The `say` of each connector `version_notes` row that holds for the read version: shown at
-    /// start, and also in `notes`.
+    /// The applied row's `say`, or the line that the version could not be read on a connector with
+    /// rows: shown at start, and also in `notes`.
     pub version_notes: Vec<String>,
     /// Hint and refusal files there but not read (linked, over 1 MiB, unreadable, unparsable):
     /// PRD-10 shows one start line for each (section 2) and logs it.
@@ -189,19 +190,18 @@ fn read(path: &Path) -> Result<Vec<u8>, ConnectorError> {
     })
 }
 
-/// The built-in id `arg` names: the id itself, else the one id that is `arg` plus `-cli` or whose
-/// program is `arg`. None or several is `UnknownId`, listing the matches, else every id.
+/// The built-in id `arg` names: the id itself, else the one id that is `arg` plus `-cli`, whose
+/// program is `arg` or that lists `arg` in `old_ids`. None or several is `UnknownId`, listing the matches, else every id.
 pub fn resolve_id(arg: &str) -> Result<&'static str, ConnectorError> {
     let ids = || builtin::CONNECTORS.iter().map(|(id, _)| *id);
     if let Some(id) = ids().find(|id| *id == arg) {
         return Ok(id);
     }
-    let program = |text: &str| schema::parse(text.as_bytes(), "").map(|c| c.program);
+    let parsed = |text: &str| schema::parse(text.as_bytes(), "");
+    let by = |c: schema::Connector| c.program == arg || c.old_ids.iter().any(|o| o == arg);
     let matches: Vec<&str> = builtin::CONNECTORS
         .iter()
-        .filter(|(id, text)| {
-            id.strip_suffix("-cli") == Some(arg) || program(text).is_ok_and(|p| p == arg)
-        })
+        .filter(|(id, text)| id.strip_suffix("-cli") == Some(arg) || parsed(text).is_ok_and(by))
         .map(|(id, _)| *id)
         .collect();
     match matches[..] {
@@ -277,54 +277,35 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
             launch::make_dir(Path::new(&fill(template)));
         }
     }
-    let mut argv: Vec<String> = connector.args.iter().map(|a| fill(a)).collect();
-    if env.resume {
-        argv.extend(connector.resume.iter().map(|a| fill(a)));
-    }
-    let harness_env = launch::build_env(connector, env, home);
+    // The probe runs with the base environment; the rows then pick the rules for that build.
     let program = launch::resolve_program(&connector.program, &env.vars);
-    let harness_version = free
-        .then(|| launch::harness_version(&program, &harness_env))
+    let line = free
+        .then(|| launch::harness_version(&program, &launch::build_env(connector, env, home)))
         .flatten();
-    let read = harness_version.as_deref().and_then(version::parse);
-    // Only a connector with a `version` key asks, so a start does not read every built-in.
-    let others = || -> Vec<_> {
-        let all = version::same_program(&connector.program).into_iter();
-        all.filter(|(id, _)| *id != connector.id).collect()
-    };
-    let said = |n: &&schema::VersionNote| {
-        let hit = |spec: &String| read.as_ref().is_some_and(|v| version::matches(v, spec));
-        n.versions.iter().any(hit)
-    };
-    let mut version_notes: Vec<String> = (connector.version_notes.iter().filter(said))
-        .map(|n| n.say.clone())
-        .collect();
-    let version_refusal = match (&connector.version, &read) {
-        (Some(want), Some(v)) if !version::matches(v, want) => {
-            // A run being continued keeps its connector: a note, never a refusal mid-run.
-            let others = others();
-            let sibling =
-                (others.iter().filter(|_| !env.resume)).find(|(_, spec)| version::matches(v, spec));
-            if sibling.is_none() {
-                version_notes.push(version::untested_say(&connector.program, &v.text, want));
-            }
-            sibling.map(|(id, _)| Refusal::VersionMismatch {
-                program: connector.program.clone(),
-                want: want.clone(),
-                got: v.text.clone(),
-                sibling: id.to_string(),
-            })
-        }
-        // Unread with no other connector to name: start's own "could not be read" line says it.
-        (Some(want), None) if free => {
-            let others = others();
-            if !others.is_empty() {
-                version_notes.push(version::unchecked_say(&connector.program, want, &others));
-            }
-            None
-        }
-        _ => None,
-    };
+    // Parsed whole, kept cut: a long line never fills the start line (launch::cut_version).
+    let read = line.as_deref().and_then(version::parse);
+    let harness_version = line.map(|l| launch::cut_version(&l).to_owned());
+    let (effective, version_row) = connector.for_version(read.as_ref());
+    let c = &effective;
+    let mut argv: Vec<String> = c.args.iter().map(|a| fill(a)).collect();
+    if env.resume {
+        argv.extend(c.resume.iter().map(|a| fill(a)));
+    }
+    let harness_env = launch::build_env(c, env, home);
+    let mut version_notes: Vec<String> = Vec::new();
+    let row = |spec: &String| connector.versions.iter().find(|r| &r.spec == spec);
+    if let Some(say) = version_row
+        .as_ref()
+        .and_then(row)
+        .and_then(|r| r.say.clone())
+    {
+        version_notes.push(say);
+    } else if let Some(rules) = connector.unread_rules().filter(|_| read.is_none() && free) {
+        version_notes.push(format!(
+            "goalcup could not read {} --version, so it used the rules for {rules}.",
+            connector.program
+        ));
+    }
     // `never` first, so `decide` is the one never test for participant and config hosts.
     let mut hosts = connector.hosts.clone();
     hosts.add_never(&env.server_host);
@@ -334,33 +315,46 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         unread: Vec::new(),
         log: hosts.add_participant(&env.goalcup_home),
     };
-    let (config, mut notes) = reader.collect(connector, &hosts);
+    let (config, mut notes) = reader.collect(c, &hosts);
     let events = version_notes
         .iter()
         .map(|say| serde_json::json!({"ev": "note", "what": "version_note", "say": say}));
     notes.extend(events);
     hosts.add_config(config);
-    let refusal = lock_refusal
-        .or(version_refusal)
-        .or_else(|| reader.refusal(connector));
+    let refusal = lock_refusal.or_else(|| reader.refusal(connector));
     let (unread, mut log) = (reader.unread, reader.log);
 
-    let rows = connector.native.iter();
+    // The `home` variable with the longest filled value that holds the row's root (ties: first).
+    let homes: Vec<(&String, PathBuf)> = connector
+        .home
+        .iter()
+        .map(|(k, t)| (k, fill(t).into()))
+        .collect();
+    let redirect = |root: &Path| {
+        let holds = homes.iter().filter(|(_, h)| root.starts_with(h));
+        let longest = holds.rev().max_by_key(|(_, h)| h.components().count());
+        longest.map(|(k, _)| k.to_string())
+    };
+    let rows = c.native.iter();
     let native = NativeSources(
-        rows.map(|row| NativeSource {
-            name: row.name.clone(),
-            root: PathBuf::from(fill(&row.root)),
-            pattern: row.pattern.clone(),
-            form: row.form,
-            since: env.run_start,
-            warn_missing: row.warn_missing,
+        rows.map(|row| {
+            let root = PathBuf::from(fill(&row.root));
+            NativeSource {
+                name: row.name.clone(),
+                redirect: redirect(&root),
+                root,
+                pattern: row.pattern.clone(),
+                form: row.form,
+                since: env.run_start,
+                warn_missing: row.warn_missing,
+            }
         })
         .collect(),
     );
 
     // A row not written is a log line, never a refusal (section 5).
     if free {
-        let skipped = write_settings(home, &connector.update_off).into_iter();
+        let skipped = write_settings(home, &c.update_off).into_iter();
         log.extend(skipped.map(|s| format!("update_off not written: {}", s.reason)));
         if let Some(t) = &connector.ca_settings {
             let rows = hints::trust_rows(t, home, &hosts);
@@ -393,8 +387,8 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         env: harness_env,
         home: home.to_path_buf(),
         lock,
-        before: connector.before.clone(),
-        after: connector.after.clone(),
+        before: c.before.clone(),
+        after: c.after.clone(),
         ca_env: connector.ca_env.clone(),
         hosts,
         native,
@@ -402,6 +396,8 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         secret_values: Vec::new(),
         notes,
         version_notes,
+        version_row,
+        effective,
         unread,
         log,
         refusal,

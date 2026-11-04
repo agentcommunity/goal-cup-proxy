@@ -10,6 +10,7 @@ use super::item::Item;
 use super::status::{Board, EXIT_WRITER_STALLED, Off};
 use super::writer::{EXIT_WRITE_ERROR, fail};
 use super::{EXIT_PIPELINE_GONE, Recorder, dead, mask_worker, secure, writer};
+use crate::connector::version;
 use crate::mask::Masker;
 use crate::watchdog::{Exit, HarnessFacts, Prev, StartFacts, Typed};
 use goalcup_format::{GapReason, PartWriter, Record};
@@ -249,6 +250,8 @@ pub(super) fn start_event(
         "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
         "connector": t.connector.id, "connector_source": t.connector.source,
         "connector_sha256": t.connector.sha256, "harness_version": f.harness_version,
+        "harness_semver": f.harness_version.as_deref().and_then(version::parse).map(|v| v.text),
+        "version_row": f.version_row,
         "hosts": t.hosts.lists(), "hosts_sha256": f.hosts_sha256,
         "mask_rules": mask_rules, "mask_values": masker.value_counts(),
         "fd_limit": fd_limit, "keep": f.keep, "deadline": wall(f.deadline),

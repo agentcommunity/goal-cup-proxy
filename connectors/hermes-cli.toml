@@ -1,10 +1,11 @@
-# Hermes Agent v0.22.5; facts in docs/harnesses/hermes-cli.md.
+# Hermes Agent; facts in docs/harnesses/hermes-cli.md.
 # No telemetry rows: the setup question names approvals only.
 # No state.db row: its search index can hold text out of context (facts sheet, section 4).
 id = "hermes-cli"
 name = "Hermes"
 end_note = "Subagents are shown by their task logs, not tied to individual calls."
 program = "hermes"
+checked = "0.22.5"
 args = ["chat"]
 resume = ["--continue"]
 home = { HERMES_HOME = "{home}" }
@@ -38,10 +39,6 @@ no_prompts = [
   { file = "{home}/config.yaml", key = "approvals.mode", value = "off" },
 ]
 update_off = [{ file = "{home}/config.yaml", key = "updates.check", value = "false" }]
-
-[[version_notes]]
-versions = ["0.22.6"]
-say = "Hermes 0.22.6 cannot reach its model through goalcup (NousResearch/hermes-agent#148241). Use Hermes 0.22.5 until a fixed release."
 
 [usage]
 # `state` is a native row of earlier builds, kept so their records still read.

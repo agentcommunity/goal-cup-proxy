@@ -1,8 +1,8 @@
 # OpenCode harness facts
 
-Connector ids: `opencode-cli` (OpenCode 1.x) and `opencode2-cli` (OpenCode 2.x) · Facts for versions: `1.19.5` and `2.2.2` · Written by: Goal Cup team · Last checked: 2026-11-01
+Connector id: `opencode-cli` (OpenCode 2.x base, a `1.x` row for OpenCode 1; runs started on 1.0 as `opencode2-cli` continue under it) · Facts for versions: `1.19.5` and `2.2.2` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from OpenCode's public docs, its public source and a run on 1.19.4 in a Linux container on 28 Oct 2026. No keys, tokens or personal paths are included.
-Status: shipped connectors ([`opencode-cli.toml`](../../connectors/opencode-cli.toml), [`opencode2-cli.toml`](../../connectors/opencode2-cli.toml)). This one sheet covers both; no separate OpenCode 2 sheet is written.
+Status: shipped connector ([`opencode-cli.toml`](../../connectors/opencode-cli.toml)): the base keys are for 2.x, and its `[[versions]]` row `1.x` gives OpenCode 1 its own keys. This one sheet covers both.
 
 Source words: "docs" is [opencode.ai/docs](https://opencode.ai/docs/cli/) for 1.x and [opencode.ai/v2/docs](https://opencode.ai/v2/docs/cli) for 2.x, read on 2026-10-31; "measured" is the 28 Oct run on 1.19.4; "source" is the public `dev` branch, which may be ahead of the 2.2.2 package; "unknown" is not measured or read. Nothing was run on 2.2.2.
 

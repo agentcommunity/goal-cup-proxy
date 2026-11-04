@@ -26,6 +26,7 @@ fn sources(rows: &[(&str, &Path, &str, bool)]) -> NativeSources {
         form: Form::Append,
         since,
         warn_missing,
+        redirect: None,
     };
     NativeSources(rows.iter().map(row).collect())
 }

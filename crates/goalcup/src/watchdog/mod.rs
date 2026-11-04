@@ -15,7 +15,9 @@ pub use recover::{NotRecovered, Recovered, recover, recover_with};
 
 use crate::cli::log::{Fact, line};
 use crate::cli::{self, ServerJson, proc_start_id, read_json, server_json, status_json};
-use crate::connector::{ConnectorRef, HostList, LaunchPlan, MaskRule, NativeSources};
+use crate::connector::{
+    ConnectorRef, HostList, LaunchPlan, MaskRule, NativeSources, launch, version,
+};
 use crate::mask::SecretValue;
 use crate::pipeline::clock::{self, Mono};
 use crate::pipeline::fds::{self, Target};
@@ -148,6 +150,9 @@ pub struct StartFacts {
     pub connector: serde_json::Value,
     /// `LaunchPlan.harness_version`; null when it could not be read.
     pub harness_version: Option<String>,
+    /// `LaunchPlan.version_row`: the `[[versions]]` row that set the rules; null for the base.
+    #[serde(default)]
+    pub version_row: Option<String>,
     /// `GOALCUP_KEEP_PARTS=1`.
     pub keep: bool,
     /// The 40-hex commit the binary was built from, or null. The version is the binary's own
@@ -427,7 +432,7 @@ fn watch(
     let spared = Arc::clone(recorder_pid);
     let spare = move |pid: u32| pid == *lock(&spared);
     let mut ending: Option<JoinHandle<()>> = None;
-    let mut after: Option<JoinHandle<()>> = None;
+    let mut after: Option<JoinHandle<Option<String>>> = None;
     let mut exit_line: Option<ToRecorder> = None;
     let mut seal: Option<ToRecorder> = None;
     let mut asked = None;
@@ -473,6 +478,7 @@ fn watch(
                         let l = ToRecorder::Seal {
                             reason,
                             outlived: None,
+                            version_read: None,
                         };
                         boot.send(&l);
                         seal = Some(l);
@@ -548,8 +554,21 @@ fn watch(
                     plan.env.clone(),
                     dir.clone(),
                 );
+                // The read runs as the start probe did: without the proxy and CA variables that
+                // `finish_env` added (`build_env` leaves `NO_PROXY` set).
+                let mut probe_env = env.clone();
+                let added = launch::REMOVED
+                    .iter()
+                    .filter(|n| !n.eq_ignore_ascii_case("no_proxy"));
+                for name in added.copied().chain(plan.ca_env.iter().map(String::as_str)) {
+                    probe_env.remove(name);
+                }
+                let parsed = |l: &str| version::parse(l).map(|v| v.text);
+                let was = plan.harness_version.as_deref().and_then(parsed);
                 after = Some(thread::spawn(move || {
                     spawn::helpers(&program, &entries, &env, spawn::BUDGET_NS, &dir, "after");
+                    let line = launch::harness_version(&program, &probe_env)?;
+                    (parsed(&line) != was).then_some(line)
                 }));
             }
         }
@@ -567,6 +586,7 @@ fn watch(
                 reason: asked.unwrap_or(SealReason::HarnessExit),
                 // Recover: the harness is not its child, so no `outlived` list.
                 outlived: own.and_then(|_| spawn::outlived(harness_start, &spare)),
+                version_read: after.take().and_then(|a| a.join().ok()).flatten(),
             };
             boot.send(&l);
             seal = Some(l);
@@ -639,9 +659,7 @@ fn watch(
         }
         restarts.tick(&mut boot, seal.is_some());
     }
-    for h in [ending, after].into_iter().flatten() {
-        let _ = h.join();
-    }
+    let _ = (ending.map(JoinHandle::join), after.map(JoinHandle::join));
     exit
 }
 
@@ -1103,6 +1121,10 @@ pub enum ToRecorder {
     Seal {
         reason: SealReason,
         outlived: Option<Outlived>,
+        /// The `--version` line read after the harness exited, only when its build differs
+        /// from the start's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version_read: Option<String>,
     },
     /// Null recorder only: exit 0 without sealing.
     Restart,
@@ -1187,6 +1209,7 @@ mod tests {
                 workspace: env.workspace.clone(),
                 connector: to_value(&plan.connector).unwrap(),
                 harness_version: Some("1.2.3 (fake)".into()),
+                version_row: None,
                 keep: true,
                 build: Some("f".repeat(40)),
                 hosts: to_value(&plan.hosts).unwrap(),

@@ -4,7 +4,6 @@
 id = "opencode2-cli"
 name = "OpenCode"
 program = "opencode"
-version = "2."
 args = ["--standalone"]
 resume = ["--continue"]
 home = { XDG_CONFIG_HOME = "{home}/.config", XDG_DATA_HOME = "{home}/.local/share", XDG_STATE_HOME = "{home}/.local/state", XDG_CACHE_HOME = "{home}/.cache" }

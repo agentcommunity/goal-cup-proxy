@@ -115,6 +115,7 @@ fn every_note_gives_its_line() {
             {"what": "local_model", "host": "127.0.0.1:11434"},
             {"what": "fd_limit", "limit": 256},
             {"what": "version_note", "say": "Agent 9.9 loses calls."},
+            {"what": "harness_changed", "program": "/bin/agent", "before": null, "after": null},
             {"what": "brand_new_note"}],
         "written": {"mask_failclosed_bytes": 2_000_000, "tunnel_hosts": {"proxy.example.com":
             {"conns": 1, "up": 1, "down": 1, "listed": "upstream_untrusted"}}},
@@ -134,6 +135,7 @@ fn every_note_gives_its_line() {
         text::local_model("127.0.0.1:11434"),
         text::fd_limit(Some(256)),
         "Agent 9.9 loses calls.".to_owned(),
+        text::harness_changed("Agent"),
         text::unknown_note("brand_new_note"),
         text::listed_tunnel("proxy.example.com", "upstream_untrusted"),
         text::fail_closed(2_000_000),
@@ -399,4 +401,15 @@ fn no_jargon() {
         }
     }
     assert!(all[2].starts_with("No model request was written."));
+}
+
+/// A missing session row with a `redirect` names the variable the build may have stopped reading.
+#[test]
+fn a_missing_row_with_a_redirect_names_the_variable() {
+    assert_eq!(
+        text::native_missing_redirect("transcripts", "Claude Code", "CLAUDE_CONFIG_DIR"),
+        "goalcup has found no transcripts file for Claude Code in its goalcup home. If this build \
+         no longer reads CLAUDE_CONFIG_DIR, its sessions go to your usual folder and are not \
+         recorded; model requests still are."
+    );
 }

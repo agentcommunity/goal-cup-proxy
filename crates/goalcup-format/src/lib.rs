@@ -173,6 +173,8 @@ pub const NOTES: &[&str] = &[
     "local_model",
     "version_note",
     "mask_values",
+    "version_read",
+    "harness_changed",
 ];
 
 /// One line of a part file's flush index (section 1).

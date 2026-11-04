@@ -16,10 +16,10 @@ CASES, CHECKS = ("direct", "gateway", "dodger"), ("C1", "C2", "C3", "C4", "C5", 
 CORE = ("claude-code-cli", "codex-cli", "hermes-cli")
 GUARDED = ["crates/", "server/worker/src/", "connectors/", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
            ":(exclude)connectors/tiers.toml", ":(glob,exclude)crates/*/tests/**"]  # tests are not in the binary
-# The 16 connector ids, PRD-11 section 5.
+# The 15 connector ids, PRD-11 section 5.
 CONNECTOR_IDS = ["amp-cli", "claude-code-cli", "cline-cli", "codex-cli", "copilot-cli", "crush-cli", "droid-cli",
                  "gemini-cli", "goose-cli", "hermes-cli", "kilo-cli", "kimi-code-cli", "openclaw-cli",
-                 "opencode-cli", "opencode2-cli", "qwen-cli"]
+                 "opencode-cli", "qwen-cli"]
 HEAD = ["Started", "Case", "Mode", "Variant", "Result"] + list(CHECKS) + [
     "Wire / harness calls", "Subagents", "Tokens in / out", "Gaps", "Why"]
 HEADER = "# Written by scripts/pad/table (PRD-12 section 9). Do not edit by hand.\n"

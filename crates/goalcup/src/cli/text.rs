@@ -191,16 +191,6 @@ pub fn refusal(r: &Refusal) -> String {
             "\"{}\" sets {key}, which routes around the recorder. Remove it, then run this again.",
             file.display()
         ),
-        Refusal::VersionMismatch {
-            program,
-            want,
-            got,
-            sibling,
-        } => format!(
-            "{program} --version shows {got}; this connector is for {program} {}. Run: goalcup \
-             setup --harness {sibling}",
-            crate::connector::version::show(want)
-        ),
     }
 }
 
@@ -663,6 +653,14 @@ pub fn native_missing(row: &str, name: &str) -> String {
     )
 }
 
+pub fn native_missing_redirect(row: &str, name: &str, var: &str) -> String {
+    format!(
+        "goalcup has found no {row} file for {name} in its goalcup home. If this build no longer \
+         reads {var}, its sessions go to your usual folder and are not recorded; model requests \
+         still are."
+    )
+}
+
 pub fn native_other_device(path: &str, name: &str) -> String {
     format!(
         "goalcup does not read {path} for {name}: it is on another disk. Session files there are \
@@ -723,6 +721,12 @@ pub fn local_model(host: &str) -> String {
 pub fn fd_limit(limit: Option<u64>) -> String {
     let limit = limit.map(|n| format!(" (limit {n})")).unwrap_or_default();
     format!("Many connections are open at once{limit}. New ones wait a moment; none is refused.")
+}
+
+pub fn harness_changed(name: &str) -> String {
+    format!(
+        "{name} changed on disk during the run (an update?). goalcup keeps recording; the record shows when."
+    )
 }
 
 pub fn fail_closed(bytes: u64) -> String {
@@ -1208,8 +1212,11 @@ pub fn run_kind(mode: RunMode) -> &'static str {
 
 /// The harness version could not be read. The upload sentence is said only when there is an upload,
 /// because the upload carries "unknown".
-pub fn version_unread(name: &str, upload: bool) -> String {
-    let said = format!("{name}'s version could not be read, so the run starts without it.");
+/// The one start line for an unread version; `rules` names whose rules apply, on a connector with
+/// `[[versions]]` rows.
+pub fn version_unread(name: &str, upload: bool, rules: Option<&str>) -> String {
+    let with = rules.map_or_else(String::new, |r| format!(", with the rules for {r}"));
+    let said = format!("{name}'s version could not be read, so the run starts without it{with}.");
     if upload {
         format!("{said} The upload says unknown.")
     } else {
@@ -1229,8 +1236,7 @@ pub fn tier_line(
     name: &str,
     version: Option<&str>,
     tier: &str,
-    verified: &str,
-    os: &str,
+    builds: &[(String, String)],
     host_os: &str,
 ) -> String {
     let label = |os: &str| match os.split('-').next().unwrap_or_default() {
@@ -1238,26 +1244,66 @@ pub fn tier_line(
         "linux" => "Linux".to_owned(),
         other => other.to_owned(),
     };
-    let (os, host) = (label(os), label(host_os));
-    let on = if os.is_empty() {
-        verified.to_owned()
+    let host = label(host_os);
+    // Builds on this OS (or with no OS) first; with none, every build under its own OS.
+    let near = |(_, os): &&(String, String)| label(os).is_empty() || label(os) == host;
+    let here: Vec<&(String, String)> = builds.iter().filter(near).collect();
+    let pool = if here.is_empty() {
+        builds.iter().collect()
     } else {
-        format!("{verified} ({os})")
+        here.clone()
+    };
+    // "0.22.6, 0.22.5 (macOS), 0.22.5 (Linux)": versions grouped by OS, in order.
+    let on = |list: &[&(String, String)]| {
+        let mut groups: Vec<(String, Vec<&str>)> = Vec::new();
+        for (v, os) in list {
+            let os = label(os);
+            match groups.iter_mut().find(|(o, _)| *o == os) {
+                Some((_, vs)) if vs.contains(&v.as_str()) => {}
+                Some((_, vs)) => vs.push(v),
+                None => groups.push((os, vec![v])),
+            }
+        }
+        let group = |(os, vs): &(String, Vec<&str>)| match os.is_empty() {
+            true => vs.join(", "),
+            false => format!("{} ({os})", vs.join(", ")),
+        };
+        groups.iter().map(group).collect::<Vec<_>>().join(", ")
     };
     let same =
         "goalcup records it the same way; goalcup status says if model requests are missing.";
     let who = version.map_or_else(|| name.to_owned(), |v| format!("{name} {v}"));
+    let this: Vec<&(String, String)> = pool
+        .iter()
+        .copied()
+        .filter(|(b, _)| Some(b.as_str()) == version)
+        .collect();
     match (tier, version) {
-        ("verified", None) => format!(
-            "{name}: verified with goalcup on {on}; the version here could not be read, so goalcup cannot say it is that build."
+        ("verified", _) if pool.is_empty() => format!(
+            "{who}: not verified. goalcup records what reaches it; goalcup status says if model requests are missing."
         ),
-        ("verified", Some(v)) if v != verified => {
-            format!("{who}: not verified on {v}; verified with goalcup on {on}. {same}")
+        ("verified", None) => {
+            let not_here = if here.is_empty() && !host.is_empty() {
+                format!(", not on {host}")
+            } else {
+                String::new()
+            };
+            format!(
+                "{name}: verified with goalcup on {}{not_here}; goalcup cannot say the build here is one of those.",
+                on(&pool)
+            )
         }
-        ("verified", _) if !os.is_empty() && !host.is_empty() && os != host => {
-            format!("{who}: verified with goalcup on {on}, not on {host}. {same}")
+        ("verified", Some(v)) if this.is_empty() => format!(
+            "{who}: not verified on {v}; verified with goalcup on {}. {same}",
+            on(&pool)
+        ),
+        ("verified", _) if here.is_empty() => {
+            format!(
+                "{who}: verified with goalcup on {}, not on {host}. {same}",
+                on(&this)
+            )
         }
-        ("verified", _) => format!("{who}: verified with goalcup on {on}."),
+        ("verified", _) => format!("{who}: verified with goalcup on {}.", on(&this)),
         ("not supported", _) => format!(
             "{name}: not supported. goalcup records its session files and the connections it can see, not its model calls."
         ),

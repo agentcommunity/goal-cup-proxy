@@ -19,7 +19,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Server, awake, fail, folder, isolated_home, record_hosts};
+use super::{Server, awake, fail, folder, record_hosts};
 use super::{setup_json, text};
 use crate::connector::launch::{fill, make_dir, resolve_program};
 use crate::connector::{self, Connector, Decision, Env, Form, HostList, LaunchPlan};
@@ -111,7 +111,7 @@ fn write_home(
     vars: BTreeMap<String, String>,
     ask: bool,
 ) -> Result<Option<String>, String> {
-    let iso = isolated_home(home, &c.id);
+    let iso = super::connector_home(home, c);
     let env = Env {
         vars,
         // Setup has no project folder: a `{workspace}` row then reads in the isolated home, which
@@ -123,8 +123,7 @@ fn write_home(
         server_host: server.host().unwrap_or_default().to_owned(),
     };
     let plan = connector::plan(c, &env, &iso);
-    if let Some(r @ (Refusal::HomeLocked { .. } | Refusal::VersionMismatch { .. })) = &plan.refusal
-    {
+    if let Some(r @ Refusal::HomeLocked { .. }) = &plan.refusal {
         return Err(text::refusal(r));
     }
     let version = plan
@@ -140,9 +139,10 @@ fn write_home(
     if ask {
         open(&plan, &c.name);
     }
-    let update_off = write_rows(&plan.home, &c.update_off);
+    let rows = &plan.effective;
+    let update_off = write_rows(&plan.home, &rows.update_off);
     let no_prompts = if !ask || confirm(&format!("{} [Y/n] ", text::no_prompts_question(&c.name))) {
-        write_rows(&plan.home, &c.no_prompts)
+        write_rows(&plan.home, &rows.no_prompts)
     } else {
         put(&text::no_prompts_left(&c.name));
         Vec::new()

@@ -26,6 +26,7 @@ mod dead;
 pub mod fds;
 mod guard;
 mod handle;
+pub(crate) mod harness_watch;
 mod item;
 mod mask_worker;
 mod out;
@@ -713,6 +714,7 @@ fn test_facts(dir: &std::path::Path) -> (crate::watchdog::StartFacts, crate::wat
         workspace: dir.to_path_buf(),
         connector: Value::Null,
         harness_version: None,
+        version_row: None,
         keep: true,
         build: None,
         hosts: Value::Null,
@@ -874,6 +876,8 @@ pub fn run_recorder(null: bool) -> ExitCode {
         uploader: None,
         status: None,
         harness: facts.harness.clone(),
+        watch: boot_watch(&facts, rec.now()),
+        version: facts.harness_version.clone(),
         exit: None,
         exit_at: None,
         null,
@@ -924,6 +928,16 @@ pub fn run_recorder(null: bool) -> ExitCode {
     run.control(lines, deadline, &dir, &facts.workspace)
 }
 
+/// The watch on the harness program a restarted or recover boot already knows from its start
+/// facts; a `launch` line replaces it.
+fn boot_watch(
+    facts: &crate::watchdog::StartFacts,
+    now: Mono,
+) -> Option<harness_watch::HarnessWatch> {
+    let h = facts.harness.as_ref()?;
+    Some(harness_watch::HarnessWatch::new(h.program.as_ref(), now))
+}
+
 /// SIGTERM to the recorder: the control loop seals with reason `signal` (PRD-02 section 11).
 static TERM: AtomicBool = AtomicBool::new(false);
 
@@ -942,6 +956,10 @@ struct Run {
     /// The status thread, which the seal stops before its own writes.
     status: Option<std::thread::JoinHandle<()>>,
     harness: Option<HarnessFacts>,
+    /// The harness program on disk, from the boot's start facts or the `launch` line on.
+    watch: Option<harness_watch::HarnessWatch>,
+    /// The start's `harness_version`, the `before` of a `version_read` note.
+    version: Option<String>,
     exit: Option<Exit>,
     exit_at: Option<Mono>,
     null: bool,
@@ -984,6 +1002,8 @@ impl Run {
             match rx.recv_timeout(tick) {
                 Ok(Some(ToRecorder::Launch(h))) => {
                     self.board.set(|s| s.harness = Some(harness_status(&h)));
+                    let now = self.rec.now();
+                    self.watch = Some(harness_watch::HarnessWatch::new(h.program.as_ref(), now));
                     self.harness = Some(h);
                 }
                 Ok(Some(ToRecorder::Exit { exit })) => {
@@ -994,8 +1014,13 @@ impl Run {
                     });
                     (self.exit, self.exit_at) = (exit, Some(self.rec.now()));
                 }
-                Ok(Some(ToRecorder::Seal { reason, outlived })) => {
-                    return self.seal(reason, outlived, dir, workspace);
+                Ok(Some(ToRecorder::Seal {
+                    reason,
+                    outlived,
+                    version_read,
+                })) => {
+                    let read = version_read.map(|line| (line, self.version.clone()));
+                    return self.seal(reason, outlived, read, dir, workspace);
                 }
                 // A null recorder exits without sealing, at a quiet moment; the watchdog starts
                 // a normal one.
@@ -1008,7 +1033,10 @@ impl Run {
                 _ => {}
             }
             if TERM.load(Ordering::SeqCst) {
-                return self.seal(SealReason::Signal, None, dir, workspace);
+                return self.seal(SealReason::Signal, None, None, dir, workspace);
+            }
+            if let Some(note) = self.watch.as_mut().and_then(|w| w.check(self.rec.now())) {
+                self.rec.event(note);
             }
             let changed = word.as_mut().filter(|w| w.has_changed().unwrap_or(false));
             let fresh = changed.and_then(|w| w.borrow_and_update().clone());
@@ -1034,7 +1062,7 @@ impl Run {
                 None if gone => SealReason::HarnessExit,
                 None => continue,
             };
-            return self.seal(reason, None, dir, workspace);
+            return self.seal(reason, None, None, dir, workspace);
         }
     }
 
@@ -1059,6 +1087,7 @@ impl Run {
         mut self,
         reason: SealReason,
         outlived: Option<Outlived>,
+        version_read: Option<(String, Option<String>)>,
         dir: &Path,
         workspace: &Path,
     ) -> ExitCode {
@@ -1115,6 +1144,7 @@ impl Run {
             exit: self.exit,
             exit_at: self.exit_at,
             outlived,
+            version_read,
         };
         sealer.run(ask, move || self.send(&ToWatchdog::Sealed));
         ExitCode::SUCCESS
@@ -1140,6 +1170,28 @@ mod tests {
     use super::*;
 
     const MIN: u64 = 61_000_000_000;
+
+    /// A boot that knows the harness from its start facts (a restart, a recover segment) watches
+    /// its program without a `launch` line, so an update is still noted.
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn a_restarted_boot_watches_the_harness_program() {
+        let dir = tempfile::tempdir().unwrap();
+        let prog = dir.path().join("prog");
+        std::fs::write(&prog, "old").unwrap();
+        let (mut facts, _) = test_facts(dir.path());
+        assert!(boot_watch(&facts, Mono(0)).is_none());
+        facts.harness = Some(HarnessFacts {
+            pid: 1,
+            program: prog.to_string_lossy().into_owned(),
+            started: String::new(),
+            start_id: 0,
+        });
+        let mut w = boot_watch(&facts, Mono(0)).expect("a watch");
+        std::fs::write(&prog, "newer").unwrap();
+        let n = w.check(Mono(harness_watch::EVERY_NS)).expect("a note");
+        assert_eq!(n["what"], "harness_changed");
+    }
 
     /// Point 3: a quiet minute, a reservation alone or the first record after a pause is never a
     /// stall; a record left waiting for 60 s with no write is.

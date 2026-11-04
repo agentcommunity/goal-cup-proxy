@@ -8,6 +8,7 @@ use super::item::{Item, Mark, SealEnd, Sealed};
 use super::status::{self, AfterSeal, Board, CutFiles, Outlived, Status};
 use super::{Mono, Recorder, Sid, counts};
 use crate::cli::log::{self, Fact};
+use crate::connector::version;
 use crate::mask::Masker;
 use crate::native::NativeReader;
 use crate::upload::{SealFacts, UploadHandle, WrapUp, policy::Policy};
@@ -57,6 +58,9 @@ pub(crate) struct SealAsk {
     /// When the `exit` line came, for the grace.
     pub exit_at: Option<Mono>,
     pub outlived: Option<Outlived>,
+    /// The `--version` line read after the harness exited, when its build differs from the
+    /// start's, and the start's line.
+    pub version_read: Option<(String, Option<String>)>,
 }
 
 impl Sealer {
@@ -107,6 +111,11 @@ impl Sealer {
             let note =
                 json!({"ev": "note", "what": "outlived", "count": o.count, "programs": o.programs});
             rec.event(note);
+        }
+        if let Some((line, before)) = &ask.version_read {
+            let parsed = |l: &str| version::parse(l).map(|v| v.text);
+            rec.event(json!({"ev": "note", "what": "version_read", "line": line,
+                "version": parsed(line), "before": before.as_deref().and_then(parsed)}));
         }
         let ws = workspace.as_deref();
         let head = ws.and_then(|w| git(w, &["rev-parse", "HEAD"]));
@@ -402,6 +411,7 @@ impl Recorder {
             exit: None,
             exit_at: None,
             outlived: None,
+            version_read: None,
         };
         sealer.run(ask, || {}).totals.counts
     }

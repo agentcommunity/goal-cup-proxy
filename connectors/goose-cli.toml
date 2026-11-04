@@ -1,10 +1,11 @@
-# Goose 1.57.0, checked against goose-docs.ai (guides: environment-variables, goose-cli-commands, config-files,
-# sessions; getting-started/providers) and the 1.57.0 release binary run in a build box. GOOSE_PATH_ROOT moves
+# Goose, checked against goose-docs.ai (guides: environment-variables, goose-cli-commands, config-files,
+# sessions; getting-started/providers) and the release binary run in a build box. GOOSE_PATH_ROOT moves
 # config/, data/ and state/ under {home} and nothing else (box test), so other tools keep their XDG folders.
 # `session --resume` takes the most recently used session; GOOSE_MODE defaults to auto, so no approval setting.
 id = "goose-cli"
 name = "Goose"
 program = "goose"
+checked = "1.57.0"
 args = ["session"]
 resume = ["--resume"]
 home = { GOOSE_PATH_ROOT = "{home}" }
@@ -27,7 +28,7 @@ native = [{ name = "sessions", root = "{home}/data/sessions", pattern = "session
 first_screen = "If Goose asks about usage data or a provider, answer now, before you type your prompt."
 
 [usage]
-# Goose 1.57.0 (session_manager.rs): sessions(id, parent_session_id); its agent-session-id header is the id itself.
+# Goose (session_manager.rs): sessions(id, parent_session_id); its agent-session-id header is the id itself.
 thread = ["agent-session-id"]
 join = "thread"
 thread_db = { row = "sessions", file = "sessions.db*", table = "sessions", id = "id", parent = "parent_session_id", xxh3 = false }

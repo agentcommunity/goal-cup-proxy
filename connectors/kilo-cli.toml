@@ -1,8 +1,9 @@
-# Kilo CLI 7.8.25, checked against kilo.ai CLI docs, Vercel's AI Gateway Kilo guide and the 7.8.25 package.
+# Kilo CLI, checked against kilo.ai CLI docs, Vercel's AI Gateway Kilo guide and the package.
 # Kilo reads .jsonc files as JSON with comments.
 id = "kilo-cli"
 name = "Kilo CLI"
 program = "kilo"
+checked = "7.8.25"
 resume = ["--continue"]
 home = { XDG_CONFIG_HOME = "{home}/.config", XDG_DATA_HOME = "{home}/.local/share", XDG_STATE_HOME = "{home}/.local/state", XDG_CACHE_HOME = "{home}/.cache" }
 env = { KILO_DISABLE_AUTOUPDATE = "1" }
