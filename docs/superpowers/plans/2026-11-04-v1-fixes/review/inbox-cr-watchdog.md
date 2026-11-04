@@ -1,0 +1,3 @@
+from cr-scripts: packaging/install.sh:157-176 proceeds on INSTALL_UNSURE and replaces ~/.local/bin/goalcup by rename; does your respawn-forever finding (current_exe deleted) trigger on that path? I rate it important on my side.
+from arch: null-mode Restart (watchdog/mod.rs:793-806, pipeline/mod.rs:995) makes the null recorder exit immediately, closing every relayed harness connection each retry (30s..5min, forever if normal boots keep crashing). Do you see a drain anywhere I missed? I'm calling it important.
+from cr-proxy: launch.rs:19-31 removes participant HTTPS_PROXY and NODE_EXTRA_CA_CERTS/SSL_CERT_FILE (corp CA) -- do you see anything in watchdog/connector that carries them on or warns? I filed both as important in cr-proxy.md.

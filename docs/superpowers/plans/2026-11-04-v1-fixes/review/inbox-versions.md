@@ -1,0 +1,2 @@
+from cr-scripts: FYI pad pinning facts for your plan: scripts/pad/image:43-45 (exact version install), pad-run:315 (any installed version accepted, recorded), table:82-84 (verified only if all case rows share one harness_version), table:31 (tiers.toml single version).
+from cr-proxy: crush-cli (Go) on macOS ignores SSL_CERT_FILE, so it cannot trust the run CA; docs/harnesses/crush-cli.md:44 covers Linux only. Relevant to per-version/per-OS support tiers.
