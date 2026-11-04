@@ -381,15 +381,19 @@ async fn close_before_hello_is_one_named_loss() {
 }
 
 /// C6: an unlisted host (the agent's own pip, npm, git) gets one round: the refusal is answered
-/// at once. A listed host is retried; the bound only guards a hang. macOS answers a bound,
-/// non-listening port with a timeout (about 8 s) instead of a refusal, so the bound is 20 s:
-/// still under the 25 s a listed host keeps retrying.
+/// at once. A listed host is retried; the bound only guards a hang. Not on macOS: there a bound,
+/// non-listening port is not refused but times out (8 s on macOS 26, over 20 s on the macOS 14
+/// runner), so the test cannot tell one round from retries. The refusal path is the same code.
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS times out a non-listening port instead of refusing it"
+)]
 #[tokio::test]
 async fn unlisted_refusal_is_one_round() {
     let (_h, addr, _calls, _) = proxy(HOSTS, &[]);
     let (_refusing, dead) = common::ports::refusing();
     let target = dead.to_string();
-    let asked = tokio::time::timeout(Duration::from_secs(20), connect(addr, &target));
+    let asked = tokio::time::timeout(Duration::from_secs(10), connect(addr, &target));
     assert_eq!(
         asked
             .await
