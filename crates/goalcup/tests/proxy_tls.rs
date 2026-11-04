@@ -306,31 +306,6 @@ async fn an_untrusted_upstream_is_a_tunnel_to_its_own_certificate() {
     assert_eq!(gaps_of(&calls, sid), [(GapReason::UpstreamUntrusted, None)]);
 }
 
-/// cr-proxy-1: an upstream signed by a CA in the participant's `SSL_CERT_FILE` (a corporate
-/// inspection CA) is trusted, so the call is decrypted, not tunnelled.
-#[tokio::test]
-async fn an_upstream_signed_by_the_participants_ca_is_decrypted() {
-    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
-    let dir = tempfile::tempdir().unwrap();
-    let roots = up.pki().roots_file(dir.path()).display().to_string();
-    let env = [
-        (
-            "GOALCUP_TEST_UPSTREAM",
-            format!("api.openai.com={}", up.addr()),
-        ),
-        ("SSL_CERT_FILE", roots),
-    ];
-    let (_h, addr, calls, ca) = proxy(HOST_FILE, &env);
-    let c = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]));
-    let mut t = c
-        .connect(name("api.openai.com"), through(addr, TARGET).await)
-        .await
-        .unwrap();
-    get(&mut t).await;
-    drop(t);
-    assert_eq!(conns(&calls, 1).await[0].1["mode"], "decrypt");
-}
-
 /// A null boot (`serve_null`) with `api.openai.com` sent to `up`, trusting its test CA.
 fn null_proxy(up: &Upstream) -> (ProxyHandle, SocketAddr, Calls, RunCa) {
     let dir = tempfile::tempdir().unwrap();

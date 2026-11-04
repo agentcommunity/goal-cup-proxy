@@ -24,7 +24,6 @@ pub mod tunnel;
 pub mod ws;
 
 use crate::connector::{Decision, HostList, Kind, Source};
-use crate::net;
 use crate::pipeline::{EndReason, Mono, OpenFlags, Recorder, StreamHandle, StreamKind, fds};
 use bytes::Bytes;
 use ca::RunCa;
@@ -103,8 +102,6 @@ struct Boot {
     upstream: HashMap<String, SocketAddr>,
     /// Either leg's TLS handshake deadline: [`tls::HANDSHAKE_DEADLINE`] outside tests.
     handshake: Duration,
-    /// The participant's proxy for the upstream leg, if any; a test upstream never uses it.
-    egress: &'static net::Egress,
     /// [`ProxyCtx::null`]: no parser runs.
     null: bool,
 }
@@ -128,7 +125,6 @@ pub fn serve(listener: std::net::TcpListener, ctx: ProxyCtx) -> ProxyHandle {
         quiet: quiet.clone(),
         upstream: hooks.upstream,
         handshake: hooks.handshake,
-        egress: net::Egress::load(),
         null: ctx.null,
         rec: ctx.recorder,
     });
@@ -276,9 +272,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
         expected: b.hosts.is_expected(host),
     };
     let is_listed = connect_listed.is_some();
-    let via = b.egress.proxy_for(host);
-    let Ok(mut up) = connect::connect_upstream(rec, host, port, is_listed, target, via).await
-    else {
+    let Ok(mut up) = connect::connect_upstream(rec, host, port, is_listed, target).await else {
         b.notes.note(rec, Some(host), 502);
         let _ = connect::answer(&mut client, 502).await;
         return;
@@ -508,8 +502,7 @@ async fn fresh_tunnel(
     client: TcpStream,
     (target, retry): (Option<SocketAddr>, bool),
 ) {
-    let via = b.egress.proxy_for(&c.host);
-    match connect::connect_upstream(&b.rec, &c.host, c.port, retry, target, via).await {
+    match connect::connect_upstream(&b.rec, &c.host, c.port, retry, target).await {
         Ok(up) => run_tunnel(b, hold, c, client, up).await,
         Err(_) => {
             connect::reset(client);

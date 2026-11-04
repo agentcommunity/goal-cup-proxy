@@ -254,39 +254,6 @@ fn bundle_holds_certificates_only_with_the_run_ca_first() {
     assert!(text.lines().all(|l| l.len() <= 64));
 }
 
-/// cr-proxy-1: the participant's own CA (here `SSL_CERT_FILE`) follows the run CA in
-/// `run-ca.pem`, and once in `bundle.pem` after the OS roots. Its own process under nextest, so
-/// the variable is set before the first `Egress::load`.
-#[test]
-fn the_ca_files_carry_the_participants_ca() {
-    let other = RunCa::mint(&["example.org".into()]).unwrap();
-    let dir = tempfile::tempdir().unwrap();
-    let theirs = dir.path().join("corp.pem");
-    std::fs::write(&theirs, other.export().cert).unwrap();
-    // SAFETY: nextest runs each test in its own process; no other thread reads the environment.
-    unsafe {
-        for k in [
-            "NODE_EXTRA_CA_CERTS",
-            "REQUESTS_CA_BUNDLE",
-            goalcup::net::INSIDE_RUN,
-        ] {
-            std::env::remove_var(k);
-        }
-        std::env::set_var("SSL_CERT_FILE", &theirs);
-    }
-    let ca = RunCa::mint(&subtrees()).unwrap();
-    let out = tempfile::tempdir().unwrap();
-    ca.write_files(out.path()).unwrap();
-    let run_ca = certificates(&std::fs::read(out.path().join(RUN_CA_FILE)).unwrap());
-    assert_eq!(run_ca, [ca.cert_der().to_vec(), other.cert_der().to_vec()]);
-    let bundle = certificates(&std::fs::read(out.path().join(BUNDLE_FILE)).unwrap());
-    assert_eq!(bundle[0], ca.cert_der().to_vec());
-    let theirs = other.cert_der().to_vec();
-    assert_eq!(bundle.iter().filter(|d| **d == theirs).count(), 1);
-    // The OS roots are there too, not the two certificates alone.
-    assert!(bundle.len() >= 22);
-}
-
 /// The boot said in `goalcup.log` that it could not take the key file.
 #[cfg(target_os = "linux")]
 fn refused_for_key(entry: &Path) -> bool {

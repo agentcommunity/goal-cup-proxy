@@ -69,34 +69,6 @@ fn setup(home: &TempHome, path: &str, args: &[&str]) -> (Output, String) {
     (out, all)
 }
 
-/// Like `setup`, with the proxy variables cleared and then `envs` set.
-fn setup_env(
-    home: &TempHome,
-    path: &str,
-    args: &[&str],
-    envs: &[(&str, &str)],
-) -> (Output, String) {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup"));
-    home.apply(&mut cmd)
-        .env("GOALCUP_SERVER", "off")
-        .env("PATH", path);
-    for var in [
-        "HTTPS_PROXY",
-        "https_proxy",
-        "ALL_PROXY",
-        "all_proxy",
-        "NO_PROXY",
-        "no_proxy",
-    ] {
-        cmd.env_remove(var);
-    }
-    cmd.envs(envs.iter().copied());
-    let out = cmd.arg("setup").args(args).current_dir(home.home());
-    let out = out.stdin(Stdio::null()).output().expect("goalcup runs");
-    let all = format!("{}{}", lossy(&out.stdout), lossy(&out.stderr));
-    (out, all)
-}
-
 /// Like `setup`, but stdin and stdout are a pty holding `typed`; gives the exit code and output.
 fn setup_tty(home: &TempHome, path: &str, args: &[&str], typed: &str) -> (Option<i32>, String) {
     let (mut master, mut slave) = (0, 0);
@@ -329,23 +301,4 @@ fn answering_n_still_writes_update_off_and_leaves_no_prompts() {
     let saved: Value = serde_json::from_slice(&saved).unwrap();
     assert_eq!(saved["no_prompts"], Value::Array(vec![]), "{saved}");
     assert_ne!(saved["update_off"], Value::Array(vec![]), "{saved}");
-}
-
-#[test]
-fn setup_names_the_participants_proxy() {
-    let _guard = guard();
-    let (home, c) = (TempHome::new(), connector());
-    let fake = Fake::new(&c.program);
-    let (out, all) = setup_env(
-        &home,
-        &fake.path(),
-        &["--harness", &c.id, "--yes"],
-        &[("HTTPS_PROXY", "http://u:s3cret@proxy.corp:8080")],
-    );
-    assert_eq!(out.status.code(), Some(0), "{all}");
-    assert!(
-        all.contains("through your proxy proxy.corp:8080 (HTTPS_PROXY)."),
-        "{all}"
-    );
-    assert!(!all.contains("s3cret"), "{all}");
 }

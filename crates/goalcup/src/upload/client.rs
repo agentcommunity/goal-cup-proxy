@@ -1,11 +1,9 @@
 //! The one blocking HTTP client for the upload server and the documents of seam S5
 //! (`docs/UPLOAD-API.md`): one request, sent once, its answer read with a bound; retrying is the
-//! caller's. TLS is this crate's rustls (ring) through ureq's connector hook, with the egress
-//! roots and, for an `https://` server, the participant's proxy (`net::Egress`); the base address
-//! comes from `cli::server()`. Answer types ignore unknown fields (`ack`, `last_ack`).
+//! caller's. TLS is this crate's rustls (ring, webpki roots) through ureq's connector hook; the
+//! base address comes from `cli::server()`. Answer types ignore unknown fields (`ack`, `last_ack`).
 
 use super::policy::after;
-use crate::net::Egress;
 use crate::pipeline::Mono;
 use serde::{Deserialize, Serialize};
 use std::io::Read;
@@ -16,10 +14,8 @@ use std::time::Duration;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
 /// How long a read or a write may go without moving a byte.
 const STALL_TIMEOUT: Duration = Duration::from_secs(60);
-/// How long a chunk upload may take as a whole at least, on boot time.
+/// How long a chunk upload may take as a whole, on boot time.
 const PUT_TIMEOUT: Duration = Duration::from_secs(600);
-/// The slowest uplink a chunk upload is given time for, in bytes per second.
-const MIN_UPLINK: u64 = 8 * 1024;
 /// How long a JSON call may take as a whole.
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// The most of an answer read. Every answer in docs/UPLOAD-API.md is a few kilobytes.
@@ -191,20 +187,14 @@ struct ErrorBody {
     message: String,
 }
 
-/// How long a chunk upload of `content_length` bytes may take as a whole: PUT_TIMEOUT, or the
-/// time at MIN_UPLINK if longer.
-pub fn put_budget(content_length: u64) -> Duration {
-    PUT_TIMEOUT.max(Duration::from_secs(content_length / MIN_UPLINK))
-}
-
-/// A client for one server. `Debug` prints the URL only: the proxy holds its password.
+/// A client for one server. `Debug` prints the URL only.
 #[derive(Clone)]
 pub struct ServerClient {
     base: String,
     token: Option<Token>,
-    /// `None` when the ring provider refused the default versions; https then fails.
-    tls: Option<Arc<rustls::ClientConfig>>,
-    proxy: Option<ureq::Proxy>,
+    /// JSON calls: a TLS connection lives CALL_TIMEOUT; chunk uploads: PUT_TIMEOUT.
+    calls: ureq::Agent,
+    puts: ureq::Agent,
 }
 
 impl std::fmt::Debug for ServerClient {
@@ -220,60 +210,37 @@ impl ServerClient {
     /// A client for `base` (no trailing slash needed) that sends `token` on every call: `None`
     /// for the device flow, the run credential after it. `base` comes from `cli::server()`.
     pub fn new(base: &str, token: Option<Token>) -> ServerClient {
-        ServerClient::with_egress(base, token, Egress::load())
-    }
-
-    /// [`Self::new`] going out through `egress`: its roots, and its proxy for an `https://` base.
-    pub fn with_egress(base: &str, token: Option<Token>, egress: &Egress) -> ServerClient {
-        let base = base.trim_end_matches('/').to_string();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
         let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
             rustls::crypto::ring::default_provider(),
         ))
         .with_safe_default_protocol_versions()
-        .ok()
-        .map(|b| {
-            Arc::new(
-                b.with_root_certificates(egress.roots())
-                    .with_no_client_auth(),
-            )
-        });
-        // An `http://` server (a local Worker) is never proxied: the token would go in the clear.
-        let server = crate::cli::Server::Url(base.clone());
-        let proxy = base
-            .starts_with("https://")
-            .then(|| server.host())
-            .flatten()
-            .and_then(|host| egress.proxy_for(host))
-            .map(|up| up.ureq());
+        .map(|b| Arc::new(b.with_root_certificates(roots).with_no_client_auth()));
+        let agent = |whole| {
+            let mut agent = ureq::AgentBuilder::new()
+                // One connection per call, so each call resolves the name again.
+                .max_idle_connections(0)
+                .max_idle_connections_per_host(0)
+                // A redirect would carry the token to an address nobody configured.
+                .redirects(0)
+                // The token never goes through a proxy.
+                .try_proxy_from_env(false)
+                .timeout_connect(CONNECT_TIMEOUT)
+                .timeout_read(STALL_TIMEOUT)
+                .timeout_write(STALL_TIMEOUT);
+            // The ring provider takes both default versions, so this holds; if not, https fails.
+            if let Ok(tls) = &tls {
+                agent = agent.tls_connector(Arc::new(RustlsConnector(tls.clone(), whole)));
+            }
+            agent.build()
+        };
         ServerClient {
-            proxy,
-            base,
+            base: base.trim_end_matches('/').to_string(),
             token,
-            tls,
+            calls: agent(CALL_TIMEOUT),
+            puts: agent(PUT_TIMEOUT),
         }
-    }
-
-    /// An agent for one call whose TLS connection lives at most `whole`.
-    fn agent(&self, whole: Duration) -> ureq::Agent {
-        let mut agent = ureq::AgentBuilder::new()
-            // One connection per call, so each call resolves the name again.
-            .max_idle_connections(0)
-            .max_idle_connections_per_host(0)
-            // A redirect would carry the token to an address nobody configured.
-            .redirects(0)
-            // The token goes to a proxy only inside a CONNECT tunnel, and only the
-            // participant's (net::Egress).
-            .try_proxy_from_env(false)
-            .timeout_connect(CONNECT_TIMEOUT)
-            .timeout_read(STALL_TIMEOUT)
-            .timeout_write(STALL_TIMEOUT);
-        if let Some(tls) = &self.tls {
-            agent = agent.tls_connector(Arc::new(RustlsConnector(tls.clone(), whole)));
-        }
-        if let Some(proxy) = &self.proxy {
-            agent = agent.proxy(proxy.clone());
-        }
-        agent.build()
     }
 
     pub fn base(&self) -> &str {
@@ -289,7 +256,7 @@ impl ServerClient {
         B: Serialize + ?Sized,
     {
         let request = self
-            .request(&self.agent(CALL_TIMEOUT), method, path)
+            .request(&self.calls, method, path)
             .timeout(CALL_TIMEOUT)
             .set("Accept", "application/json");
         let sent = match body {
@@ -333,11 +300,11 @@ impl ServerClient {
         content_length: u64,
     ) -> Result<ChunkAnswer, ServerError> {
         // No request timeout: ureq 2 drops the agent's 60 s stall on a request with a deadline.
-        // The whole-PUT bound is the TLS connection's (`Bounded`, `put_budget`); a local
-        // `http://` Worker has none.
+        // The whole-PUT bound is the TLS connection's (`Bounded`); a local `http://` Worker has
+        // none.
         let path = format!("/v1/runs/{run}/chunks/{}", h.offset);
         let request = self
-            .request(&self.agent(put_budget(content_length)), "PUT", &path)
+            .request(&self.puts, "PUT", &path)
             .set("Accept", "application/json")
             .set("Content-Type", "application/zstd")
             .set("Content-Length", &content_length.to_string())

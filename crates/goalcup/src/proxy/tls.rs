@@ -4,17 +4,15 @@
 //! from the client's own offer, and whatever upstream picks is the only protocol offered back to
 //! the client, so both legs speak one protocol and bytes pass unchanged. Configs are built once
 //! per offer and per chosen protocol, never per connection: three upstream client configs over
-//! the egress roots ([`crate::net::Egress::roots`]: Mozilla's, the OS store's and the
-//! participant's CA files), and three harness-facing server configs sharing the run
+//! the Mozilla roots plus the OS store, and three harness-facing server configs sharing the run
 //! CA's leaf resolver, which picks the leaf by SNI. A client that sends no SNI gets a config of its
 //! own from [`Tls::server_for`], bound to the CONNECT host (section 2). The ring provider is named
 //! on every builder (PRD-17 T8).
 
-use crate::net;
-use crate::proxy::ca::{CaError, RunCa, ring_provider};
+use crate::proxy::ca::{CaError, RunCa, os_roots, ring_provider};
 use rustls::pki_types::CertificateDer;
 use rustls::server::ResolvesServerCert;
-use rustls::{AlertDescription, ClientConfig, Error, PeerMisbehaved, ServerConfig};
+use rustls::{AlertDescription, ClientConfig, Error, PeerMisbehaved, RootCertStore, ServerConfig};
 use std::fmt;
 use std::io;
 use std::sync::Arc;
@@ -71,10 +69,12 @@ impl fmt::Debug for Tls {
 }
 
 impl Tls {
-    /// Upstream roots are the egress roots and `extra_roots` (a test hook's, or none). Leaves
-    /// come from `ca`.
+    /// Upstream roots are `webpki-roots`, the OS store and `extra_roots` (a test hook's, or
+    /// none). Leaves come from `ca`.
     pub fn new(ca: &RunCa, extra_roots: Vec<CertificateDer<'static>>) -> Tls {
-        let mut roots = net::Egress::load().roots();
+        let mut roots = RootCertStore::empty();
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        roots.add_parsable_certificates(os_roots());
         roots.add_parsable_certificates(extra_roots);
         let roots = Arc::new(roots);
         let client = |alpn: &[&[u8]]| {

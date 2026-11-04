@@ -240,7 +240,6 @@ fn machine(home: &Path, server: &Server, vars: &BTreeMap<String, String>) {
         health,
         (!resolve_program("git", vars).is_absolute()).then(|| text::NO_GIT.to_owned()),
         folder::wsl(home, text::GOALCUP_FOLDER),
-        crate::net::Egress::load().line(),
     ];
     for line in lines.into_iter().flatten() {
         put(&line);
