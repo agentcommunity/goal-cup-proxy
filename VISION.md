@@ -13,8 +13,8 @@ out of date; the full rules in [docs/RULES.md](docs/RULES.md) win.
 - **One prompt, one agent, up to 168 hours.** A participant prepares harness, model and tools, writes
   one goal, and steps back. After the start, people may only send "keep going".
 - **One root agent in one harness per entry.** It may start its own subagents, as many as it likes.
-- **Start window:** a 24-hour window at the end of November or the start of December 2026 (OWNER-Q date:
-  exact day). Every entry gets its own 168 hours from its start.
+- **Start window:** early December 2026; the date and length are in
+  [RULES](docs/RULES.md#timeline). Every entry gets its own 168 hours from its start.
 - **A fresh product from scratch.** The repository is public from the start and ends under the MIT
   licence.
 - **Two short videos:** a setup video before the run and a demo after it (RULES).

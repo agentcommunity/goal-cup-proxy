@@ -37,8 +37,9 @@ All times are UTC.
 - **Until the start window:** you prepare with `goalcup setup` and practice runs, which are not
   limited to any window. The release is published before the start window; it is not a cutoff, and
   releases may follow (D70).
-- **Start window:** the 24-hour start window opens on the date on the event site (OWNER-Q date) at 00:00
-  and closes 24 hours later.
+- **Start window:** opens 5 December 2026, 00:00 UTC (placeholder, OWNER-Q date: confirm) and lasts
+  24 hours (OWNER-Q length: may become 48 hours). This line is the one place that states the date
+  and the length; the event site shows the same.
 - **During the window:** you finalize your prompt and start your run.
 - **The run's start:** the server opens the run, stamps its official start on its own clock, and
   sets its deadline 168 hours later.
@@ -260,7 +261,8 @@ disclosure and no-side-channel rules.
   helper. Your agent runs as you, so it can still read what any program of yours can read (next
   bullets), including an SSH key in `~/.ssh` (see Keys).
 - **Platforms.** See the [README table](../README.md#platforms). On Windows, use WSL2 for the event.
-  Native Windows comes later.
+  Native Windows comes later. Company proxy networks are not supported
+  ([guide](PARTICIPANT-GUIDE.md#1-what-you-need)).
 - **Desktop apps are not supported.** The Codex desktop app and Claude Desktop cannot be launched with
   a private environment, so the only way to record one would be a system-wide proxy that captures
   every application on the machine. We do not do that. Use the CLI.

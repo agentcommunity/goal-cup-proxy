@@ -146,6 +146,9 @@ flow are [ARCHITECTURE](docs/ARCHITECTURE.md).
 | Linux arm64 | Built (release.yml, `aarch64-unknown-linux-gnu`), not yet tested. OWNER-Q platforms: confirm the status. |
 | Windows | Use WSL2 (below). |
 
+Company proxy networks are not supported
+([guide](docs/PARTICIPANT-GUIDE.md#1-what-you-need)).
+
 Known issues: [TODO](TODO.md#known-issues). On a machine with no browser, set `GOALCUP_NO_BROWSER=1`:
 the approval address is printed instead.
 
