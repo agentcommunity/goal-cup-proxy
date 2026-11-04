@@ -125,11 +125,15 @@ fn write_home(
     {
         return Err(text::refusal(r));
     }
-    let version = plan.harness_version.as_deref().map(|v| {
-        let number = |t: &&str| t.starts_with(|c: char| c.is_ascii_digit());
-        v.split_whitespace().find(number).unwrap_or(v)
-    });
-    put(&text::harness_found(&c.name, version, &plan.program));
+    let version = plan
+        .harness_version
+        .as_deref()
+        .map(|v| connector::version::parse(v).map_or_else(|| v.to_owned(), |p| p.text));
+    put(&text::harness_found(
+        &c.name,
+        version.as_deref(),
+        &plan.program,
+    ));
     plan.version_notes.iter().for_each(|n| put(n));
     if ask {
         open(&plan, &c.name);
