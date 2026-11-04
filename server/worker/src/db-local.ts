@@ -113,7 +113,7 @@ export interface LocalOptions {
 }
 
 const BEFORE_WINDOW = "The start window has not opened yet.";
-const AFTER_WINDOW = "after the start window you can only `goalcup continue` your run";
+const AFTER_WINDOW = "The start window has closed. A run you already started can still be continued: goalcup continue.";
 
 const entryOf = (run: StoredRun, entryId: string): StoredEntry | undefined => run.entries.find((e) => e.entry_id === entryId);
 const currentOf = (run: StoredRun): StoredEntry => run.entries[run.entries.length - 1]!;

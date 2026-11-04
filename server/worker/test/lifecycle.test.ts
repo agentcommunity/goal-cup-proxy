@@ -97,7 +97,9 @@ describe("the start window and practice runs", () => {
     const bob = await r.cred("bob");
     const late = await r.open(bob, "bob-1");
     assertError(late, 403, "forbidden");
-    assert.equal(late.body.message, "after the start window you can only `goalcup continue` your run");
+    assert.equal(late.body.message, "The start window has closed. A run you already started can still be continued: goalcup continue.");
+    // The client appends its own full stop to the message, so neither may already end in two.
+    assert.ok(!String(late.body.message).endsWith(".."));
     const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
     assert.equal(c.status, 201, JSON.stringify(c.body));
     assert.equal(c.body.segment, 1);
