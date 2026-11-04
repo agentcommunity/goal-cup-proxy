@@ -85,23 +85,35 @@ struct File {
     usage: Usage,
 }
 
-/// A connector file's id and `[usage]` table, refused when a `file` has more than one `*` or
-/// `join = "thread"` names no `thread` key.
+/// A connector file's id and `[usage]` table, refused when a `file` holds a `/` or more than one
+/// `*`, when `join` is missing although another key is set (or is `"thread"` with no `thread`
+/// key), or when `thread_db` sits beside `readers` (the native reader keeps one or the other).
 fn parse(text: &str) -> Result<(String, Usage), String> {
     let File { id, usage: u } = toml::from_str(text).map_err(|e| e.to_string())?;
     let files = u.readers.iter().map(|r| &r.file);
     if let Some(f) = files
         .chain(u.thread_db.iter().map(|d| &d.file))
-        .find(|f| f.matches('*').count() > 1)
+        .find(|f| f.contains('/') || f.matches('*').count() > 1)
     {
-        return Err(format!("{id}: usage file {f:?} has more than one `*`"));
-    }
-    if matches!(u.join, Some(JoinBy::Thread)) && u.thread.is_empty() {
         return Err(format!(
-            "{id}: usage join = \"thread\" needs a `thread` key"
+            "{id}: usage file {f:?} is not a file name with at most one `*`"
         ));
     }
-    Ok((id, u))
+    let set =
+        !u.readers.is_empty() || !u.thread.is_empty() || u.thread_rpc || u.thread_db.is_some();
+    let bad = match u.join {
+        None => set.then_some("needs a `join`"),
+        Some(JoinBy::Thread) if u.thread.is_empty() => {
+            Some("join = \"thread\" needs a `thread` key")
+        }
+        _ => None,
+    };
+    let bad = bad.or((u.thread_db.is_some() && !u.readers.is_empty())
+        .then_some("has both `readers` and `thread_db`"));
+    match bad {
+        Some(b) => Err(format!("{id}: usage {b}")),
+        None => Ok((id, u)),
+    }
 }
 
 /// The `[usage]` table of a built-in connector. One that does not parse reads as none (the
@@ -377,6 +389,16 @@ mod tests {
         ));
         assert!(bad(r#"join = "thread""#));
         assert!(bad(r#"threads = ["x"]"#));
-        assert!(!bad(r#"thread = ["x"]"#));
+        assert!(bad(r#"thread = ["x"]"#), "no join");
+        let wire =
+            r#"readers = [{ row = "w", file = "agents/*/wire.jsonl", reader = "kimi-wire" }]"#;
+        assert!(bad(&format!("{wire}\njoin = \"time\"")), "a / in file");
+        let db = r#"thread_db = { row = "s", file = "s.db*", table = "t", id = "i", parent = "p", xxh3 = false }"#;
+        let read = r#"readers = [{ row = "s", file = "s.db*", reader = "hermes-db" }]"#;
+        assert!(
+            bad(&format!("{read}\n{db}\njoin = \"time\"")),
+            "readers and thread_db"
+        );
+        assert!(!bad("thread = [\"x\"]\njoin = \"thread\""));
     }
 }

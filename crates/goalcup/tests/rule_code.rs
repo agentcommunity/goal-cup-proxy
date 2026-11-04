@@ -197,7 +197,7 @@ fn one_system_no_harness_or_host_names_in_core() {
     let stale: Vec<_> = ALLOWED
         .iter()
         .zip(&used)
-        // A whole-file entry whose file is absent waits for its file (PRD-11 lands builtin.rs).
+        // A whole-file entry whose file is absent waits for its file.
         .filter(|((file, text, _), used)| !**used && (!text.is_empty() || root.join(file).exists()))
         .map(|((file, text, _), _)| format!("{file}: {text:?}"))
         .collect();

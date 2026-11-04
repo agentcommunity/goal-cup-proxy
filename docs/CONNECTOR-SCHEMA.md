@@ -62,13 +62,13 @@ only.
 | `readers` | list of `{row, file, reader}` | The reader of a `native` row's files. `reader` is `codex-rollout`, `claude-transcript`, `claude-meta`, `hermes-db`, `hermes-task`, `hermes-manifest`, `gemini-chat`, `qwen-chat` or `kimi-wire`. The first row that fits wins, before `thread_db` |
 | `thread` | string list | Where a wire request names its thread: a request header name (any case), or a `/`-led JSON pointer into a WebSocket `response.create`. The first key present wins |
 | `parent` | string list | Where a wire request names its parent thread, as `thread` |
-| `join` | `"thread"`, `"reply-id"` or `"time"` | How native calls join the wire: by the request's thread (`thread` must not be empty), by the reply's request id, or by time |
+| `join` | `"thread"`, `"reply-id"` or `"time"` | How native calls join the wire: by the request's thread (`thread` must not be empty), by the reply's request id, or by time. Required once any other key is set |
 | `thread_rpc` | bool | The WebSocket is a thread socket of JSON-RPC frames that report each model turn |
-| `thread_db` | `{row, file, table, id, parent, xxh3}` | A session database copy read for parent links only: its table, id and parent columns, and whether the wire names a session by the xxh3-64 of its id |
+| `thread_db` | `{row, file, table, id, parent, xxh3}` | A session database copy read for parent links only: its table, id and parent columns, and whether the wire names a session by the xxh3-64 of its id. Not beside `readers` |
 
-A `file` is a file name with at most one `*`. Rows are not checked against `native`, so a row of an
-earlier build still reads. `usage` never varies by harness version: a release that changes its
-thread headers gets a second `thread` entry.
+A `file` is a file name (no `/`) with at most one `*`. Rows are not checked against `native`, so a
+row of an earlier build still reads. `usage` never varies by harness version: a release that
+changes its thread headers gets a second `thread` entry.
 
 A harness that writes a session format already read, or names its threads in request headers,
 needs data only. A new session format needs a reader in goalcup-verify, a core PR. The verifier

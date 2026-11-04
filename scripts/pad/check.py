@@ -903,7 +903,7 @@ def verdict(folder, script):
 
 def trusted_at(repo, pad_commit):
     """The commit the pad was trusted at, or None. Needs a passing, complete selftest, a trust note naming the same
-    commit with a non-empty read, and no change to scripts/pad or crates/goalcup-verify since."""
+    commit with a non-empty read, and no change since to scripts/pad, crates/goalcup-verify, or what the verifier reads (connectors/, crates/goalcup-format)."""
     try:
         with open(os.path.join(repo, "pad-out", "selftest.json")) as f:
             st = json.load(f)
@@ -914,7 +914,8 @@ def trusted_at(repo, pad_commit):
               and tr["read"] != "" and isinstance(at, str) and at and pad_commit)
         if not ok:
             return None
-        r = subprocess.run(["git", "-C", repo, "diff", "--quiet", at, pad_commit, "--", "scripts/pad", "crates/goalcup-verify"],
+        r = subprocess.run(["git", "-C", repo, "diff", "--quiet", at, pad_commit, "--", "scripts/pad", "crates/goalcup-verify",
+                            "connectors", "crates/goalcup-format"],
                            capture_output=True, timeout=30)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return None

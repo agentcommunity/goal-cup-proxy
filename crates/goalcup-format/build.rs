@@ -1,4 +1,5 @@
-//! Builds `$OUT_DIR/connectors.rs`: every `connectors/*.toml` except the two list files, by stem.
+//! Builds `$OUT_DIR/connectors.rs`: every `connectors/*.toml` except the two list files and
+//! hidden files (`._x.toml` from macOS), by stem.
 
 use std::path::PathBuf;
 
@@ -10,7 +11,7 @@ fn main() {
         .map(|e| e.unwrap().path())
         .filter(|p| p.is_file() && p.extension().is_some_and(|x| x == "toml"))
         .map(|p| (p.file_stem().unwrap().to_string_lossy().into_owned(), p))
-        .filter(|(stem, _)| stem != "model-hosts" && stem != "tiers")
+        .filter(|(stem, _)| !stem.starts_with('.') && stem != "model-hosts" && stem != "tiers")
         .collect();
     files.sort();
     let mut out = String::from("pub const CONNECTORS: &[(&str, &str)] = &[\n");

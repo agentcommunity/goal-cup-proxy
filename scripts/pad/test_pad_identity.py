@@ -31,7 +31,8 @@ def git_repo(tmp):
     repo = tempfile.mkdtemp(dir=tmp)
     git(repo, "init", "-q")
     for rel, text in (("Cargo.toml", '[workspace.package]\nversion = "1.0.0"\n'), ("scripts/pad/x.py", "x\n"),
-                      ("crates/goalcup-verify/y.rs", "y\n"), ("README.md", "r\n")):
+                      ("crates/goalcup-verify/y.rs", "y\n"), ("README.md", "r\n"),
+                      ("connectors/a-cli.toml", "a\n"), ("crates/goalcup-format/z.rs", "z\n")):
         os.makedirs(os.path.dirname(os.path.join(repo, rel)), exist_ok=True)
         with open(os.path.join(repo, rel), "w") as f:
             f.write(text)
@@ -109,6 +110,8 @@ class Identity(unittest.TestCase):
         write_trust(repo, c1, exit=0, all_ran=True, read="r")
         self.assertIsNone(check.trusted_at(repo, c3))
         self.assertIsNone(check.trusted_at(repo, None))
+        for rel in ("connectors/a-cli.toml", "crates/goalcup-format/z.rs"):  # the verifier reads both
+            self.assertIsNone(check.trusted_at(repo, commit_change(repo, rel)))
 
     def test_row_takes_identity_from_meta(self):
         row = evaluate({"connector": "codex-cli", "case": "direct", "mode": "full",
