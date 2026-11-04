@@ -290,13 +290,11 @@ class InstallTests(unittest.TestCase):
                 self.assertEqual(log.read_text().strip(), "status --json")
                 self.assertEqual(self.tree(prefix), before)
 
-    def test_a_mode_that_is_not_recording_goes_on(self) -> None:
-        for mode in ("sealed", "practice"):
-            with self.subTest(mode=mode):
-                prefix, _, _ = self.guarded(stdout=status_line(mode))
-                result = self.install(self.newer(), "--prefix", str(prefix))
-                self.assert_upgraded(result, prefix)
-                self.assertNotIn(UNSURE, result.stderr)
+    def test_a_mode_that_is_not_recording_goes_on_only_when_sealed(self) -> None:
+        prefix, _, _ = self.guarded(stdout=status_line("sealed"))
+        result = self.install(self.newer(), "--prefix", str(prefix))
+        self.assert_upgraded(result, prefix)
+        self.assertNotIn(UNSURE, result.stderr)
 
     def test_force_skips_the_guard(self) -> None:
         for label, args, env in (("flag", ("--force",), {}), ("env", (), {"GOALCUP_FORCE": "1"})):
@@ -312,20 +310,23 @@ class InstallTests(unittest.TestCase):
         self.assert_upgraded(result, prefix)
         self.assertEqual(result.stderr, "")
 
-    def test_an_answer_that_cannot_be_read_gives_the_unsure_line_and_goes_on(self) -> None:
+    def test_an_answer_that_cannot_be_read_gives_the_unsure_line_and_refuses(self) -> None:
         signed = json.dumps({"payload": {"health": "online", "capture": {"run": "running"}},
                              "public_key": "ab" * 32, "signature": "cd" * 64}, indent=2) + "\n"
         cases = {"not json": {"stdout": "goalcup 9.8.7\n"},
                  "empty": {"stdout": ""},
                  "exit 3": {"stderr": "goalcup: could not read status.json", "rc": 3},
                  "a goalcup from before 1.0": {"stdout": signed},
-                 "an object for a mode": {"stdout": status_line({"mode": "recording"})}}
+                 "an object for a mode": {"stdout": status_line({"mode": "recording"})},
+                 "a mode it does not know": {"stdout": status_line("practice")},
+                 "exit 1 with output": {"stdout": status_line("sealed"), "rc": 1}}
         for label, answer in cases.items():
             with self.subTest(label):
-                prefix, _, _ = self.guarded(**answer)
+                prefix, _, before = self.guarded(**answer)
                 result = self.install(self.newer(), "--prefix", str(prefix))
-                self.assert_upgraded(result, prefix)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(UNSURE, result.stderr)
+                self.assertEqual(self.tree(prefix), before)
 
     def test_a_hanging_status_is_stopped_after_10_seconds_and_refuses(self) -> None:
         prefix, _, before = self.guarded(hang=True)
