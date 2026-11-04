@@ -180,4 +180,25 @@ mod tests {
             "goalcup could not read fakev --version, so it could not check this is fakev 1.x."
         );
     }
+
+    #[test]
+    fn probe_reads_stderr_and_a_named_version_on_a_failed_exit() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fakev");
+        let probe = |body: &str| {
+            std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            crate::connector::launch::harness_version(&path, &std::collections::BTreeMap::new())
+        };
+        let some = |s: &str| Some(s.to_string());
+        assert_eq!(probe("echo fakev 1.2.3"), some("fakev 1.2.3"));
+        assert_eq!(probe("echo fakev 2.0.0 >&2"), some("fakev 2.0.0"));
+        assert_eq!(
+            probe("echo 'Fakev Agent v0.22.6 (2026.9.24)' >&2; exit 1"),
+            some("Fakev Agent v0.22.6 (2026.9.24)")
+        );
+        assert_eq!(probe("echo 'error: needs Python 3.11.4' >&2; exit 1"), None);
+        assert_eq!(probe("echo fakev 1.2.3; exit 1"), some("fakev 1.2.3"));
+    }
 }
