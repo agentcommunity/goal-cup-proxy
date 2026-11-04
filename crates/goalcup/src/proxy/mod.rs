@@ -353,13 +353,19 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
     let client_tls = match acceptor.accept(PrefixedIo::new(hello.bytes, counted)).await {
         Ok(t) => t,
         Err(e) => {
-            // Opened only now, so its meta tells the outcome. Only an explicit alert teaches.
+            // Opened only now, so its meta tells the outcome. An alert teaches; a close after our
+            // flight went out counts toward `SILENT_STRIKES`.
             let alert = match tls::classify_client_handshake(&e) {
                 Refusal::Alert(alert) => {
                     b.hosts.learn(rec, rec.now(), &name, &fp);
                     json!(alert)
                 }
-                Refusal::NoAlert => json!(false),
+                Refusal::NoAlert => {
+                    if wire[1].load(Relaxed) > 0 {
+                        b.hosts.learn_silent(rec, rec.now(), &name, &fp);
+                    }
+                    json!(false)
+                }
             };
             let c = tc("tls_refused", dl, fp16, Bytes::new(), Bytes::new());
             drop(hold);

@@ -161,22 +161,40 @@ fn a_trusted_pair_is_never_learned() {
     assert!(calls.all().is_empty(), "no note for a trusted pair");
 }
 
-/// Acceptance 7: a learned refusal is gone 10 minutes later on the test clock, and learning the
-/// pair again writes a second note.
+/// cr-proxy-3: a learned refusal is gone 10 minutes later on the test clock, so the pair tries our
+/// leaf again; a second refusal of the pair holds for the rest of the boot. Each writes a note.
 #[test]
-fn a_learned_refusal_expires_after_ten_minutes() {
+fn a_second_refusal_holds_for_the_boot() {
     let (rec, calls) = Recorder::for_tests(1 << 30);
-    let hosts = hosts();
-    let fp = [3u8; 32];
-    let t = Mono(42_000_000_000);
+    let (hosts, fp, t) = (hosts(), [3u8; 32], Mono(42_000_000_000));
     let expiry = REFUSAL_EXPIRY.as_nanos() as u64;
     assert!(hosts.learn(&rec, t, "api.openai.com", &fp));
     assert!(hosts.refused(Mono(t.ns() + expiry - 1), "api.openai.com", &fp));
     let later = Mono(t.ns() + expiry);
     assert!(!hosts.refused(later, "api.openai.com", &fp));
     assert!(hosts.learn(&rec, later, "api.openai.com", &fp));
-    assert!(hosts.refused(later, "api.openai.com", &fp));
+    let year = 365 * 86_400 * 1_000_000_000;
+    assert!(hosts.refused(Mono(later.ns() + year), "api.openai.com", &fp));
     assert_eq!(ca_refused(&calls).len(), 2);
+}
+
+/// cr-proxy-3: a client that refuses our leaf by closing without an alert teaches the pair after
+/// three closes (`SILENT_STRIKES`), with one note; a trusted handshake clears the count.
+#[test]
+fn three_silent_closes_teach_like_an_alert() {
+    let (rec, calls) = Recorder::for_tests(1 << 30);
+    let (hosts, fp, t) = (hosts(), [4u8; 32], Mono(1));
+    assert!(!hosts.learn_silent(&rec, t, "api.openai.com", &fp));
+    assert!(!hosts.learn_silent(&rec, t, "api.openai.com", &fp));
+    assert!(!hosts.refused(t, "api.openai.com", &fp));
+    assert!(hosts.learn_silent(&rec, t, "api.openai.com", &fp));
+    assert!(hosts.refused(t, "api.openai.com", &fp));
+    assert_eq!(ca_refused(&calls).len(), 1);
+    let other = [5u8; 32];
+    hosts.learn_silent(&rec, t, "api.openai.com", &other);
+    hosts.trust("api.openai.com", &other);
+    assert!(!hosts.learn_silent(&rec, t, "api.openai.com", &other));
+    assert!(!hosts.learn_silent(&rec, t, "api.openai.com", &other));
 }
 
 /// Rule 8 over real TLS: the upstream ends a close-delimited reply without close_notify. The
@@ -378,6 +396,28 @@ async fn a_close_mid_handshake_teaches_nothing() {
     let alert = Some(json!({"alert": false}));
     assert_eq!(gaps_of(&calls, sid), [(GapReason::TlsRefused, alert)]);
     assert!(ca_refused(&calls).is_empty());
+}
+
+/// cr-proxy-3 through `serve`: three clients that read our flight and close without an alert teach
+/// the pair with one note; the fourth connection of the pair tunnels.
+#[tokio::test]
+async fn silent_closes_after_our_leaf_are_learned() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let (_h, addr, calls, ca, _dir) = proxy_to(&up, true);
+    let config = client_trusting(vec![ca.cert_der().clone()], &[b"http/1.1"]);
+    for n in 1..=4 {
+        let mut hello = Vec::new();
+        let mut tls = ClientConnection::new(config.clone(), name("api.openai.com")).unwrap();
+        tls.write_tls(&mut hello).unwrap();
+        let mut s = through(addr, TARGET).await;
+        s.write_all(&hello).await.unwrap();
+        let mut flight = [0u8; 1];
+        s.read_exact(&mut flight).await.unwrap();
+        drop(s);
+        conns(&calls, n).await;
+    }
+    assert_eq!(ca_refused(&calls).len(), 1);
+    assert_eq!(conns(&calls, 4).await[3].1["reason"], "tls_refused");
 }
 
 /// Acceptance 3, automated half: an `h2`-only client sends four requests in parallel on one
