@@ -129,6 +129,40 @@ fn no_reader_skips_and_a_wire_only_thread_is_reported() {
     assert_eq!((&w["harness"], &w["wire_ok"]), (&json!(0), &json!(3)));
 }
 
+/// A per-call table from (leg, time in seconds after `T0`) pairs.
+fn timed(calls: impl IntoIterator<Item = (Leg, u64)>) -> CallTable {
+    let mut t = tab("a", 0, 0);
+    t.rows = (calls.into_iter())
+        .map(|(l, s)| call(l, "a", T0 + s * 1_000_000_000))
+        .collect();
+    t
+}
+
+#[test]
+fn early_wire_only_calls_do_not_hide_later_lost_calls() {
+    // 20 wire-only calls (titles, count_tokens) at minutes 0 to 4; the harness calls at minutes
+    // 30 to 39 reach the wire once, at minute 39. Cumulatively the wire is ahead all along.
+    let early = (0..20).map(|i| (Leg::Wire, i * 12));
+    let late = (30..40).map(|m| (Leg::Native, m * 60));
+    let t = timed(early.chain(late).chain([(Leg::Wire, 39 * 60)]));
+    assert_ne!(go(&t, None, K[0]), "pass");
+}
+
+#[test]
+fn a_clean_run_with_a_few_wire_only_calls_passes() {
+    // Three wire-only calls at minute 0, then calls 3 s apart as (first second, calls, wire late
+    // by, wire early by). The burst at 14:30 straddles the 10 minute window from the call at 5:00,
+    // its wire legs landing just under the lag late (14:59 harness, 16:58 wire); the last burst's
+    // wire legs land 30 s before the harness logged them.
+    let mut c: Vec<(Leg, u64)> = vec![(Leg::Wire, 0); 3];
+    for (start, n, late, early) in [(300, 1, 119, 0), (870, 12, 119, 0), (1800, 12, 0, 30)] {
+        for h in (0..n).map(|i| start + i * 3) {
+            c.extend([(Leg::Native, h), (Leg::Wire, h + late - early)]);
+        }
+    }
+    assert_eq!(go(&timed(c), None, K[0]), "pass");
+}
+
 #[test]
 fn provider_errors_count_by_code_and_leg() {
     let err = |leg, limited, code: &str| {

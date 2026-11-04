@@ -14,6 +14,8 @@ const MIN: u64 = 60_000_000_000;
 /// A harness call may reach the wire this long after the harness logged it.
 const LAG: u64 = 2 * MIN;
 const WIRE_ENDED: u64 = 10 * MIN;
+/// `wire_keeps_up` also compares the legs in each window of this length.
+const WINDOW: u64 = 10 * MIN;
 const NOT_READ: &str = "the harness's own log is not read";
 const UNREAD: &str = "could not read the harness's own log";
 
@@ -224,21 +226,36 @@ struct Sweep {
 }
 
 impl Sweep {
-    /// Harness calls up to each harness time T against wire calls up to T plus the lag.
+    /// Harness calls up to each harness time T against wire calls up to T plus the lag; and,
+    /// so early wire-only calls cannot hide a later loss, the harness calls in the window from T
+    /// against the wire calls in it widened by the lag on both sides (a wire leg may land up to
+    /// the lag either side of the harness's time, so no window edge splits a pair).
     fn new(h: &[u64], w: &[u64]) -> Self {
         let mut s = Sweep::default();
+        let upto = |t: u64| w.partition_point(|&x| x <= t) as u64;
         for (j, &t) in h.iter().enumerate() {
             let n = j as u64 + 1;
-            let ex = n.saturating_sub(w.partition_point(|&x| x <= t.saturating_add(LAG)) as u64);
+            let ex = n.saturating_sub(upto(t.saturating_add(LAG)));
             s.top = s.top.max(ex);
-            if ex > tol(n) {
-                s.first.get_or_insert(t);
-                if ex >= s.worst {
-                    (s.worst, s.at) = (ex, t);
-                }
-            }
+            s.mark(t, n, ex);
+            let end = t.saturating_add(WINDOW);
+            let hw = (h.partition_point(|&x| x < end) - j) as u64;
+            let before = w.partition_point(|&x| x < t.saturating_sub(LAG)) as u64;
+            let ww = upto(end.saturating_add(LAG)) - before;
+            s.mark(t, hw, hw.saturating_sub(ww));
         }
         s
+    }
+
+    /// Notes an excess of `ex` over `n` harness calls from `t` when it is above the tolerance.
+    fn mark(&mut self, t: u64, n: u64, ex: u64) {
+        if ex > tol(n) {
+            self.top = self.top.max(ex);
+            self.first.get_or_insert(t);
+            if ex >= self.worst {
+                (self.worst, self.at) = (ex, t);
+            }
+        }
     }
 
     fn span(&self) -> String {
