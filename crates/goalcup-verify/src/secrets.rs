@@ -21,6 +21,8 @@ use std::process::ExitCode;
 const SHAPES: &str = include_str!("../../../connectors/shapes.tsv");
 /// The bytes a tail gathers before it is scanned again with the 4 KiB it keeps.
 const BATCH: usize = 64 << 10;
+/// The longest SSE line or WebSocket message kept to join its deltas; a longer one is dropped.
+const LINE: usize = 1 << 20;
 
 #[derive(clap::Args)]
 pub struct Args {
@@ -44,13 +46,14 @@ pub struct Rules {
 }
 
 /// One scan's findings: hits by (list, form or kind, where, hash prefix), MASK spans by kind,
-/// `fail_closed` bytes, and the other spans over 16 KiB.
+/// `fail_closed` bytes, the other spans over 16 KiB, and the lines over [`LINE`] not parsed.
 #[derive(Default)]
 struct Scan {
     hits: BTreeMap<(usize, &'static str, String, String), u64>,
     masks: BTreeMap<String, u64>,
     fail_closed: u64,
     big: Vec<Value>,
+    long: u64,
 }
 
 /// Where a run of bytes is named; the last 4 KiB scanned, then the bytes not scanned yet; where
@@ -64,8 +67,9 @@ struct Tail {
     last: Vec<u64>,
 }
 
-/// An open stream: DATA and delta tails, the pending SSE line or WebSocket message, and MASK
-/// spans by rule as (end, length) until one does not touch the next.
+/// An open stream: DATA and delta tails, the pending SSE line or WebSocket message (emptied and
+/// marked `long` once over [`LINE`]), and MASK spans by rule as (end, length) until one does not
+/// touch the next.
 #[derive(Default)]
 struct Stream {
     sse: bool,
@@ -73,6 +77,7 @@ struct Stream {
     data: Tail,
     deltas: Tail,
     line: Vec<u8>,
+    long: bool,
     masks: BTreeMap<u64, (u64, u64)>,
 }
 
@@ -271,20 +276,22 @@ impl Scan {
     /// Adds `piece` to a tail; scans once `BATCH` new bytes wait.
     fn feed(&mut self, r: &Rules, t: &mut Tail, piece: &[u8]) {
         t.buf.extend_from_slice(piece);
-        t.end += piece.len() as u64;
+        t.end = t.end.saturating_add(piece.len() as u64);
         if t.buf.len() - t.seen >= BATCH {
             self.scan(r, t);
         }
     }
 
     /// Scans what a stream holds and joins nothing of it to what follows: after a GAP or an
-    /// offset jump nothing is before a match (PRD-05 section 4).
+    /// offset jump nothing is before a match (PRD-05 section 4). A pending line over [`LINE`]
+    /// counts as not parsed.
     fn cut(&mut self, r: &Rules, s: &mut Stream) {
         for t in [&mut s.data, &mut s.deltas] {
             self.scan(r, t);
             *t = Tail::new(std::mem::take(&mut t.at), t.end);
         }
         s.line.clear();
+        self.long += u64::from(std::mem::take(&mut s.long));
     }
 
     /// Ends a stream: scans what it holds and counts its open MASK spans.
@@ -300,7 +307,7 @@ impl Scan {
         let kind = kinds.get(rule as usize).cloned();
         let kind = kind.unwrap_or_else(|| format!("other({rule})"));
         if kind == "fail_closed" {
-            self.fail_closed += len;
+            self.fail_closed = self.fail_closed.saturating_add(len);
         } else if len > 16 << 10 {
             self.big.push(json!({"kind": kind, "in": at, "len": len}));
         }
@@ -345,19 +352,33 @@ impl Scan {
                     }
                     self.feed(r, &mut s.data, &bytes);
                     let mut text = String::new();
-                    if s.ws || s.sse {
-                        s.line.extend_from_slice(&bytes);
-                    }
-                    if s.ws && flags & FLAG_FIN != 0 {
-                        delta_text(&parse(&std::mem::take(&mut s.line)), &mut text);
-                    }
-                    if s.sse {
-                        while let Some(i) = s.line.iter().position(|&b| b == b'\n') {
-                            let l: Vec<u8> = s.line.drain(..=i).collect();
-                            if let Some(d) = l.strip_prefix(b"data:") {
-                                delta_text(&parse(d), &mut text);
-                            }
+                    // Each new byte is looked at once; a line ends at a newline (SSE) or FIN
+                    // (WebSocket).
+                    let (mut rest, fin) = (&bytes[..], s.ws && flags & FLAG_FIN != 0);
+                    while s.ws || s.sse {
+                        let nl = rest.iter().position(|&b| b == b'\n').filter(|_| s.sse);
+                        let piece = nl.map_or(rest, |i| &rest[..i]);
+                        s.long |= s.line.len() + piece.len() > LINE;
+                        match s.long {
+                            true => s.line.clear(),
+                            false => s.line.extend_from_slice(piece),
                         }
+                        if nl.is_none() && !fin {
+                            break;
+                        }
+                        let body = match s.sse {
+                            true => s.line.strip_prefix(b"data:"),
+                            false => Some(&s.line[..]),
+                        };
+                        match body {
+                            _ if s.long => self.long += 1,
+                            Some(d) => delta_text(&parse(d), &mut text),
+                            None => {}
+                        }
+                        s.line.clear();
+                        s.long = false;
+                        let Some(i) = nl else { break };
+                        rest = &rest[i + 1..];
                     }
                     self.feed(r, &mut s.deltas, text.as_bytes());
                     None
@@ -388,7 +409,7 @@ impl Scan {
                         let done = std::mem::replace(m, (off, 0)).1;
                         self.span(&kinds, rule, done, &s.data.at);
                     }
-                    *m = (off + len, m.1 + len);
+                    *m = (off.saturating_add(len), m.1.saturating_add(len));
                     None
                 }
                 Record::Event { json, .. } => {
@@ -488,22 +509,34 @@ impl Scan {
             (0, 1..) => Res::Warn,
             _ => Res::Pass,
         };
-        let why =
+        let mut why =
             format!("hits: {k} known, {s} shape, {g} glued_shape; {b} MASK spans over 16 KiB");
+        // A fact, not a loss: its bytes are still scanned raw, only its deltas are not joined
+        // (a Responses `response.completed` line repeats the whole output).
+        if self.long > 0 {
+            why += &format!(
+                "; {} SSE lines or WebSocket messages over 1 MiB not parsed",
+                self.long
+            );
+        }
         let [k, s, g] = lists;
         let v = json!({"known_hits": k, "shape_hits": s, "glued_shape": g, "masks": self.masks,
-            "mask_bytes": {"fail_closed": self.fail_closed}, "big_masks": self.big});
+            "mask_bytes": {"fail_closed": self.fail_closed}, "big_masks": self.big,
+            "lines_not_parsed": self.long});
         (res, v.as_object().cloned().unwrap_or_default(), why)
     }
 }
 
-/// The `secrets` check of one entry (`check --known`). A record that cannot be read is the
-/// integrity checks' to report.
+/// The `secrets` check of one entry, in every `check`; shapes only without `--known`. A record
+/// that cannot be read is the integrity checks' to report.
 pub fn check(r: &Rules, e: &Entry) -> Check {
     let mut s = Scan::default();
     let whole = s.record(r, e).unwrap_or(false);
     let (res, facts, why) = s.result();
     let mut c = Check::new("secrets", None, res, &why);
+    if r.values == 0 {
+        c.why += " (shapes only; no known values given)";
+    }
     if !whole {
         c.why += "; the record was read only in part";
     }

@@ -18,12 +18,13 @@ pub struct Report {
 }
 
 /// Checks every entry of the input. `now_ns` is set for `--live`; `local` is `--local`, the
-/// local entries a server copy is compared with; `known` (`--known`) adds the `secrets` check.
+/// local entries a server copy is compared with; `known` is what the `secrets` check looks for:
+/// the shapes, and the `--known` values when given.
 pub fn build(
     input: &Input,
     now_ns: Option<u64>,
     local: Option<&Input>,
-    known: Option<&Rules>,
+    known: &Rules,
     files: Option<&[(String, u64)]>,
 ) -> Report {
     let is_server = input.kind == "server";
@@ -37,7 +38,7 @@ pub fn build(
         if let Some(f) = &f {
             checks.extend(server::checks(e, f, &o, local));
         }
-        checks.extend(known.map(|k| secrets::check(k, e)));
+        checks.push(secrets::check(known, e));
         if let (Some(f), Some(c)) = (
             files,
             checks.iter_mut().find(|c| c.id == "subagents_present"),
@@ -128,12 +129,12 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         "links": o.links, "checks": checks, "counts": counts, "history": hist.map(|k| &k.facts), "threads": threads})
 }
 
-/// The text form of one entry: `why` per failed or named check, then the coverage line.
+/// The text form of one entry: `why` per warned, failed or named check, then the coverage line.
 fn text(name: &str, o: &Outcome, checks: &[Check]) -> String {
     let c = &o.counts;
     let mut t = format!("goalcup-verify: entry {name}\n");
     let hist = (checks.iter().find(|k| k.id == "history_complete")).map(history::line);
-    for k in checks.iter().filter(|k| k.result >= Res::Named) {
+    for k in checks.iter().filter(|k| k.result >= Res::Warn) {
         t += &format!("  {} {}: {}\n", k.id, k.result.name(), k.why);
     }
     if !o.sealed {

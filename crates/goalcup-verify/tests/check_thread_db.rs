@@ -204,3 +204,49 @@ fn an_empty_crush_parent_is_no_parent_not_the_hash_of_nothing() {
     linked(&t, ROOT_HASH, KID_HASH, 2);
     assert!(!format!("{t:?}").contains(EMPTY_HASH));
 }
+
+/// A database file built by `sql` alone, as copied (no WAL).
+fn raw_db(name: &str, sql: &str) -> Vec<(String, Vec<u8>)> {
+    let p = tmp(name).join(name);
+    rusqlite::Connection::open(&p)
+        .unwrap()
+        .execute_batch(sql)
+        .unwrap();
+    vec![(name.to_string(), std::fs::read(&p).unwrap())]
+}
+
+/// Goose sessions ROOT and KID as rows of `table`.
+fn goose_rows(table: &str) -> String {
+    format!(
+        "CREATE TABLE {table}(id TEXT PRIMARY KEY, parent_session_id TEXT);
+         INSERT INTO {table} VALUES ('{GOOSE_ROOT}', NULL), ('{GOOSE_KID}', '{GOOSE_ROOT}');"
+    )
+}
+
+#[test]
+fn a_database_with_a_view_over_a_virtual_table_is_not_run() {
+    // `sessions` is a view the record's author wrote, reaching a virtual table SQLite does not
+    // call innocuous. With `trusted_schema=OFF` the view does not run, so no parent is read. The
+    // trigger and the `load_extension` view ride along; the reader never names them.
+    let sql = goose_rows("s")
+        + "CREATE VIEW sessions AS SELECT s.id, s.parent_session_id
+             FROM s, pragma_database_list AS d WHERE d.name = 'main';
+           CREATE TABLE log(x);
+           CREATE TRIGGER t AFTER INSERT ON s BEGIN INSERT INTO log VALUES (new.id); END;
+           CREATE VIEW ext AS SELECT load_extension('/nonexistent/evil');";
+    let files = raw_db("sessions.db", &sql);
+    let dir = entry(
+        "thread-db-view-vtab",
+        "goose-cli",
+        "sessions",
+        &files,
+        |e| {
+            chat(e, &[("agent-session-id", GOOSE_ROOT)]);
+            chat(e, &[("agent-session-id", GOOSE_KID)]);
+        },
+    );
+    let t = call_table(&dir);
+    assert_eq!(t.threads.len(), 2);
+    assert!(t.threads.iter().all(|x| x.parent.is_none()));
+    assert_eq!(t.children, None);
+}

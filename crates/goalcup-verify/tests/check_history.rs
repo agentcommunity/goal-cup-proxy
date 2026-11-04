@@ -448,9 +448,21 @@ fn a_gap_on_an_unrelated_stream_does_not_cover_a_dropped_call() {
 }
 
 #[test]
-fn a_missing_text_answer_only_warns() {
+fn history_text_missing_is_named() {
     for s in [Anthropic, Chat] {
-        let d = rec("h-text", |e| drop(chain(e, s, true, 5, Some((2, false)))));
+        let d = rec("h-text", |e| drop(chain(e, s, true, 5, Some((2, true)))));
+        assert_eq!(missing(&verdict(&d, "named", 1)), (0, 1, 0));
+    }
+}
+
+/// Clean runs miss resent text (a harness rewrites it, a secret is masked in the resend): with
+/// no GAP over it, nothing says it was lost.
+#[test]
+fn history_text_missing_without_a_gap_warns() {
+    for s in [Anthropic, Chat] {
+        let d = rec("h-text-bare", |e| {
+            drop(chain(e, s, true, 5, Some((2, false))))
+        });
         assert_eq!(missing(&verdict(&d, "warn", 0)), (0, 1, 0));
     }
 }

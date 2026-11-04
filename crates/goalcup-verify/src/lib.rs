@@ -7,6 +7,7 @@
 
 pub mod history;
 pub mod honesty;
+pub mod hosts;
 pub mod input;
 pub mod integrity;
 pub mod legs;
