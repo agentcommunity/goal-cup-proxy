@@ -252,22 +252,21 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     let mut version_notes: Vec<String> = (connector.version_notes.iter().filter(said))
         .map(|n| n.say.clone())
         .collect();
-    let program_name = &connector.program;
     let version_refusal = match (&connector.version, &read) {
         (Some(want), Some(v)) if !version::matches(v, want) => {
             let sibling = others.iter().find(|(_, spec)| version::matches(v, spec));
             if sibling.is_none() {
-                version_notes.push(version::untested_say(program_name, &v.text, want));
+                version_notes.push(version::untested_say(&connector.program, &v.text, want));
             }
             sibling.map(|(id, _)| Refusal::VersionMismatch {
-                program: program_name.clone(),
+                program: connector.program.clone(),
                 want: want.clone(),
                 got: v.text.clone(),
                 sibling: id.to_string(),
             })
         }
-        (Some(want), None) => {
-            version_notes.push(version::unchecked_say(program_name, want, &others));
+        (Some(want), None) if free => {
+            version_notes.push(version::unchecked_say(&connector.program, want, &others));
             None
         }
         _ => None,
