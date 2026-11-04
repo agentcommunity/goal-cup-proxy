@@ -20,3 +20,8 @@ native = [
 ]
 no_prompts = [{ file = "{home}/config.toml", key = "default_permission_mode", value = "auto" }]
 first_screen = "If Kimi Code asks you to sign in, do it now, before you type your prompt."
+
+[usage]
+readers = [{ row = "wire", file = "wire.jsonl", reader = "kimi-wire" }]
+# By time: the prompt_cache_key names only the session, which main and subagents share.
+join = "time"

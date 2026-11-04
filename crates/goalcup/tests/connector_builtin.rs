@@ -108,6 +108,11 @@ fn a_connector_file_loads_from_disk() {
 }
 
 #[test]
+fn a_usage_table_loads() {
+    load_text("id = \"test-cli\"\nname = \"Test\"\nprogram = \"test\"\n[usage]\nthread = [\"x-session-id\"]\njoin = \"thread\"\n").unwrap();
+}
+
+#[test]
 fn duplicate_native_row_names_are_refused() {
     let text = r#"
 id = "test-cli"

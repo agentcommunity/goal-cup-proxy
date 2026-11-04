@@ -19,3 +19,8 @@ secret_files = [
 ]
 native = [{ name = "db", root = "{home}/.local/share/opencode", pattern = "opencode*.db*", form = "final" }]
 no_prompts = [{ file = "{home}/.config/opencode/opencode.json", key = "permission", value = "allow" }]
+
+[usage]
+thread = ["x-opencode-session-id", "x-session-id"]
+parent = ["x-opencode-parent-session-id", "x-parent-session-id"]
+join = "thread"

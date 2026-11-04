@@ -45,6 +45,9 @@ pub struct Connector {
     pub no_prompts: Vec<SettingRow>,
     pub update_off: Vec<SettingRow>,
     pub skills_dir: Option<String>,
+    /// Read by goalcup-verify only (docs/CONNECTOR-SCHEMA.md#the-usage-table); the recorder never
+    /// reads it.
+    pub usage: toml::Table,
 
     /// Built in or a file. Set by `load`.
     #[serde(skip)]

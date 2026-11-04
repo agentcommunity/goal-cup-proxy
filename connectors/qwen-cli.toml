@@ -21,3 +21,8 @@ native = [
 ]
 no_prompts = [{ file = "{home}/settings.json", key = "tools.approvalMode", value = "yolo" }]
 update_off = [{ file = "{home}/settings.json", key = "general.enableAutoUpdate", value = "false" }]
+
+[usage]
+readers = [{ row = "chats", file = "*.jsonl", reader = "qwen-chat" }]
+# A chat call's counts equal the wire's; a memory extractor call no chat holds stays wire only.
+join = "time"

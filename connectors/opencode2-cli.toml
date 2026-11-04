@@ -20,3 +20,8 @@ secret_files = [
   "{home}/.config/opencode/opencode.jsonc",
 ]
 native = [{ name = "db", root = "{home}/.local/share/opencode", pattern = "opencode*.db*", form = "final" }]
+
+[usage]
+thread = ["x-opencode-session-id", "x-session-id"]
+parent = ["x-opencode-parent-session-id", "x-parent-session-id"]
+join = "thread"

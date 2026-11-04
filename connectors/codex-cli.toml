@@ -30,3 +30,9 @@ mask = [
   { kind = "codex_safety_identifier", json_field = "safety_identifier", value = "scalar" },
   { kind = "codex_turn_state", json_field = "x-codex-turn-state", value = "scalar" },
 ]
+
+[usage]
+readers = [{ row = "sessions", file = "rollout-*.jsonl", reader = "codex-rollout" }]
+thread = ["thread-id", "/client_metadata/thread_id"]
+parent = ["x-codex-parent-thread-id", "/client_metadata/x-codex-parent-thread-id"]
+join = "thread"
