@@ -8,11 +8,13 @@ and the Worker (`server/worker/`).
 
 A rule change touches the Worker (`server/worker/src/`), its local database (`db-local.ts`) and, if
 the database must change, the SQL (the website's migration, mirrored in
-`server/worker/sql/goal-cup-tracer-upload.sql`; 1.0 needs none). Then run `npm test` in
+`server/worker/sql/goal-cup-tracer-upload.sql`). 1.0 needs website migration `20261021100000`
+(applied) for `stored_bytes` and `chunk_count`. The purge of expired device requests needs
+`20261105100000`, pending in `server/worker/sql/pending/` until the owner applies it. Then run `npm test` in
 `server/worker` and the full-tier `upload_worker.rs`, which runs the real client against the Worker
 under `wrangler dev` (`sh scripts/gate.sh full` runs both).
 
-Gone since 0.7, and not coming back: the receipt, abandon and seal calls (`/receipt`, `/abandon`, `/seal`), signing and the signed `ack` in chunk answers, `last_ack`, `manifest_sha256` and `connector_dir_sha256`, the `tracer_version` alias, heartbeat `vitals`, and the per-run size limit (`413 quota_exceeded`).
+Gone since 0.7, and not coming back: the receipt, abandon and seal calls (`/receipt`, `/abandon`, `/seal`), signing and the signed `ack` in chunk answers, `last_ack`, `manifest_sha256` and `connector_dir_sha256`, the `tracer_version` alias, heartbeat `vitals`, and the per-run size limit as `413 quota_exceeded` (only a practice run has a limit now, answered `410`; see the chunk call).
 
 ## Common rules
 
@@ -34,13 +36,13 @@ Gone since 0.7, and not coming back: the receipt, abandon and seal calls (`/rece
   |---|---|---|---|
   | 400 | `malformed` | A field or header is missing or has the wrong shape. | backs off and retries |
   | 401 | `unauthorized` | No credential, or not one the server knows, or it has expired. | backs off and retries; `goalcup upload` gives up and says so |
-  | 403 | `forbidden` | The member may not start a run now (terms not accepted, outside the start window, a goalcup older than the server accepts, a `dev` competition run, a repository another member's run uses, test mode for a non-operator), or a device request was denied. | stops the start, reports |
+  | 403 | `forbidden` | The member may not start a run now (terms not accepted, outside the start window, a goalcup older than the server accepts, a repository another member's run uses, test mode for a non-operator), or a device request was denied. | stops the start, reports |
   | 404 | `not_found` | No such run for this credential, not this run's entry, or no such path. | backs off and retries; `goalcup upload` gives up and says so |
   | 409 | `conflict` | The request does not continue where the server is (offset, `Goalcup-Prev`, `Goalcup-First-Seq`), a final heartbeat names another end than the one committed, the credential already opened a run, or `previous_entry_id` is not the run's latest entry. | chunk: reads the position again at once and goes on from there |
-  | 410 | `closed` | The run closed 24 hours after it ended; the entry is sealed; the chunk goes past what the final heartbeat committed; or the run is over and cannot be continued. A device request has expired or was already picked up. | backs off and retries; `goalcup upload` gives up and says so; a refused `continue` marks the run over |
+  | 410 | `closed` | The run closed 24 hours after it ended; the entry is sealed; the chunk goes past what the final heartbeat committed; or the run is over and cannot be continued; a practice run has reached its upload limit. A device request has expired, or its answer was already collected. | backs off and retries; `goalcup upload` gives up and says so; a refused `continue` marks the run over |
   | 413 | `too_large` | A body over its cap. | backs off and retries (a goalcup bug) |
   | 422 | `digest_mismatch` | The body's SHA-256 is not `Goalcup-Sha256`. Nothing was stored. | hashes the range again, then retries |
-  | 429 | `rate_limited` | Too many calls. `Retry-After` says when. | backs off and retries |
+  | 429 | `rate_limited` | Too many device-flow calls (the sign-in calls only; authenticated calls are not limited). `Retry-After` says when. | backs off and retries |
   | 503 | `maintenance` | The server asks every client to wait (the maintenance switch). `Retry-After` says when. | backs off and retries |
   | 503 | `awaiting_final` | The run is over (`ends_at`), and the entry's final heartbeat has not arrived. | sends the final heartbeat, then retries at once |
   | 405 | `method_not_allowed` | A wrong method on a known path (not part of the contract; `Allow` names the right one). | nothing; goalcup never sends one |
@@ -116,9 +118,11 @@ objects) in one go.
 | `200` | `{"status": "approved", "purpose": "run", "credential": "gcr_<64 hex>", "expires_at": "..."}` | Approved for a run. The credential is minted now, returned this once, and stored hashed. |
 | `200` | `{"status": "approved", "purpose": "login", "account": {"handle": "..."}}` | Approved for a login. No credential exists. |
 | `403` | `forbidden` | The member denied it. Every poll answers `403` until the request expires. |
-| `410` | `closed` | The request expired, never existed, or was already picked up. |
+| `410` | `closed` | The request expired or never existed, or its answer was already collected. The message: "This sign-in request has expired, or its answer was already collected. If goalcup did not get it, run the command again to start a new sign-in." |
 
-An approved request answers `200` to the first poll only; every later poll is `410`.
+An approved request answers `200` to the first poll only; every later poll is `410`. A credential
+is minted once and only its hash is stored, so a `200` lost in transit cannot be sent again: goalcup
+starts a new sign-in.
 
 ### The run credential
 
@@ -149,7 +153,7 @@ Called by `goalcup start` after its local checks and before anything is created 
  "workspace": "/abs/path/run-.../workspace", "session_id": "<uuid>",
  "harness_version": "0.153.0", "proxy_version": "<goalcup version>",
  "repo_url": "https://github.com/<owner>/<repo>",
- "machine": {"os": "macOS", "cpus": 8, "ac_power": true}}
+ "machine": {"os": "macos", "cpus": 8}}
 ```
 
 `connector_sha256` is the SHA-256 of the connector file the client ran (64 lowercase hex).
@@ -159,6 +163,18 @@ reads.
 `201`: `{"run_id", "entry_id", "official_start", "deadline_at", "seconds_left"}`. The server mints
 both ids and stamps `official_start` from its own clock. `entry_id` is the run's first entry,
 segment 0.
+
+**Server notes.** The open and continue answers (`201`, and the `200` of a repeat) may carry
+`notes`, an array of at most 5 strings; the key is there only when there is a note. goalcup prints
+each as `Note from the server: <note>`, and a `notes` of the wrong shape is ignored. The notes come
+from the Worker's `server/worker/src/advisories.json`, reviewed in git and shipped with the Worker:
+at most 50 rows, each exactly `{"connector", "version", "os", "note"}`, all strings. A row matches
+when its `connector` is the open's `connector_id`, its `os` is `machine.os` (on continue: the
+request's `os`), each exact or `"*"`, and its `version` is `"*"` or numbers and dots that match the
+first dotted number in `harness_version` exactly or as a prefix (`0.22` matches `0.22.6`, not `0.220`;
+`0.22.6` does not match `0.22.60`). The first 5 matching rows, in file order, give the notes. A
+`note` is 1 to 200 characters with no control or bidi character; goalcup strips those again and
+cuts each to 200 characters.
 
 `seconds_left` is the time left, on the server's clock: whole seconds from the server's now to
 `deadline_at`, rounded up, and `0` once `deadline_at` has come (never negative). The open, the
@@ -170,11 +186,6 @@ a later start replaced learns it from `stop`.
 `deadline_at` = `official_start` + the run length: the event's run hours for a competition run,
 `PRACTICE_RUN_MINUTES` (10) for a practice run. The credential's `mode` decides which: a `practice`
 credential opens a practice run, in the practice event.
-
-`dev` is an optional boolean on the open and the continue call (missing is `false`; anything else,
-`null` included, is `400`). A `dev` run never enters the competition: `403` when the run's mode is
-`competition` ("A --dev run never enters the competition. Start without --dev."). In practice and
-test mode `dev` is open to every member (those runs count for nothing).
 
 **The version floor.** The Worker's `MIN_COMPETITION_VERSION` (the name stays, but it applies to
 every mode) refuses a device request and an open, in competition, practice and test mode alike,
@@ -204,8 +215,8 @@ a log.
 else is `400`.
 
 **The repository must be empty when the run opens.** With the GitHub check on (`GITHUB_CHECK=on`,
-which production and staging set), the open call asks GitHub twice, after the version and `dev`
-checks and before anything is created, with the same headers (the Worker's `GITHUB_TOKEN`, if set,
+which production and staging set), the open call asks GitHub twice, after the version check
+and before anything is created, with the same headers (the Worker's `GITHUB_TOKEN`, if set,
 only raises the rate limit). First `GET /repos/<owner>/<repo>`: the repository must exist and be
 public (`400` if not). Then `GET /repos/<owner>/<repo>/commits?per_page=1`: `409` is an empty
 repository and the open goes on; `200` means the repository already has a commit, and the open is
@@ -273,7 +284,8 @@ ends"). `status` is the run's: `open`, `sealed` (the run is over and its current
 The body is a byte range of one compressed part file of the entry (PRD-01 section 12): from one
 index line, or the file's start, to a later index line, never across two part files. It continues
 its part file's zstd frame, so a chunk is **not** decodable on its own; the server never decodes
-it. At most 32 MiB (`Content-Length` at most 33554432). `Content-Type: application/zstd`. Headers:
+it. At most 32 MiB (`Content-Length` at most 33554432). `Content-Length` is required: without it the
+answer is `400 malformed`, so a chunked transfer is refused. `Content-Type: application/zstd`. Headers:
 
 | Header | Value |
 |---|---|
@@ -294,7 +306,10 @@ or malformed header. It then requires `offset` = its `offset`, `Goalcup-Prev` = 
 `Goalcup-First-Seq` = its `next_seq` (`409` otherwise). Then it streams the body into storage while
 hashing it, and keeps it only if the hash is `Goalcup-Sha256` (`422` otherwise, nothing kept).
 Storage is create-only, at the R2 key `traces/<event>/<run>/<entry>/<offset, 16 digits>-<sha256>.zst`.
-There is no per-run size limit.
+Only a practice run has a size limit: once its stored compressed bytes, over all its entries, plus
+this chunk's `Content-Length` would pass the Worker's `PRACTICE_MAX_BYTES` (1 GiB), the chunk is
+`410 closed` ("This practice run has reached its upload limit."), before the body is read. A
+competition or test run has no size limit.
 
 `200`:
 
@@ -309,9 +324,10 @@ heartbeat has committed `(seq, head)` and this chunk's `Goalcup-Last-Seq` and `G
 that `seq` and `head`, the server seals the entry in the same call and answers `sealed: true`.
 
 **A retry is safe.** A chunk at an `offset` the server already holds, with the same
-`Goalcup-Length` and `Goalcup-Head`, is answered `200` from the stored row (with `sealed` from the
+`Goalcup-Length`, `Goalcup-Head`, `Goalcup-Sha256`, `Goalcup-Prev`, `Goalcup-First-Seq` and
+`Goalcup-Last-Seq`, is answered `200` from the stored row (with `sealed` from the
 entry as it stands), without reading the body, before anything about the run's state is looked at.
-The same `offset` with a different length or head is `409`.
+The same `offset` with any of these different is `409`.
 
 The server checks only these headers. Whether the bytes really are the record they claim to be is
 checked later, on the fetched copy (`scripts/fetch-run.sh`, then `goalcup-verify check --server`).
@@ -462,12 +478,15 @@ address the entry they name.
 
 ```json
 {"previous_entry_id": "e...", "connector_id": "...", "connector_sha256": "<64 hex>",
- "workspace": "...", "session_id": "...", "harness_version": "...", "proxy_version": "..."}
+ "workspace": "...", "session_id": "...", "harness_version": "...", "proxy_version": "...",
+ "os": "macos"}
 ```
 
-The fields mean what they mean in the open call. The version floor does not apply here (D70).
+The fields mean what they mean in the open call. `os` is optional and only picks the server notes
+(goalcup sends `macos` or `linux`). The version floor does not apply here (D70).
 
-`201 {"entry_id", "segment", "official_start", "deadline_at", "seconds_left"}`: the new entry, and
+`201 {"entry_id", "segment", "official_start", "deadline_at", "seconds_left"}`, plus `notes` when
+there are any (see "Server notes" under the open call): the new entry, and
 the run's own `official_start` and `deadline_at` (a segment is not a new run, and the deadline does
 not move). `seconds_left` is what is left of the run now, on the server's clock (see the open call);
 the continued segment counts down from it. The previous entry is not sealed or closed by this; it
@@ -480,10 +499,11 @@ may still upload its wrap-up.
 
 ## What the server does on its own
 
-A cron runs every 5 minutes. It does four things, in this order, and a step that fails is logged
+A cron runs every 5 minutes. It does six things, in this order, and a step that fails is logged
 and does not stop the next: it closes runs that are over (so a run's status is final without any
 call naming it), it records the GitHub commit at each deadline, it queues the run emails in an
-outbox, and it sends them. A client sees none of this. Each outbox row is sent once through Resend
+outbox, it sends them, it mails the owner when stored bytes pass an alert level, and it deletes
+device requests that expired more than a day ago. A client sees none of this. Each outbox row is sent once through Resend
 (`server/worker/src/mail.ts`); the database writes the email, picks the member's address and checks
 suppression. A staging Worker is never given an address by the database and sends every email to
 its test address. (While the maintenance switch is on the cron does nothing but delete its health
@@ -543,7 +563,7 @@ the subject.
 | `idle_6h` | the same, 6 hours | last model request |
 | `recording` | a heartbeat has flagged the run (`gaps` or `failed`) | run |
 | `ended` | the run reached its deadline (a replaced run is not the main run and has none) and the judged commit was recorded, or an hour has passed without it. Its payload says whether the run is sealed on the server (`uploaded`) and when it closes (`closes_at`, the end + 24 hours); if it is not sealed, the email says to run `goalcup upload` before then | run |
-| `disk_full` | never from a 1.0 client: no heartbeat starts a disk pause any more (the cron still holds the rule) | start of that pause |
+| `disk_full` | never: the cron no longer queues it. The kind and its text stay, so an old queued row is still sent | none |
 
 The last model request is unset until a heartbeat first reports `model_requests`, so a client that
 never reports gets no idle email; once set, it moves whenever any entry's count first appears or

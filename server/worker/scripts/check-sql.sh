@@ -1,6 +1,6 @@
 #!/bin/sh
 # Try the pending website migration on a throwaway Postgres before anyone applies it to the shared
-# database (sql/pending/README.md). It:
+# database (server/worker/README.md, "Deploying a pending migration"). It:
 #   1. starts a private PostgreSQL in a temporary directory (unix socket only, trust auth);
 #   2. stubs what Supabase and the website provide (the anon, authenticated, service_role and
 #      authenticator roles, auth.users, public.admins, public.email_suppression_list,
