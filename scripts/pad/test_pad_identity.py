@@ -111,6 +111,9 @@ class Identity(unittest.TestCase):
         self.assertIsNone(check.trusted_at(repo, c3))
         self.assertIsNone(check.trusted_at(repo, None))
         for rel in ("connectors/a-cli.toml", "crates/goalcup-format/z.rs"):  # the verifier reads both
+            base = git(repo, "rev-parse", "HEAD")
+            write_trust(repo, base, exit=0, all_ran=True, read="r")
+            self.assertEqual(check.trusted_at(repo, commit_change(repo, "README.md")), base)
             self.assertIsNone(check.trusted_at(repo, commit_change(repo, rel)))
 
     def test_row_takes_identity_from_meta(self):

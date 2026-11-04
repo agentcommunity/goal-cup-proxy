@@ -99,8 +99,11 @@ fn parse(text: &str) -> Result<(String, Usage), String> {
             "{id}: usage file {f:?} is not a file name with at most one `*`"
         ));
     }
-    let set =
-        !u.readers.is_empty() || !u.thread.is_empty() || u.thread_rpc || u.thread_db.is_some();
+    let set = !u.readers.is_empty()
+        || !u.thread.is_empty()
+        || !u.parent.is_empty()
+        || u.thread_rpc
+        || u.thread_db.is_some();
     let bad = match u.join {
         None => set.then_some("needs a `join`"),
         Some(JoinBy::Thread) if u.thread.is_empty() => {
@@ -385,11 +388,13 @@ mod tests {
             r#"readers = [{ row = "db", file = "a.db", reader = "thread-db" }]"#
         ));
         assert!(bad(
-            r#"readers = [{ row = "db", file = "a*b*", reader = "kimi-wire" }]"#
+            r#"readers = [{ row = "db", file = "a*b*", reader = "kimi-wire" }]
+join = "time""#
         ));
         assert!(bad(r#"join = "thread""#));
         assert!(bad(r#"threads = ["x"]"#));
         assert!(bad(r#"thread = ["x"]"#), "no join");
+        assert!(bad(r#"parent = ["x"]"#), "no join");
         let wire =
             r#"readers = [{ row = "w", file = "agents/*/wire.jsonl", reader = "kimi-wire" }]"#;
         assert!(bad(&format!("{wire}\njoin = \"time\"")), "a / in file");
