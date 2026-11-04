@@ -141,6 +141,11 @@ impl Egress {
         out
     }
 
+    /// The OS store's roots, DER; empty when it could not be read.
+    pub fn os(&self) -> &[Vec<u8>] {
+        &self.os
+    }
+
     /// The certificates of the participant's CA files, DER.
     pub fn own(&self) -> &[Vec<u8>] {
         &self.own

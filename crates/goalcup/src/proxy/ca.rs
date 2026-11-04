@@ -173,28 +173,23 @@ impl RunCa {
         &self.inner.cert_der
     }
 
-    /// Writes `run-ca.pem` (the run CA, then the certificates of the participant's own CA files
-    /// that the OS store lacks) and `bundle.pem` (the run CA, then the egress roots, certificates
-    /// only) into `entry_dir`, each a new 0600 file. An existing file or link at either path is
-    /// refused, never followed. Both are built before either file is written, so an OS store with
-    /// no root leaves no file behind: the bundle would trust the run CA and the participant's
-    /// files alone and break every connection that does not go through the proxy. The key is not
-    /// written here.
-    ///
-    /// `run-ca.pem` leaves out what the OS store holds: an `SSL_CERT_FILE` naming the OS bundle
-    /// would otherwise copy it whole, and `recover` sends this file on one control line.
+    /// Writes `run-ca.pem` (the run CA, then the certificates of the participant's own CA files)
+    /// and `bundle.pem` (the run CA, then the egress roots, certificates only) into `entry_dir`,
+    /// each a new 0600 file. An existing file or link at either path is refused, never followed.
+    /// Both are built before either file is written, so an OS store with no root leaves no file
+    /// behind: the bundle would trust the run CA and the participant's files alone and break every
+    /// connection that does not go through the proxy. The key is not written here.
     pub fn write_files(&self, entry_dir: &Path) -> io::Result<()> {
-        let os = crate::net::os_store();
-        if os.is_empty() {
+        let egress = crate::net::Egress::load();
+        if egress.os().is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::NotFound,
                 CaError::NoSystemRoots,
             ));
         }
-        let egress = crate::net::Egress::load();
         let bundle = bundle_pem(&egress.bundle(), &self.inner.cert_der);
         let mut run_ca = self.inner.cert_pem.clone();
-        for der in egress.own().iter().filter(|d| !os.contains(d)) {
+        for der in egress.own() {
             run_ca.push_str(&pem_block(der));
         }
         write_new(&entry_dir.join(RUN_CA_FILE), run_ca.as_bytes())?;

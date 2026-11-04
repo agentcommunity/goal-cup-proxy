@@ -264,7 +264,16 @@ fn the_ca_files_carry_the_participants_ca() {
     let theirs = dir.path().join("corp.pem");
     std::fs::write(&theirs, other.export().cert).unwrap();
     // SAFETY: nextest runs each test in its own process; no other thread reads the environment.
-    unsafe { std::env::set_var("SSL_CERT_FILE", &theirs) };
+    unsafe {
+        for k in [
+            "NODE_EXTRA_CA_CERTS",
+            "REQUESTS_CA_BUNDLE",
+            goalcup::net::INSIDE_RUN,
+        ] {
+            std::env::remove_var(k);
+        }
+        std::env::set_var("SSL_CERT_FILE", &theirs);
+    }
     let ca = RunCa::mint(&subtrees()).unwrap();
     let out = tempfile::tempdir().unwrap();
     ca.write_files(out.path()).unwrap();
@@ -274,6 +283,7 @@ fn the_ca_files_carry_the_participants_ca() {
     assert_eq!(bundle[0], ca.cert_der().to_vec());
     let theirs = other.cert_der().to_vec();
     assert_eq!(bundle.iter().filter(|d| **d == theirs).count(), 1);
+    // The OS roots are there too, not the two certificates alone.
     assert!(bundle.len() >= 22);
 }
 
