@@ -205,9 +205,9 @@ disclosure and no-side-channel rules.
 
 - One measured root agent owns the run. It may create trace-linked subagents inside the same
   harness. It may not run another harness; one run uses one harness.
-- Do not update the harness during the run. Goal Cup Proxy records the harness build that runs and
-  refuses no build. Some apps update themselves whatever you do; Goal Cup Proxy samples the version,
-  records a change as an event, and an organizer looks at it. That is a flag, not a disqualification.
+- Do not update the harness during the run. Goal Cup Proxy reads the harness version at start, at
+  continue and at seal, records each, and refuses no version. If the version changed during the run,
+  the record shows it and an organizer looks at it. That is a flag, not a disqualification.
 - **Do not use flags or modes that switch capture off.** Each of these was tested and silently
   produces a session with no evidence: Hermes `--safe-mode`, `HERMES_SAFE_MODE=1` and
   `--ignore-user-config`; OpenCode `--pure`, `OPENCODE_PURE=1`, `OPENCODE_DISABLE_PROJECT_CONFIG=1`,
@@ -342,10 +342,9 @@ disclosure and no-side-channel rules.
   Claude or login credentials are not stored as headers: the recording proxy masks their header values
   before anything is written, and keeps neither their values nor any fingerprint of them. Goal Cup
   Proxy does not watch other terminals, your browser, other processes or audio. It also records the
-  harness build and non-identifying facts about the machine (operating system and version,
-  architecture, CPU count, memory, disk size and free space, WSL2, container, mains power): no host
-  name, user name or serial number. The server keeps the IP address and country of each connection,
-  on the server only, never in the trace and never public.
+  harness build and two non-identifying facts about the machine (operating system and CPU count):
+  no host name, user name or serial number. The server keeps the IP address and country of each
+  connection, on the server only, never in the trace and never public.
 - **Raw traces and terminal output stay private.** They are used only for compliance review and the
   announced research project. They hold more about you than you might expect (Codex stamps your plan
   type, credit balance and quota percentage into every token-count event), which is another reason

@@ -4,7 +4,7 @@ A harness is one data file, `connectors/<id>.toml`, and every harness goes throu
 connector is its TOML file plus one `entry!("<id>")` line in `crates/goalcup/src/connector/builtin.rs`, the
 one source file that names connector files; `tests/connector_builtin.rs` fails on a file missing from that
 list or an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
-connector. Nothing is pinned. The `start` event names the connector (`connector`, `connector_source`,
+connector. The `start` event names the connector (`connector`, `connector_source`,
 `connector_sha256`) and the host list's hash (`hosts_sha256`).
 
 ## The connector contract
@@ -49,6 +49,19 @@ it. Settings rows write `.json`, `.toml`, `.yaml` and `.yml` files only (`.jsonc
 are not writable), never through a link, keeping the other keys; there, as in `skills_dir`, a `*` is
 a literal name. `"true"` and `"false"` become the format's boolean, any other value a string. A row
 not written is a log line, not a refusal.
+
+## Harness versions
+
+Goal Cup Proxy never refuses a harness for its version. It reads the version, records it and says
+one plain line.
+
+- Read: the first version-looking token of `<program> --version` (lane F's parser).
+- Recorded: in the `start`, `continue` and `seal` events (see [RECORD-FORMAT](RECORD-FORMAT.md)).
+- No version refuses a start. Today the `version` key of `opencode-cli` and `opencode2-cli` still
+  does, on a version that does not match its prefix; lane F removes that.
+- A known problem becomes a `[[versions]]` note (planned, lane I), said at start and recorded.
+- "Verified" is not a connector field. [`connectors/tiers.toml`](../connectors/tiers.toml) is
+  written from pad rows; (version, os) pairs are planned (lane G).
 
 ## Load checks
 
