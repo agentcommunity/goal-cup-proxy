@@ -42,10 +42,10 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
   // 1. ...and the run and entry: this member's, and the entry one of the run's segments.
   const { run, entry } = await requireRun(ctx, member, runId, h.entryId);
 
-  // 2. A chunk the server already holds, sent again (a reply was lost): same offset, same length,
-  //    same head -> the same answer as the first time, without touching the body, and `sealed` as the entry stands.
+  // 2. A chunk the server already holds, sent again (a reply was lost): same offset and the same
+  //    headers -> the same answer as the first time, without touching the body, and `sealed` as the entry stands.
   const held = offset < entry.offset ? await ctx.db.getChunk(member, runId, entry.entry_id, offset) : null;
-  if (held !== null && held.length === h.length && held.head === h.head) return storedAnswer(held, entry.sealed_at !== null);
+  if (held !== null && sameChunk(held, h)) return storedAnswer(held, entry.sealed_at !== null);
 
   // 3. The run state: open (not closed) and the entry not sealed.
   requireOpen(ctx, run, entry);
@@ -97,7 +97,7 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
       // Someone moved the run between our check and our commit. If that someone was a retry of
       // this very chunk, answer as for that retry; otherwise goalcup must re-read the position.
       const stored = await ctx.db.getChunk(member, runId, entry.entry_id, offset);
-      if (stored !== null && stored.length === h.length && stored.head === h.head) return storedAnswer(stored, await sealIfComplete(ctx, member, runId, entry, h));
+      if (stored !== null && sameChunk(stored, h)) return storedAnswer(stored, await sealIfComplete(ctx, member, runId, entry, h));
       throw conflict("The run moved while this chunk was being stored; read the position again.");
     }
     case "beyond_final":
@@ -107,6 +107,11 @@ export async function putChunk(ctx: Ctx, member: string, runId: string, offsetTe
     case "not_found":
       throw notFound("That entry does not belong to this run.");
   }
+}
+
+/** The stored chunk is the one these headers describe: a retry of it, not another chunk at its offset. */
+function sameChunk(c: ChunkRecord, h: ChunkHeaders): boolean {
+  return c.length === h.length && c.head === h.head && c.sha256 === h.sha256 && c.prev === h.prev && c.first_seq === h.firstSeq && c.last_seq === h.lastSeq;
 }
 
 const LOG_EVERY_BYTES = 10 * 1024 ** 3; // 10 GiB
