@@ -5,6 +5,7 @@
 //!
 //! Nothing here logs. Errors are fixed text: never a header value, a body byte or a target.
 
+use crate::net;
 use crate::pipeline::{Mono, Recorder};
 use crate::proxy::ca::dns_name;
 use bytes::{Bytes, BytesMut};
@@ -231,37 +232,33 @@ impl RefusalNotes {
     }
 }
 
-/// Connects the upstream leg. Each round re-resolves `name` (or takes `test_override`) and tries
-/// every address, IPv4 first, each but the last for at most [`CONNECT_ATTEMPT`]; the last waits
-/// for the kernel, so no deadline of our own fails a connect the harness would make without us.
-/// A `listed` target is retried until [`LISTED_RETRY_FOR`] after the first attempt, timed by
-/// `rec.now()` (rule 9), pausing 250 ms doubling to 2 s; any other gets one round, since retrying
-/// the agent's own traffic changes the run (PRD-17 C6). Nothing has been sent upstream, so a
-/// retry replays nothing. The socket gets `TCP_NODELAY` and keepalive; no idle timeout and no
-/// `TCP_USER_TIMEOUT`.
+/// How long the participant's proxy may take to answer our CONNECT.
+pub const PROXY_ANSWER_DEADLINE: Duration = HEAD_DEADLINE;
+
+/// Connects the upstream leg. Each round takes `test_override` directly, else, with `via` (the
+/// participant's proxy), connects to the proxy and asks it for a tunnel to `name:port`, else
+/// re-resolves `name`; it tries every address, IPv4 first, each but the last for at most
+/// [`CONNECT_ATTEMPT`]; the last waits for the kernel, so no deadline of our own fails a connect
+/// the harness would make without us. A `listed` target is retried until [`LISTED_RETRY_FOR`]
+/// after the first attempt, timed by `rec.now()` (rule 9), pausing 250 ms doubling to 2 s; any
+/// other gets one round, since retrying the agent's own traffic changes the run (PRD-17 C6).
+/// Nothing has been sent to the target, so a retry replays nothing. The socket gets
+/// `TCP_NODELAY` and keepalive; no idle timeout and no `TCP_USER_TIMEOUT`.
 pub async fn connect_upstream(
     rec: &Recorder,
     name: &str,
     port: u16,
     listed: bool,
     test_override: Option<SocketAddr>,
+    via: Option<&net::Upstream>,
 ) -> io::Result<TcpStream> {
     let until = rec.now().ns() + LISTED_RETRY_FOR.as_nanos() as u64;
     let mut pause = RETRY_PAUSE_FIRST;
     loop {
-        let round = match test_override {
-            Some(addr) => connect_addresses(vec![addr]).await,
-            None => match tokio::net::lookup_host((name, port)).await {
-                Ok(found) => {
-                    let mut addrs: Vec<SocketAddr> = found.collect();
-                    addrs.sort_by_key(SocketAddr::is_ipv6);
-                    connect_addresses(addrs).await
-                }
-                Err(_) => Err(io::Error::new(
-                    io::ErrorKind::NotFound,
-                    "upstream name did not resolve",
-                )),
-            },
+        let round = match (test_override, via) {
+            (Some(addr), _) => connect_addresses(vec![addr]).await,
+            (None, Some(via)) => through_proxy(via, name, port).await,
+            (None, None) => connect_name(name, port).await,
         };
         let err = match round {
             Ok(stream) => return Ok(stream),
@@ -272,6 +269,53 @@ pub async fn connect_upstream(
         }
         tokio::time::sleep(pause).await;
         pause = (pause * 2).min(RETRY_PAUSE_MAX);
+    }
+}
+
+async fn connect_name(name: &str, port: u16) -> io::Result<TcpStream> {
+    match tokio::net::lookup_host((name, port)).await {
+        Ok(found) => {
+            let mut addrs: Vec<SocketAddr> = found.collect();
+            addrs.sort_by_key(SocketAddr::is_ipv6);
+            connect_addresses(addrs).await
+        }
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "upstream name did not resolve",
+        )),
+    }
+}
+
+/// A tunnel to `name:port` through the participant's proxy. The answer is read one byte at a
+/// time, so no byte of the tunnel is taken; only an `HTTP/1.x 2xx` opens it. The head (it may
+/// hold `Proxy-Authorization`) and the answer never reach an error or the record.
+async fn through_proxy(via: &net::Upstream, name: &str, port: u16) -> io::Result<TcpStream> {
+    let mut s = connect_name(&via.host, via.port).await?;
+    let ask = async {
+        s.write_all(via.connect_head(name, port).as_bytes()).await?;
+        let mut got = Vec::with_capacity(256);
+        let mut b = [0u8; 1];
+        while !got.ends_with(b"\r\n\r\n") {
+            if got.len() >= HEAD_GUARD || s.read(&mut b).await? == 0 {
+                return Err(io::Error::other("the proxy gave no answer"));
+            }
+            got.push(b[0]);
+        }
+        let ok = got.len() > 12
+            && got.starts_with(b"HTTP/1.")
+            && got[7].is_ascii_digit()
+            && got[8] == b' '
+            && got[9] == b'2';
+        ok.then_some(())
+            .ok_or_else(|| io::Error::other("the proxy refused the tunnel"))
+    };
+    match tokio::time::timeout(PROXY_ANSWER_DEADLINE, ask).await {
+        Ok(Ok(())) => Ok(s),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "the proxy did not answer in time",
+        )),
     }
 }
 

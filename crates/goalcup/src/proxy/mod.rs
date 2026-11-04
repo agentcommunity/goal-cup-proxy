@@ -24,6 +24,7 @@ pub mod tunnel;
 pub mod ws;
 
 use crate::connector::{Decision, HostList, Kind, Source};
+use crate::net;
 use crate::pipeline::{EndReason, Mono, OpenFlags, Recorder, StreamHandle, StreamKind, fds};
 use bytes::Bytes;
 use ca::RunCa;
@@ -98,6 +99,18 @@ struct Boot {
     quiet: Arc<AtomicU64>,
     /// `GOALCUP_TEST_UPSTREAM`; always empty without `test-hooks`.
     upstream: HashMap<String, SocketAddr>,
+    /// The participant's proxy for the upstream leg, if any.
+    egress: &'static net::Egress,
+}
+
+impl Boot {
+    /// The participant's proxy for `host`; never for a test upstream.
+    fn via(&self, host: &str, target: Option<SocketAddr>) -> Option<&'static net::Upstream> {
+        target
+            .is_none()
+            .then(|| self.egress.proxy_for(host))
+            .flatten()
+    }
 }
 
 /// Accepts on the inherited `listener` (it binds nothing) on a runtime of its own with
@@ -118,6 +131,7 @@ pub fn serve(listener: std::net::TcpListener, ctx: ProxyCtx) -> ProxyHandle {
         notes: RefusalNotes::default(),
         quiet: quiet.clone(),
         upstream,
+        egress: net::Egress::load(),
         rec: ctx.recorder,
     });
     let _ = listener.set_nonblocking(true);
@@ -243,7 +257,9 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
         expected: b.hosts.is_expected(host),
     };
     let is_listed = connect_listed.is_some();
-    let Ok(mut up) = connect::connect_upstream(rec, host, port, is_listed, target).await else {
+    let via = b.via(host, target);
+    let Ok(mut up) = connect::connect_upstream(rec, host, port, is_listed, target, via).await
+    else {
         b.notes.note(rec, Some(host), 502);
         let _ = connect::answer(&mut client, 502).await;
         return;
@@ -461,7 +477,8 @@ async fn fresh_tunnel(
     client: TcpStream,
     (target, retry): (Option<SocketAddr>, bool),
 ) {
-    match connect::connect_upstream(&b.rec, &c.host, c.port, retry, target).await {
+    let via = b.via(&c.host, target);
+    match connect::connect_upstream(&b.rec, &c.host, c.port, retry, target, via).await {
         Ok(up) => run_tunnel(b, hold, c, client, up).await,
         Err(_) => {
             connect::reset(client);
