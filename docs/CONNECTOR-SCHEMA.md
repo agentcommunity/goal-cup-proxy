@@ -52,14 +52,17 @@ not written is a log line, not a refusal.
 
 ## Harness versions
 
-Goal Cup Proxy never refuses a harness for its version. It reads the version, records it and says
-one plain line.
+Goal Cup Proxy reads the harness version, records it and says one plain line. The policy is that no
+version refuses a start; one exception remains today and is being removed (lane F).
 
-- Read: the first version-looking token of `<program> --version` (lane F's parser).
-- Recorded: in the `start`, `continue` and `seal` events (see [RECORD-FORMAT](RECORD-FORMAT.md)).
-- No version refuses a start. Today the `version` key of `opencode-cli` and `opencode2-cli` still
-  does, on a version that does not match its prefix; lane F removes that.
-- A known problem becomes a `[[versions]]` note (planned, lane I), said at start and recorded.
+- Read: today the first non-empty line of `<program> --version`; planned (lane F): its first
+  version-looking token.
+- Recorded: `harness_version` in the `start` event of every boot, a continue included (see
+  [RECORD-FORMAT](RECORD-FORMAT.md)). Planned (lane I): a version read at seal too.
+- Refused: today only the `version` key of `opencode-cli` and `opencode2-cli`, on a version that
+  does not match its prefix. Lane F removes that refusal.
+- A known problem: today a `[[version_notes]]` row (`versions`, `say`), said at start and recorded;
+  planned (lane I): a `[[versions]]` note.
 - "Verified" is not a connector field. [`connectors/tiers.toml`](../connectors/tiers.toml) is
   written from pad rows; (version, os) pairs are planned (lane G).
 

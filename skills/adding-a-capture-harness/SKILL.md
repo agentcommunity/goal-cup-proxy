@@ -28,7 +28,8 @@ Rules that never bend:
    [docs/CONNECTOR-SCHEMA.md](../../docs/CONNECTOR-SCHEMA.md). Copy a neighbour such as
    `connectors/hermes-cli.toml`. A maintainer adds the one line in
    `crates/goalcup/src/connector/builtin.rs` when the PR merges. A version with a known problem
-   gets a note, said at start and recorded; no version is ever refused.
+   gets a `[[version_notes]]` row (`versions`, `say`): said at start, recorded, never a refusal
+   ([Harness versions](../../docs/CONNECTOR-SCHEMA.md#harness-versions)).
 2. **Write `scripts/pad/harnesses/<id>.toml`**, from
    [templates/pad-harness.toml](templates/pad-harness.toml): the pinned version and how to
    install exactly that version, how the key reaches the harness (`login`, `file` or `env`, as

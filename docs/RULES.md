@@ -205,9 +205,10 @@ disclosure and no-side-channel rules.
 
 - One measured root agent owns the run. It may create trace-linked subagents inside the same
   harness. It may not run another harness; one run uses one harness.
-- Do not update the harness during the run. Goal Cup Proxy reads the harness version at start, at
-  continue and at seal, records each, and refuses no version. If the version changed during the run,
-  the record shows it and an organizer looks at it. That is a flag, not a disqualification.
+- Do not update the harness during the run. Goal Cup Proxy reads the harness version each time a
+  run starts or continues and records it. Some apps update themselves whatever you do: if the version
+  changed during the run, the record shows it and an organizer looks at it. That is a flag, not a
+  disqualification. Which versions are accepted: [Harness versions](CONNECTOR-SCHEMA.md#harness-versions).
 - **Do not use flags or modes that switch capture off.** Each of these was tested and silently
   produces a session with no evidence: Hermes `--safe-mode`, `HERMES_SAFE_MODE=1` and
   `--ignore-user-config`; OpenCode `--pure`, `OPENCODE_PURE=1`, `OPENCODE_DISABLE_PROJECT_CONFIG=1`,
