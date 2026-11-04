@@ -715,6 +715,12 @@ pub fn fd_limit(limit: Option<u64>) -> String {
     format!("Many connections are open at once{limit}. New ones wait a moment; none is refused.")
 }
 
+pub fn harness_changed(name: &str) -> String {
+    format!(
+        "{name} changed on disk during the run (an update?). goalcup keeps recording; the record shows when."
+    )
+}
+
 pub fn fail_closed(bytes: u64) -> String {
     format!(
         "goalcup hid {} it could not check for secrets in time. Those bytes are stars in the record.",

@@ -26,6 +26,7 @@ mod dead;
 pub mod fds;
 mod guard;
 mod handle;
+pub(crate) mod harness_watch;
 mod item;
 mod mask_worker;
 mod out;
@@ -875,6 +876,8 @@ pub fn run_recorder(null: bool) -> ExitCode {
         uploader: None,
         status: None,
         harness: facts.harness.clone(),
+        watch: None,
+        version: facts.harness_version.clone(),
         exit: None,
         exit_at: None,
         null,
@@ -943,6 +946,10 @@ struct Run {
     /// The status thread, which the seal stops before its own writes.
     status: Option<std::thread::JoinHandle<()>>,
     harness: Option<HarnessFacts>,
+    /// The harness program on disk, from the `launch` line on.
+    watch: Option<harness_watch::HarnessWatch>,
+    /// The start's `harness_version`, the `before` of a `version_read` note.
+    version: Option<String>,
     exit: Option<Exit>,
     exit_at: Option<Mono>,
     null: bool,
@@ -985,6 +992,8 @@ impl Run {
             match rx.recv_timeout(tick) {
                 Ok(Some(ToRecorder::Launch(h))) => {
                     self.board.set(|s| s.harness = Some(harness_status(&h)));
+                    let now = self.rec.now();
+                    self.watch = Some(harness_watch::HarnessWatch::new(h.program.as_ref(), now));
                     self.harness = Some(h);
                 }
                 Ok(Some(ToRecorder::Exit { exit })) => {
@@ -995,8 +1004,13 @@ impl Run {
                     });
                     (self.exit, self.exit_at) = (exit, Some(self.rec.now()));
                 }
-                Ok(Some(ToRecorder::Seal { reason, outlived })) => {
-                    return self.seal(reason, outlived, dir, workspace);
+                Ok(Some(ToRecorder::Seal {
+                    reason,
+                    outlived,
+                    version_read,
+                })) => {
+                    let read = version_read.map(|line| (line, self.version.clone()));
+                    return self.seal(reason, outlived, read, dir, workspace);
                 }
                 // A null recorder exits without sealing, at a quiet moment; the watchdog starts
                 // a normal one.
@@ -1009,7 +1023,10 @@ impl Run {
                 _ => {}
             }
             if TERM.load(Ordering::SeqCst) {
-                return self.seal(SealReason::Signal, None, dir, workspace);
+                return self.seal(SealReason::Signal, None, None, dir, workspace);
+            }
+            if let Some(note) = self.watch.as_mut().and_then(|w| w.check(self.rec.now())) {
+                self.rec.event(note);
             }
             let changed = word.as_mut().filter(|w| w.has_changed().unwrap_or(false));
             let fresh = changed.and_then(|w| w.borrow_and_update().clone());
@@ -1035,7 +1052,7 @@ impl Run {
                 None if gone => SealReason::HarnessExit,
                 None => continue,
             };
-            return self.seal(reason, None, dir, workspace);
+            return self.seal(reason, None, None, dir, workspace);
         }
     }
 
@@ -1060,6 +1077,7 @@ impl Run {
         mut self,
         reason: SealReason,
         outlived: Option<Outlived>,
+        version_read: Option<(String, Option<String>)>,
         dir: &Path,
         workspace: &Path,
     ) -> ExitCode {
@@ -1116,6 +1134,7 @@ impl Run {
             exit: self.exit,
             exit_at: self.exit_at,
             outlived,
+            version_read,
         };
         sealer.run(ask, move || self.send(&ToWatchdog::Sealed));
         ExitCode::SUCCESS

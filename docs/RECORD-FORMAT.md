@@ -209,7 +209,9 @@ Some `start` keys:
 Some `note` kinds (`what`):
 
 - `version_read`: `line`, `version`, `before`: the harness build changed since the last part
-  (written at `continue`).
+  (written at `continue`) or while the harness ran (read after it exits, written at the seal).
+- `harness_changed`: `program`, `before`, `after` (`size`, `mtime_ns`, `ino`, or null when gone):
+  the harness program on disk changed, looked at every 300 s, links followed; nothing else is done.
 
 ## Compression, chunks and crash recovery
 

@@ -189,6 +189,7 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
             },
             Some("local_model") => text::local_model(host.unwrap_or("a local address")),
             Some("fd_limit") => text::fd_limit(n.get("limit").and_then(Value::as_u64)),
+            Some("harness_changed") => text::harness_changed(cx.name),
             Some(what) if !goalcup_format::NOTES.contains(&what) => text::unknown_note(what),
             _ => continue,
         };
