@@ -18,8 +18,8 @@
 -- 20261021120000 to 20261021120200 (2026-10-23), and 20261027100000 (2026-10-27, owner approved,
 -- pnpm db:check passed). NOT applied as of 2026-10-27:
 -- 20261021120400_goal_cup_terms_2026_10_23.sql (website GOAL-CUP-SIGNUP-RUNBOOK, step 4).
--- No migration is pending here (sql/pending/ is empty). Regenerated from website main 6e607d64:
--- unchanged below REGEN-END.
+-- Regenerated from website main 6e607d64, then the pending migration appended as the last section:
+-- 20261105100000_goal_cup_purge_device_requests.sql (sql/pending/; not in the website repo yet).
 -- REGEN-END
 
 -- ======================== 20261015120000_goal_cup_tracer_upload.sql ========================

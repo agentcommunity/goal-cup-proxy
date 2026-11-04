@@ -566,7 +566,7 @@ run as before. Expired device requests stay in the table until it lands.
 order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
 (`src/mail.ts`), `alertStorage` (the storage alert; its marker is `cron/storage-alert.json` in the
 traces bucket) and `purgeDevices` (deletes device requests that expired more than a day ago; needs
-the [pending migration](#deploying-a-pending-migration)). All take the time as a parameter. All but `purgeDevices` read `Db.runsForTick(now)` (open
+the [pending migration](#deploying-a-pending-migration)). All take the time as a parameter. All but `sendNotices` and `purgeDevices` read `Db.runsForTick(now)` (open
 runs, and runs that ended in the last 48 hours). Every notice is decided here, never in a request handler, and a
 staging Worker sends every email to its test inbox. The constants (20 minutes of silence, idle at 3
 and 6 hours, an hour to wait for the commit, 5 minutes before GitHub is asked, an hour of grace for a
