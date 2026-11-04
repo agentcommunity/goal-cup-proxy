@@ -194,3 +194,23 @@ fn a_link_wall_a_day_off_the_mono_clock_is_fine() {
     let (_, v) = check(&dir, &[]);
     assert_eq!(result(&v, "wall_sane"), "pass");
 }
+
+/// A recovery LINK after a reboot is stamped with the new boot's mono clock, which restarted:
+/// it is below the dead boot's PART mono and is not compared with it. Here boot 0 ran on a
+/// machine up 500 days; its PART and LINKs carry that mono, the recovery LINK does not.
+#[test]
+fn a_recovery_link_after_a_reboot_is_not_judged_on_the_dead_boots_clock() {
+    let dir = link_wall_after_down("tl-reboot", |w| w);
+    const UP: u64 = 500 * 86_400 * 1_000_000_000;
+    mutate(&dir, None, |recs| {
+        let down = find(recs, is_down);
+        for r in &mut recs[..down] {
+            match r {
+                Record::Part { mono_ns, .. } | Record::Link { mono_ns, .. } => *mono_ns += UP,
+                _ => {}
+            }
+        }
+    });
+    let (_, v) = check(&dir, &[]);
+    assert_eq!(result(&v, "wall_sane"), "pass");
+}

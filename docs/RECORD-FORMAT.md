@@ -252,7 +252,8 @@ frame never ends inside a record, sealed or not (`torn_tail`; a live or crashed 
 an open frame, which is no finding). Every OPEN meta, GAP tail, END tail and EVENT body is empty
 or parses as JSON, `null` included (`record_json`). A LINK's wall time is within 400 days of its
 PART's wall time plus the record-clock time between them (`wall_sane`, `named`, not `fail`: a
-clock step after boot is legal).
+clock step after boot is legal). A LINK whose record-clock time is below its PART's (a recovery
+LINK stamped by a new boot after a reboot) is not compared.
 
 ## The worked example
 

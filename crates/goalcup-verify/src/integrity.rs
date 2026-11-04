@@ -658,7 +658,9 @@ impl Pass {
                 self.last_link = Some((*wall_ns, *mono_ns));
                 let skew = (i128::from(*wall_ns) - i128::from(self.part_wall))
                     - (i128::from(*mono_ns) - i128::from(self.part_mono));
-                if skew.abs() > 400 * 86_400 * 1_000_000_000 {
+                // A recovery LINK carries the new boot's clock; after a reboot its mono is below
+                // the dead boot's PART mono and the two cannot be compared.
+                if *mono_ns >= self.part_mono && skew.abs() > 400 * 86_400 * 1_000_000_000 {
                     let why = "a LINK wall time is more than 400 days from its PART's wall plus mono delta";
                     self.set("wall_sane", Res::Named, why, Some(at));
                 }
