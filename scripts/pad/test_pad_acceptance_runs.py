@@ -3,6 +3,7 @@ No network. The prompt paths in the run files are relative to the repository roo
 import importlib.machinery
 import importlib.util
 import os
+import tempfile
 import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +68,18 @@ class AcceptanceRuns(unittest.TestCase):
             s = plan("core-%s.toml" % h)
             self.assertEqual((s["case"], s["mode"], s["minutes"], s["box_extra_minutes"]), ("all", "full", 20, 10))
             self.assertEqual([x for x in pad.step_list(s, harness(s)) if x.split("@")[0] in pad.FAULTS], [])
+
+    def test_matrix_hermes_loads(self):
+        s = plan("matrix-hermes.toml")
+        self.assertEqual((s["versions"], s["mode"]), (["0.22.5", "0.22.6"], "micro"))
+        self.assertEqual(len(pad.case_list(s, harness(s))[0]), 6)
+
+    def test_here_hermes_example_loads(self):  # its here_path exists only on the owner's Mac: stand in a temp dir
+        raw = pad.read_toml(os.path.join(HERE, "runs", "here-hermes-0.22.6.toml"))
+        with tempfile.TemporaryDirectory() as d:
+            s = pad.load_settings(dict(raw, here_path=[d]), PADCFG)
+        self.assertEqual([v for _, v in pad.case_list(s, harness(s))[0]], ["0.22.6"])
+        self.assertTrue(all(p.startswith("/Users/team/dev/harness-installs/") for p in raw["here_path"]))
 
     def test_codex_kill_fallback_uses_harness_minutes(self):
         self.assertEqual(kills(plan("kill-codex.toml")), [3, 5])

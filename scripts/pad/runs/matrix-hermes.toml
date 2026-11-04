@@ -1,0 +1,7 @@
+# matrix-hermes.toml: Hermes direct, gateway and dodger on each listed version, one run per (case, version) (G.23).
+# micro: a quick proof that each version runs and records; mode = "full" makes tier rows ([[hermes-cli.builds]]).
+harness = "hermes-cli"
+key = "deepseek"
+case = "all"
+mode = "micro"
+versions = ["0.22.5", "0.22.6"]
