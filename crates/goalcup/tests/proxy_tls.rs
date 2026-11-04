@@ -139,6 +139,11 @@ fn an_alert_teaches_one_pair_and_writes_one_note() {
         "a second handshake in flight"
     );
     assert!(hosts.refused(t, "api.openai.com", &fp));
+    let expiry = Mono(t.ns() + REFUSAL_EXPIRY.as_nanos() as u64);
+    assert!(
+        !hosts.refused(expiry, "api.openai.com", &fp),
+        "parallel refusals are one refusal"
+    );
     assert!(!hosts.refused(t, "api.openai.com", &other));
     assert!(!hosts.refused(t, "chatgpt.com", &fp));
     let notes = ca_refused(&calls);

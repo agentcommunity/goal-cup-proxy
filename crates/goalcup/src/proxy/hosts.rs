@@ -88,10 +88,11 @@ impl Hosts {
             if tables.trusted.contains(&key) {
                 return false;
             }
-            let (at, strikes) = tables.refused.entry(key).or_insert((Some(now), 0));
-            if *strikes > 0 && holds(*at, now) {
+            if matches!(tables.refused.get(&key), Some((at, _)) if holds(*at, now)) {
                 return true;
             }
+            tables.silent.remove(&key);
+            let (at, strikes) = tables.refused.entry(key).or_default();
             *strikes += 1;
             *at = (*strikes == 1).then_some(now);
         }
@@ -115,7 +116,7 @@ impl Hosts {
             if *count < SILENT_STRIKES {
                 return false;
             }
-            tables.silent.remove(&pair(host, fp));
+            *count = 0;
         }
         self.learn(rec, now, host, fp)
     }
