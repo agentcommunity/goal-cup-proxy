@@ -72,7 +72,10 @@ delete() {
     echo "Dry run: nothing changed. Run again with --yes to delete."
     return
   fi
+  # Keep the lines of an earlier delete-test-runs.failed that this run does not retry.
   : >"$tmp/failed"
+  [ ! -f delete-test-runs.failed ] ||
+    awk 'FILENAME == ARGV[1] { p[$0]; next } !($0 in p)' "$tmp/plan" delete-test-runs.failed >"$tmp/failed"
   while read -r bucket key; do
     enc=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$key")
     curl -fsS -X DELETE "$base/$bucket/objects/$enc" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" >/dev/null ||
@@ -90,8 +93,11 @@ if [ -n "$objects" ]; then
   while read -r bucket key; do
     ok=no
     for pair in $pairs; do
-      case $bucket:$key in "$pair"?*) ok=yes ;; esac
+      if [ "$bucket" = "${pair%%:*}" ]; then
+        case $key in "${pair#*:}"?*) ok=yes ;; esac
+      fi
     done
+    case /$key/ in */../* | */./*) ok=no ;; esac
     [ "$ok" = yes ] || { echo "delete-test-runs: '$bucket $key' in $objects is outside the test prefixes; nothing changed" >&2; exit 1; }
   done <"$objects"
   cp "$objects" "$tmp/plan"

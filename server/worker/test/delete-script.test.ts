@@ -64,9 +64,28 @@ test("a failed delete writes only the failed objects and says how to retry them"
 
 test("--objects refuses a key outside the fixed prefixes and deletes nothing", () => {
   setup();
-  writeFileSync(join(tmp, "plan"), "goalcup-traces other/key\n");
-  const r = run("--objects", "plan", "--yes");
-  assert.equal(r.status, 1, r.stderr);
+  for (const line of [
+    "goalcup-traces other/key",
+    "goalcup-traces traces/test/../x",
+    "goalcup-traces:traces/test/a/../../../other x",
+    "goalcup-traces:traces/test/x",
+    "goalcup-usage traces/test/x",
+  ]) {
+    writeFileSync(join(tmp, "plan"), `${line}\n`);
+    const r = run("--objects", "plan", "--yes");
+    assert.equal(r.status, 1, line);
+  }
   const log = existsSync(join(tmp, "curl.log")) ? readFileSync(join(tmp, "curl.log"), "utf8") : "";
   assert.doesNotMatch(log, /-X DELETE/);
+});
+
+test("a later run keeps the earlier failed objects it did not retry", () => {
+  setup();
+  writeFileSync(join(tmp, "delete-test-runs.failed"), "goalcup-usage usage/test/old\n");
+  const r = run("--yes");
+  assert.equal(r.status, 1, r.stderr);
+  assert.equal(
+    readFileSync(join(tmp, "delete-test-runs.failed"), "utf8"),
+    `goalcup-usage usage/test/old\ngoalcup-traces ${key}\n`,
+  );
 });
