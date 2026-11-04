@@ -224,3 +224,14 @@ fn unclear_token_or_ignore_or_listing_is_refused() {
     let got = folder::check(&s.project.join(".env.local"), &s.gc, false, None);
     assert!(got.is_err(), "{got:?}");
 }
+
+#[test]
+fn a_missing_prompt_file_says_where_a_relative_path_is_taken() {
+    let said = text::prompt_missing(Path::new("prompt.txt"));
+    assert!(said.contains("project folder"), "{said}");
+}
+
+#[test]
+fn a_repository_with_commits_names_the_way_to_go_on_with_a_started_run() {
+    assert!(text::repo_not_empty("a/b").contains("goalcup continue"));
+}

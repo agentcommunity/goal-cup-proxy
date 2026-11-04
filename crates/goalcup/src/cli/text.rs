@@ -114,7 +114,16 @@ pub fn prompt_inside(file: &Path) -> String {
 }
 
 pub fn prompt_missing(file: &Path) -> String {
-    format!("The prompt file \"{}\" does not exist.", file.display())
+    format!(
+        "The prompt file \"{}\" does not exist. A relative path is taken inside the project folder; \
+         give a path outside it, such as ~/goal-prompt.txt.",
+        file.display()
+    )
+}
+
+/// A server message without its closing full stop and spaces, so the sentence around it adds one.
+fn sentence(said: &str) -> String {
+    said.trim_end_matches(['.', ' ']).to_string()
 }
 
 pub fn synced_folder(project: &Path) -> String {
@@ -274,19 +283,25 @@ pub fn approval_stopped(why: &str) -> String {
 }
 
 pub fn approval_refused(said: &str) -> String {
-    format!("The server refused the approval request: {said}. {NOTHING_CREATED}")
+    format!(
+        "The server refused the approval request: {}. {NOTHING_CREATED}",
+        sentence(said)
+    )
 }
 
 /// Ctrl-C landed after the server opened the run and it was saved: nothing was launched.
 pub fn opened_then_stopped(run: &str) -> String {
     format!(
-        "You pressed Ctrl-C after the run {run} was opened and saved. The harness was not started. \
-         Running goalcup start again opens a new run; the run {run} stays open and its deadline keeps running."
+        "You pressed Ctrl-C after run {run} was opened and saved. The harness was not started. \
+         Its deadline keeps running. To go on, run: goalcup continue {run}"
     )
 }
 
 pub fn open_refused(said: &str) -> String {
-    format!("The server did not open the run: {said}. {NOTHING_CREATED} Run the command again.")
+    format!(
+        "The server did not open the run: {}. {NOTHING_CREATED} Run the command again.",
+        sentence(said)
+    )
 }
 
 pub fn bad_answer() -> String {
@@ -307,7 +322,8 @@ pub fn repo_missing(repo: &str) -> String {
 
 pub fn repo_not_empty(repo: &str) -> String {
     format!(
-        "{repo} already has commits. A run needs a new, empty, public repository: no README, .gitignore or license. {NOTHING_CREATED}"
+        "{repo} already has commits. A run needs a new, empty, public repository: no README, .gitignore or license. {NOTHING_CREATED} \
+         To go on with a run you already started, run: goalcup continue."
     )
 }
 
@@ -1271,7 +1287,10 @@ pub fn updated(name: &str, from: &str, to: &str) -> String {
 }
 
 pub fn refused(said: &str) -> String {
-    format!("The server did not continue the run: {said}. Nothing was started.")
+    format!(
+        "The server did not continue the run: {}. Nothing was started.",
+        sentence(said)
+    )
 }
 
 // `goalcup recover` (section 3.2).
