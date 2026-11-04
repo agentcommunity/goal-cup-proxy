@@ -82,6 +82,9 @@ enum JoinBy {
 #[derive(Deserialize)]
 struct File {
     id: String,
+    /// Ids this connector had before; a record that names one reads as this connector.
+    #[serde(default)]
+    old_ids: Vec<String>,
     checked: Option<String>,
     #[serde(default)]
     usage: Usage,
@@ -122,7 +125,7 @@ fn parse(text: &str) -> Result<File, String> {
     }
 }
 
-/// A built-in connector file, by its current id. One that does not parse reads as none (the
+/// A built-in connector file, by its id or an old id. One that does not parse reads as none (the
 /// `every_builtin_usage_table_parses` test keeps the built-in ones parsing).
 fn file(connector: Option<&str>) -> Option<&'static File> {
     static FILES: LazyLock<BTreeMap<String, File>> = LazyLock::new(|| {
@@ -130,7 +133,10 @@ fn file(connector: Option<&str>) -> Option<&'static File> {
         let ok = all.filter_map(|(_, text)| parse(text).ok());
         ok.map(|f| (f.id.clone(), f)).collect()
     });
-    FILES.get(goalcup_format::connectors::current_id(connector?))
+    let id = connector?;
+    FILES
+        .get(id)
+        .or_else(|| FILES.values().find(|f| f.old_ids.iter().any(|o| o == id)))
 }
 
 /// The `[usage]` table of a built-in connector.

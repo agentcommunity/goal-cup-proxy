@@ -16,6 +16,8 @@ pub struct Connector {
     pub id: String,
     pub name: String,
     pub program: String,
+    /// Built-in ids this connector had before: `load` and `continue` take them as this one.
+    pub old_ids: Vec<String>,
     /// The build these values were checked on; `version::parse` of it is itself.
     pub checked: Option<String>,
     /// Per-version overrides: the first row whose `match` holds for the read version applies.

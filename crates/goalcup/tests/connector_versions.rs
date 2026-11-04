@@ -53,6 +53,7 @@ fn a_row_refuses_the_fixed_keys() {
         "program = \"y\"",
         "checked = \"1.0\"",
         "versions = []",
+        "old_ids = []",
         "hint_env = []",
         "skills_dir = \"{home}/s\"",
         "end_note = \"x\"",

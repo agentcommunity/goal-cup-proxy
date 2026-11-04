@@ -187,19 +187,18 @@ fn read(path: &Path) -> Result<Vec<u8>, ConnectorError> {
     })
 }
 
-/// The built-in id `arg` names: the id itself, else the one id that is `arg` plus `-cli` or whose
-/// program is `arg`. None or several is `UnknownId`, listing the matches, else every id.
+/// The built-in id `arg` names: the id itself, else the one id that is `arg` plus `-cli`, whose
+/// program is `arg` or that lists `arg` in `old_ids`. None or several is `UnknownId`, listing the matches, else every id.
 pub fn resolve_id(arg: &str) -> Result<&'static str, ConnectorError> {
     let ids = || builtin::CONNECTORS.iter().map(|(id, _)| *id);
     if let Some(id) = ids().find(|id| *id == arg) {
         return Ok(id);
     }
-    let program = |text: &str| schema::parse(text.as_bytes(), "").map(|c| c.program);
+    let parsed = |text: &str| schema::parse(text.as_bytes(), "");
+    let by = |c: schema::Connector| c.program == arg || c.old_ids.iter().any(|o| o == arg);
     let matches: Vec<&str> = builtin::CONNECTORS
         .iter()
-        .filter(|(id, text)| {
-            id.strip_suffix("-cli") == Some(arg) || program(text).is_ok_and(|p| p == arg)
-        })
+        .filter(|(id, text)| id.strip_suffix("-cli") == Some(arg) || parsed(text).is_ok_and(by))
         .map(|(id, _)| *id)
         .collect();
     match matches[..] {
@@ -228,7 +227,7 @@ pub fn load(id_or_path: &str, hosts_file: Option<&Path>) -> Result<Connector, Co
         c.source = ConnectorSource::File;
         c
     } else {
-        let id = resolve_id(goalcup_format::connectors::current_id(id_or_path))?;
+        let id = resolve_id(id_or_path)?;
         let (_, text) = builtin::CONNECTORS.iter().find(|(i, _)| *i == id).unwrap();
         schema::parse(text.as_bytes(), &format!("connectors/{id}.toml"))?
     };

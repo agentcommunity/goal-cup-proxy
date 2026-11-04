@@ -153,7 +153,7 @@ pub fn prepare(
         .connector
         .map_or_else(|| sj.connector.id.clone(), |_| sj.connector.source.clone());
     let connector = connector::load(&id, a.hosts).map_err(|e| refuse(e.to_string()))?;
-    if connector.id != goalcup_format::connectors::current_id(&sj.connector.id) {
+    if connector.id != sj.connector.id && !connector.old_ids.contains(&sj.connector.id) {
         return Err(refuse(text::file_changed(
             "connector file",
             &sj.connector.source,

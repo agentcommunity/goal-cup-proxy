@@ -5,6 +5,8 @@
 id = "opencode-cli"
 name = "OpenCode"
 program = "opencode"
+# OpenCode 2 had its own connector before 1.1; its runs continue and read under this one.
+old_ids = ["opencode2-cli"]
 checked = "2.2.2"
 args = ["--standalone"]
 resume = ["--continue"]

@@ -19,6 +19,7 @@ is the participant's project folder.
 | `id` | string `[a-z0-9-]{1,32}` | | The connector id: `goalcup start --harness <id>` |
 | `name` | string | | Shown to the participant |
 | `program` | string | | The executable, found on the participant's `PATH` |
+| `old_ids` | string list | `[]` | Built-in ids this connector had before. `--harness`, `goalcup continue` and the usage reader take a run that names one as this connector |
 | `checked` | string | none | The build these values were checked on, as `version` parsing reads it (`2.2.2`, no `v`). Said when the version cannot be read on a connector with `[[versions]]` rows |
 | `versions` | list of rows | `[]` | Per-version overrides. A row has `match` (a version spec: `1.x`, `0.22.6`, `>=1.2,<2`), an optional `say` (printed at start, continue and setup, and recorded as a `note` event, `what = "version_note"`), and any of `args`, `resume`, `env`, `unset`, `host_hints`, `secret_files`, `no_prompts`, `update_off`, `native`, `first_screen`, `before`, `after`. The first row whose `match` holds wins; a list or string replaces the base value, `env` merges key by key, `first_screen = ""` clears it. Any other key fails the load. The merged connector passes the same checks as the base. An unread version gets the base. Never refuses a run |
 | `args` | string list | `[]` | Arguments for `goalcup start`. Template `{workspace}` only |
