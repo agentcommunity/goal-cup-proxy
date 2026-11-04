@@ -4,7 +4,7 @@
 mod common;
 
 use common::run1::{Shape, run1};
-use common::{Entry, check, item, mutate};
+use common::{Entry, check, find, item, mutate, result};
 use goalcup_format::{EndReason, GapReason, Record};
 use serde_json::Value;
 
@@ -113,4 +113,56 @@ fn a_ragged_span_across_buckets_loses_under_a_ms_per_row() {
         got <= span / 1_000_000 && span / 1_000_000 - got < n,
         "{got} of {span} in {n}"
     );
+}
+
+/// A `standard` entry with a crash, its first LINK after the `recorder_down` GAP moved by `f`,
+/// and the GAP's end wall too when `gap` is set.
+fn link_wall_after_down(name: &str, gap: bool, f: impl Fn(u64) -> u64) -> std::path::PathBuf {
+    let mut e = Entry::new(name);
+    e.standard();
+    e.crash("killed", 60_000);
+    e.exchange(EndReason::Complete);
+    e.count();
+    let dir = e.seal();
+    mutate(&dir, None, |recs| {
+        let down = find(recs, |r| {
+            matches!(
+                r,
+                Record::Gap {
+                    reason: GapReason::RecorderDown,
+                    ..
+                }
+            )
+        });
+        if let Record::Gap { end_wall, .. } = &mut recs[down]
+            && gap
+        {
+            *end_wall = f(*end_wall);
+        }
+        let i = down + find(&recs[down..], |r| matches!(r, Record::Link { .. }));
+        if let Record::Link { wall_ns, .. } = &mut recs[i] {
+            *wall_ns = f(*wall_ns);
+        }
+    })
+}
+
+/// cr-format-verify-4: a forged LINK wall time cannot make the timeline allocate a row per
+/// bucket up to u64::MAX (here with the off span forged to reach it); the wall/mono mismatch is
+/// named.
+#[test]
+fn forged_link_wall_does_not_blow_up_the_timeline() {
+    let dir = link_wall_after_down("tl-forge", true, |_| u64::MAX);
+    let t = std::time::Instant::now();
+    let (_, v) = check(&dir, &[]);
+    assert!(t.elapsed() < std::time::Duration::from_secs(5));
+    assert!(rows(&v).len() <= 100_000, "{} rows", rows(&v).len());
+    assert_eq!(result(&v, "wall_sane"), "named");
+}
+
+/// A clock step after boot is legal: a LINK a day off its PART's wall plus mono passes.
+#[test]
+fn a_link_wall_a_day_off_the_mono_clock_is_fine() {
+    let dir = link_wall_after_down("tl-day", false, |w| w + 86_400_000_000_000);
+    let (_, v) = check(&dir, &[]);
+    assert_eq!(result(&v, "wall_sane"), "pass");
 }

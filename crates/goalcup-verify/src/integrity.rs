@@ -65,7 +65,7 @@ impl Check {
 /// The integrity checks, in report order. The first 14 are invariants 1 to 14.
 pub const IDS: &str = "inv1 inv2 inv3 inv4 inv5 inv6 inv7 inv8 inv9 streams_closed \
     seen_matches_written gap_has_end recorder_alive inv14 torn_tail native_path_gen \
-    counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown";
+    counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown wall_sane";
 
 /// Whether a GAP covers a stretch of time: it is not run 1's shape. A GAP in the recorder's own
 /// clock is judged on record time, one carrying `boot_id` (another clock) on wall time. Covers,
@@ -637,6 +637,12 @@ impl Pass {
                 self.next_seq = seq.saturating_add(1);
                 self.last_hash = *hash;
                 self.last_link = Some((*wall_ns, *mono_ns));
+                let skew = (i128::from(*wall_ns) - i128::from(self.part_wall))
+                    - (i128::from(*mono_ns) - i128::from(self.part_mono));
+                if skew.abs() > 400 * 86_400 * 1_000_000_000 {
+                    let why = "a LINK wall time is more than 400 days from its PART's wall plus mono delta";
+                    self.set("wall_sane", Res::Named, why, Some(at));
+                }
                 self.frame_down = 0;
                 if self.down_after.0 == 0 {
                     self.regular_link_t = Some(*mono_ns);

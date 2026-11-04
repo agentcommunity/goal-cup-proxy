@@ -14,6 +14,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// A timeline bucket, ns.
 const BUCKET: u64 = 600_000_000_000;
+/// At most this many buckets past the first PART: a forged wall time cannot grow the timeline.
+const MAX_BUCKETS: u64 = 100_000;
 
 /// The record's native and snapshot streams, by the path their OPEN meta names.
 #[derive(Default)]
@@ -121,6 +123,9 @@ impl Tally {
             }
         }
         let Some(first) = self.first else { return };
+        self.last = self
+            .last
+            .min(first.saturating_add(MAX_BUCKETS * BUCKET - 1));
         let end = self.last.saturating_sub(first) / BUCKET;
         for (s, e) in std::mem::take(&mut self.off) {
             if e <= s {
