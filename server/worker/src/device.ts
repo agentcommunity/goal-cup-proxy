@@ -111,7 +111,7 @@ export async function pollDevice(ctx: Ctx, request: Request): Promise<Response> 
     case "denied":
       throw new ApiError(403, "forbidden", "This sign-in was denied on the website.");
     case "expired":
-      throw closed("This sign-in request has expired or was already picked up. Start again.");
+      throw closed("This sign-in request has expired, or its answer was already collected. If goalcup did not get it, run the command again to start a new sign-in.");
   }
 }
 

@@ -76,7 +76,9 @@ describe("device flow against wrangler dev", { concurrency: false }, () => {
 
     // Once: every later poll is gone.
     assertError(await poll(d.body.device_code), 410, "closed");
-    assertError(await poll(d.body.device_code), 410, "closed");
+    const second = await poll(d.body.device_code);
+    assertError(second, 410, "closed");
+    assert.equal(second.body.message, "This sign-in request has expired, or its answer was already collected. If goalcup did not get it, run the command again to start a new sign-in.");
 
     // The credential works.
     const run = await api.call("POST", "/v1/runs", { token: t.body.credential, json: openBody() });
