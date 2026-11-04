@@ -60,8 +60,33 @@ pub fn take(vars: &BTreeMap<String, String>) -> (Option<SleepLock>, Option<Strin
         None => hold_with(&|name| Some(resolve_program(name, vars)).filter(|p| p.is_absolute())),
     };
     match held {
-        Ok(lock) => (Some(lock), None),
+        Ok(lock) => (Some(lock), lid_note().map(str::to_string)),
         Err(why) => (None, Some(super::text::no_sleep_lock(&why))),
+    }
+}
+
+/// `caffeinate -s` holds only on mains power, and a closed lid sleeps a Mac regardless. Said on a Mac only.
+pub fn lid_note() -> Option<&'static str> {
+    cfg!(target_os = "macos").then_some(super::text::LID_NOTE)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lid_note_is_said_on_a_mac_only() {
+        assert_eq!(lid_note().is_some(), cfg!(target_os = "macos"));
+    }
+
+    /// Owner's Mac checklist: does not run on Linux.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_held_lock_on_a_mac_still_warns_about_the_lid() {
+        let vars = BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+        let (lock, warning) = take(&vars);
+        assert!(lock.is_some());
+        assert!(warning.is_some_and(|w| w.contains("lid")));
     }
 }
 

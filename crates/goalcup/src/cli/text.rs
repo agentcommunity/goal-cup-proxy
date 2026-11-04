@@ -237,6 +237,8 @@ pub fn no_sleep_lock(why: &str) -> String {
     )
 }
 
+pub const LID_NOTE: &str = "On a laptop the lock does not keep the Mac awake on battery or with the lid closed: use mains power and keep the lid open.";
+
 pub const SERVER_OFF: &str = "Server check skipped: GOALCUP_SERVER=off, so nothing is uploaded.";
 
 pub fn server_unreachable(e: &ServerError) -> String {
