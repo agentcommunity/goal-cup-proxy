@@ -367,6 +367,13 @@ export class SupabaseDb implements Db {
     throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
   }
 
+  async purgeDevices(now: string): Promise<number> {
+    const v = await this.#rpc("upload_purge_device_requests", { p_now: now });
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) return v;
+    console.error(`supabase upload_purge_device_requests: unexpected result ${JSON.stringify(v)?.slice(0, 200)}`);
+    throw new ApiError(502, "upstream_error", "The database answered with something unexpected.");
+  }
+
   async claimNotices(limit: number, now: string): Promise<ClaimedNotice[]> {
     const v = await this.#rpc("upload_claim_notices", { p_limit: limit, p_now: now });
     if (!Array.isArray(v)) {

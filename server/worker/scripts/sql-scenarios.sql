@@ -138,4 +138,27 @@ BEGIN
   ASSERT r ->> 'result' = 'expired', 'scenario 6: second poll: ' || r::text;
   ASSERT (SELECT count(*) FROM goal_cup_tracer.run_credentials
            WHERE member_id = '66666666-6666-6666-6666-666666666666') = 1, 'scenario 6: not one credential row';
+
+  -- 7. Purge (20261105100000): only this deployment's requests expired more than a day ago go.
+  INSERT INTO goal_cup_tracer.device_requests (device_hash, user_hash, purpose, mode, connector_id, tracer_version,
+                                               created_at, expires_at, staging)
+  VALUES (repeat('d', 64), repeat('d', 64), 'run', 'practice', 'c', '1', t0 - interval '2 days',
+          t0 - interval '2 days', false),
+         (repeat('e', 64), repeat('e', 64), 'run', 'practice', 'c', '1', t0 - interval '1 hour',
+          t0 - interval '1 hour', false),
+         (repeat('f', 64), repeat('f', 64), 'run', 'practice', 'c', '1', t0 - interval '2 days',
+          t0 - interval '2 days', true);
+  n := public.goal_cup_upload_purge_device_requests(t0::text);
+  ASSERT n = 1, 'scenario 7: purged ' || n;
+  ASSERT NOT EXISTS (SELECT 1 FROM goal_cup_tracer.device_requests WHERE device_hash = repeat('d', 64)), 'scenario 7: old row kept';
+  ASSERT (SELECT count(*) FROM goal_cup_tracer.device_requests WHERE device_hash IN (repeat('e', 64), repeat('f', 64))) = 2,
+    'scenario 7: a young or a staging row went';
+  ASSERT has_function_privilege('goal_cup_ingest_production', 'public.goal_cup_upload_purge_device_requests(text)', 'EXECUTE')
+     AND has_function_privilege('goal_cup_ingest_staging', 'public.goal_cup_upload_purge_device_requests(text)', 'EXECUTE')
+     AND has_function_privilege('service_role', 'public.goal_cup_upload_purge_device_requests(text)', 'EXECUTE'),
+    'scenario 7: a Worker role cannot purge';
+  ASSERT NOT has_function_privilege('anon', 'public.goal_cup_upload_purge_device_requests(text)', 'EXECUTE')
+     AND NOT has_function_privilege('authenticated', 'public.goal_cup_upload_purge_device_requests(text)', 'EXECUTE')
+     AND NOT has_function_privilege('public', 'public.goal_cup_upload_purge_device_requests(text)', 'EXECUTE'),
+    'scenario 7: anon, authenticated or PUBLIC can purge';
 END $$;

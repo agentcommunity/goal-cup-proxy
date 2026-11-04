@@ -438,6 +438,8 @@ export interface Db {
    * many this call queued. A batch that fails is retried whole: the key makes that safe.
    */
   queueNotices(notices: NoticeArgs[]): Promise<number>;
+  /** Delete this deployment's device requests that expired more than a day before `now`. Returns how many. */
+  purgeDevices(now: string): Promise<number>;
   /**
    * Claim up to `limit` unsent notices for the mailer. A claim lasts 15 minutes, so a send that died
    * is claimed again; suppressed or address-less members are skipped by the database and not returned.

@@ -436,6 +436,11 @@ export class LocalDb implements Db {
     return queued;
   }
 
+  /** Local state is thrown away, so nothing is purged. */
+  async purgeDevices(_now: string): Promise<number> {
+    return 0;
+  }
+
   /** Local only: no accounts here, so `to` is always null (the mailer uses its test address or skips). */
   async claimNotices(limit: number, now: string): Promise<ClaimedNotice[]> {
     const claimed: ClaimedNotice[] = [];

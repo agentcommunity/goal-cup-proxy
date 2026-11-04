@@ -237,13 +237,18 @@ export async function runTick(env: Env): Promise<void> {
     return;
   }
   const now = ctx.now();
-  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices], ["sendNotices", sendNotices], ["alertStorage", alertStorage]] as const) {
+  for (const [name, step] of [["closeRuns", closeRuns], ["recordFinalCommits", recordFinalCommits], ["queueNotices", queueNotices], ["sendNotices", sendNotices], ["alertStorage", alertStorage], ["purgeDevices", purgeDevices]] as const) {
     try {
       await step(ctx, now);
     } catch (e) {
       console.error(`tick ${name}: ${message(e)}`);
     }
   }
+}
+
+/** Last: housekeeping, so a failure (a Worker deployed before its migration) costs nothing. */
+async function purgeDevices(ctx: Ctx, now: Date): Promise<number> {
+  return ctx.db.purgeDevices(formatTime(now));
 }
 
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));

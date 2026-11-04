@@ -359,6 +359,19 @@ test("queueNotices -> one upload_queue_notices call with the whole batch, the co
   assert.equal(calls.length, 5, "an empty batch is not sent");
 });
 
+test("purgeDevices -> upload_purge_device_requests(p_now), the count back", async () => {
+  const calls = stub(3, "x", -1);
+  assert.equal(await db().purgeDevices(T), 3);
+  assert.deepEqual(calls[0], { fn: "upload_purge_device_requests", args: { p_now: T } });
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    for (let i = 0; i < 2; i++) await assert.rejects(db().purgeDevices(T), (e) => e instanceof ApiError && e.status === 502);
+  } finally {
+    console.error = quiet;
+  }
+});
+
 test("recordFinalCommit -> upload_record_final_commit", async () => {
   const calls = stub(true, false, true);
   await db().recordFinalCommit("m", "r1", "a".repeat(40), "t");
