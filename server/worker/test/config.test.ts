@@ -57,6 +57,7 @@ test("config defaults and validation", () => {
     startWindow: undefined,
     githubCheck: false,
     minCompetitionVersion: { kind: "none" },
+    advisories: [],
   });
   assert.equal(readConfig({ ...baseEnv, RUN_HOURS: "2" }).runSeconds, 7200);
   assert.equal(readConfig({ ...baseEnv, PRACTICE_RUN_MINUTES: "30" }).practiceRunSeconds, 1800);

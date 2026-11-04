@@ -25,6 +25,8 @@ export interface Env {
   CLOSE_AFTER_SECONDS?: string;
   START_WINDOW_OPENS?: string;
   START_WINDOW_CLOSES?: string;
+  /** Tests only, DB_BACKEND=local only: the advisories rows as JSON, in place of src/advisories.json. */
+  ADVISORIES_JSON?: string;
 
   /** "supabase" (default) or "local" (wrangler dev and tests only). */
   DB_BACKEND?: string;

@@ -284,6 +284,44 @@ describe("continue and segments", () => {
     assertError(dead, 410, "closed");
   });
 
+  lifecycle(
+    "open and continue carry notes only when a row matches",
+    async (r) => {
+      const alice = await r.cred("alice");
+      // No row matches codex-cli 0.153.0 on linux: the open answer is the same as before notes.
+      const plain = await r.open(alice, "s1", { machine: { os: "linux" } });
+      assert.equal(plain.status, 201, JSON.stringify(plain.body));
+      assert.equal("notes" in plain.body, false);
+      const a = plain.body as Opened;
+      const c = await r.cont(alice, a.run_id, a.entry_id, "s-two");
+      assert.equal(c.status, 201, JSON.stringify(c.body));
+      assert.deepEqual(c.body.notes, ["Use the newer build."]);
+      assert.deepEqual(Object.keys(c.body), ["entry_id", "segment", "official_start", "deadline_at", "seconds_left", "notes"]);
+      // Continue's `os` picks the os row; one that is not a string is no os, never a refusal.
+      const c2 = await r.cont(alice, a.run_id, c.body.entry_id, "s-three", { os: "macos" });
+      assert.deepEqual(c2.body.notes, ["Use the newer build.", "On macOS, update."]);
+      const c3 = await r.cont(alice, a.run_id, c2.body.entry_id, "s-four", { os: 5, harness_version: "8" });
+      assert.equal(c3.status, 201, JSON.stringify(c3.body));
+      assert.equal("notes" in c3.body, false);
+
+      // The open's os is machine.os; a lost-reply repeat of the open carries the same notes.
+      const bob = await r.cred("bob");
+      const facts = { connector_id: "other-cli", harness_version: "Other v9.1", machine: { os: "macos" } };
+      const opened = await r.open(bob, "b1", facts);
+      assert.equal(opened.status, 201, JSON.stringify(opened.body));
+      assert.deepEqual(opened.body.notes, ["Use the newer build.", "On macOS, update."]);
+      const again = await r.open(bob, "b1", facts);
+      assert.equal(again.status, 200, JSON.stringify(again.body));
+      assert.deepEqual(again.body, opened.body);
+    },
+    {
+      ADVISORIES_JSON: JSON.stringify([
+        { connector: "other-cli", version: "9", os: "*", note: "Use the newer build." },
+        { connector: "*", version: "*", os: "macos", note: "On macOS, update." },
+      ]),
+    },
+  );
+
   lifecycle("a run whose current entry is sealed reads as sealed once the run is over", async (r) => {
     const alice = await r.cred("alice");
     const a = await r.start(alice, "s1");
