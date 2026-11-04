@@ -29,11 +29,14 @@ test("the committed file is valid", () => assert.equal(validAdvisories(advisorie
 
 test("validAdvisories refuses ESC, bidi, 201 chars, a sixth key, version 'v1'", () => {
   const ok = { connector: "*", version: "*", os: "*", note: "fine" };
-  assert.equal(validAdvisories([ok, { ...ok, note: "x".repeat(NOTE_MAX_CHARS) }]), null);
+  assert.equal(validAdvisories([ok, { ...ok, note: "x".repeat(NOTE_MAX_CHARS) }, { ...ok, note: "\u{1F600}".repeat(150) }]), null);
   const bad: unknown[] = [
     [{ ...ok, note: "\u001b[31mred" }],
     [{ ...ok, note: "a\u202Eb" }],
     [{ ...ok, note: "a\u2067b" }],
+    [{ ...ok, note: "a\u200Fb" }],
+    [{ ...ok, os: "" }],
+    [{ ...ok, connector: "" }],
     [{ ...ok, note: "x".repeat(NOTE_MAX_CHARS + 1) }],
     [{ ...ok, note: "" }],
     [{ ...ok, extra: "x" }],

@@ -173,7 +173,7 @@ when its `connector` is the open's `connector_id`, its `os` is `machine.os` (on 
 request's `os`), each exact or `"*"`, and its `version` is `"*"` or numbers and dots that match the
 first dotted number in `harness_version` exactly or as a prefix (`0.22` matches `0.22.6`, not `0.220`;
 `0.22.6` does not match `0.22.60`). The first 5 matching rows, in file order, give the notes. A
-`note` is 1 to 200 characters with no control or bidi character; goalcup strips those again and
+`note` is 1 to 200 characters with no control, zero-width or bidi character, and `connector` and `os` are not empty; goalcup strips those again and
 cuts each to 200 characters.
 
 `seconds_left` is the time left, on the server's clock: whole seconds from the server's now to

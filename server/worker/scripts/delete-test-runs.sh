@@ -78,8 +78,10 @@ delete() {
     awk 'FILENAME == ARGV[1] { p[$0]; next } !($0 in p)' "$tmp/plan" delete-test-runs.failed >"$tmp/failed"
   while read -r bucket key; do
     enc=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$key")
-    curl -fsS -X DELETE "$base/$bucket/objects/$enc" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" >/dev/null ||
-      echo "$bucket $key" >>"$tmp/failed"
+    # 404: the object is already gone (an earlier delete went through), so it counts as deleted.
+    code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$base/$bucket/objects/$enc" \
+      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN") || code=000
+    case $code in 2??|404) ;; *) echo "$bucket $key" >>"$tmp/failed" ;; esac
   done <"$tmp/plan"
   [ -s "$tmp/failed" ] || { rm -f delete-test-runs.failed; return; }
   mv "$tmp/failed" delete-test-runs.failed

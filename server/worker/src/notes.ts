@@ -46,10 +46,12 @@ export function validAdvisories(rows: unknown): string | null {
     const keys = Object.keys(row).sort().join(",");
     if (keys !== "connector,note,os,version") return `row ${i} must have exactly connector, version, os and note`;
     if (!Object.values(row).every((v) => typeof v === "string")) return `row ${i} has a value that is not a string`;
-    const { version, note } = row as Advisory;
+    const { connector, version, os, note } = row as Advisory;
+    if (connector === "" || os === "") return `row ${i}: connector and os must not be empty`;
     if (!/^(\*|\d+(\.\d+)*)$/.test(version)) return `row ${i}: version must be "*" or numbers and dots`;
-    if (note.length < 1 || note.length > NOTE_MAX_CHARS) return `row ${i}: note must be 1-${NOTE_MAX_CHARS} characters`;
-    if (/[\p{Cc}\u202A-\u202E\u2066-\u2069]/u.test(note)) return `row ${i}: note has a control or bidi character`;
+    const chars = [...note].length; // characters, as goalcup counts them
+    if (chars < 1 || chars > NOTE_MAX_CHARS) return `row ${i}: note must be 1-${NOTE_MAX_CHARS} characters`;
+    if (/[\p{Cc}\u200B-\u200F\u202A-\u202E\u2066-\u2069]/u.test(note)) return `row ${i}: note has a control, zero-width or bidi character`;
   }
   return null;
 }

@@ -14,8 +14,8 @@ let tmp = "";
 afterEach(() => rmSync(tmp, { recursive: true, force: true }));
 
 // A temp dir with stubs: psql answers one run; curl lists one key in goalcup-traces, logs every
-// call, and fails every DELETE.
-function setup() {
+// call, and fails every DELETE (or answers it with `deleteAnswer`).
+function setup(deleteAnswer = "exit 22") {
   tmp = mkdtempSync(join(tmpdir(), "delete-script-"));
   const stub = (name: string, body: string) => {
     writeFileSync(join(tmp, name), `#!/bin/sh\n${body}`);
@@ -25,7 +25,7 @@ function setup() {
   stub(
     "curl",
     `echo "$*" >>"${tmp}/curl.log"
-case " $* " in *" -X DELETE "*) exit 22 ;; esac
+case " $* " in *" -X DELETE "*) ${deleteAnswer} ;; esac
 out= url=
 while [ $# -gt 0 ]; do
   case $1 in -o) out=$2; shift ;; https://*) url=$1 ;; esac
@@ -88,4 +88,12 @@ test("a later run keeps the earlier failed objects it did not retry", () => {
     readFileSync(join(tmp, "delete-test-runs.failed"), "utf8"),
     `goalcup-usage usage/test/old\ngoalcup-traces ${key}\n`,
   );
+});
+
+test("a 404 on delete means the object is already gone: the retry list is cleared", () => {
+  setup('case " $* " in *" -f"*) exit 22 ;; esac; printf 404; exit 0'); // like curl: -f fails on 404
+  writeFileSync(join(tmp, "delete-test-runs.failed"), `goalcup-traces ${key}\n`);
+  const r = run("--objects", "delete-test-runs.failed", "--yes");
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(existsSync(join(tmp, "delete-test-runs.failed")), false);
 });
