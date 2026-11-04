@@ -74,9 +74,10 @@ fn practice(run: Option<&ServerJson>) -> bool {
     run.is_some_and(|r| r.mode == RunMode::Practice)
 }
 
-/// The line at `now` (seconds since 1970). The server's word counts down from its `asked_at` when
-/// it was asked within 11 minutes of now (`stop` is "time is up"); without such a word the run's
-/// own `deadline` answers; with neither, the "unknown right now" line.
+/// The line at `now` (seconds since 1970). A server `stop` is final, however old: "time is up".
+/// Otherwise the server's word counts down from its `asked_at` when it was asked within 11 minutes
+/// of now; without such a word the run's own `deadline` answers; with neither, the "unknown right
+/// now" line.
 pub fn line(
     upload: Option<&UploadJson>,
     practice: bool,
@@ -84,19 +85,19 @@ pub fn line(
     now: u64,
 ) -> Result<String, String> {
     let word = upload.and_then(|u| u.server_word.as_ref());
+    if word.is_some_and(|w| w.stop) {
+        return Ok(text::TIME_IS_UP.to_owned());
+    }
     let fresh = word.and_then(|w| {
         Some((
             w,
             unix_of(&w.asked_at).filter(|a| a.abs_diff(now) <= FRESH_SECS)?,
         ))
     });
-    if let Some((word, asked)) = fresh {
-        if word.stop {
-            return Ok(text::TIME_IS_UP.to_owned());
-        }
-        if let Some(left) = word.seconds_left {
-            return Ok(text::time_left(asked.saturating_add(left), now, practice));
-        }
+    if let Some((word, asked)) = fresh
+        && let Some(left) = word.seconds_left
+    {
+        return Ok(text::time_left(asked.saturating_add(left), now, practice));
     }
     match deadline {
         Some(d) if d <= now => Ok(text::TIME_IS_UP.to_owned()),

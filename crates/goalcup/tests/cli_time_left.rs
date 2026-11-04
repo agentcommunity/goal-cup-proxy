@@ -42,3 +42,16 @@ fn without_a_fresh_word_the_run_deadline_answers() {
     );
     assert!(line(None, false, None, T0).is_err());
 }
+
+#[test]
+fn a_stale_stop_is_still_time_is_up_even_before_the_deadline() {
+    let at = goalcup_format::dump::wall((T0 - 3600) * 1_000_000_000);
+    let word = json!({"stop": true, "reason": "server_stop", "seconds_left": null, "asked_at": at});
+    let said = line(
+        Some(&upload(json!({"server_word": word}))),
+        false,
+        Some(T0 + 7200),
+        T0,
+    );
+    assert_eq!(said, Ok(goalcup::cli::text::TIME_IS_UP.to_owned()));
+}
