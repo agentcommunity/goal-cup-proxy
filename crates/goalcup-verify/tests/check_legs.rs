@@ -284,3 +284,14 @@ fn a_manifest_of_another_shape_is_no_report() {
         .unwrap();
     assert_eq!(out.status.code(), Some(3));
 }
+
+/// Two harness calls at wall time u64::MAX (a forged or broken log) do not panic the sweep.
+#[test]
+fn harness_calls_at_the_end_of_time_do_not_panic() {
+    let mut t = tab("a", 0, 0);
+    t.rows = vec![
+        call(Leg::Native, "a", u64::MAX),
+        call(Leg::Native, "a", u64::MAX),
+    ];
+    assert_ne!(go(&t, None, K[0]), "pass");
+}

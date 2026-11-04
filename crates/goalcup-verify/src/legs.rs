@@ -242,7 +242,9 @@ impl Sweep {
             s.top = s.top.max(ex);
             s.mark(t, n, ex);
             let end = t.saturating_add(WINDOW);
-            let hw = (h.partition_point(|&x| x < end) - j) as u64;
+            // From `t` itself: `end` saturates at the end of time, where `x < end` would drop
+            // the calls at `t`.
+            let hw = h[j..].partition_point(|&x| x - t < WINDOW) as u64;
             let before = w.partition_point(|&x| x < t.saturating_sub(LAG)) as u64;
             let ww = upto(end.saturating_add(LAG)) - before;
             // Not into `top` below the tolerance: a window's small shortfall is edge noise, not
