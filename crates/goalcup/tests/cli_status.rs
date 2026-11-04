@@ -402,3 +402,14 @@ fn no_jargon() {
     }
     assert!(all[2].starts_with("No model request was written."));
 }
+
+/// A missing session row with a `redirect` names the variable the build may have stopped reading.
+#[test]
+fn a_missing_row_with_a_redirect_names_the_variable() {
+    assert_eq!(
+        text::native_missing_redirect("transcripts", "Claude Code", "CLAUDE_CONFIG_DIR"),
+        "goalcup has found no transcripts file for Claude Code in its goalcup home. If this build \
+         no longer reads CLAUDE_CONFIG_DIR, its sessions go to your usual folder and are not \
+         recorded; model requests still are."
+    );
+}

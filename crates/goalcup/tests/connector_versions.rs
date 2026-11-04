@@ -193,3 +193,29 @@ fn opencode_fold_keeps_each_version_s_keys() {
         "opencode-cli"
     );
 }
+
+/// A row that finds nothing names the `home` variable its files sit under.
+#[test]
+fn the_three_redirects_are_named() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let env = connector::Env {
+        vars: [("PATH".to_string(), d.display().to_string())].into(),
+        workspace: d.join("workspace"),
+        resume: false,
+        run_start: std::time::SystemTime::now(),
+        goalcup_home: d.join("goalcup"),
+        server_host: "ingest.example.org".into(),
+    };
+    for (id, row, want) in [
+        ("claude-code-cli", "transcripts", Some("CLAUDE_CONFIG_DIR")),
+        ("codex-cli", "sessions", Some("CODEX_HOME")),
+        ("droid-cli", "sessions", Some("FACTORY_HOME_OVERRIDE")),
+        ("crush-cli", "db", None),
+    ] {
+        let home = d.join("goalcup/homes").join(id);
+        let plan = connector::plan(&connector::load(id, None).unwrap(), &env, &home);
+        let s = plan.native.0.iter().find(|s| s.name == row).unwrap();
+        assert_eq!(s.redirect.as_deref(), want, "{id}");
+    }
+}

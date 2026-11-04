@@ -91,6 +91,9 @@ pub struct NativeSource {
     /// The run start, the same for every row.
     pub since: SystemTime,
     pub warn_missing: bool,
+    /// The `home` variable this row's files sit under, named when the row finds nothing.
+    #[serde(default)]
+    pub redirect: Option<String>,
 }
 
 /// The connector's session-file rows, in file order (the first matching row reads a file).
@@ -299,15 +302,30 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     let refusal = lock_refusal.or_else(|| reader.refusal(connector));
     let (unread, mut log) = (reader.unread, reader.log);
 
+    // The `home` variable with the longest filled value that holds the row's root (ties: first).
+    let homes: Vec<(&String, PathBuf)> = connector
+        .home
+        .iter()
+        .map(|(k, t)| (k, fill(t).into()))
+        .collect();
+    let redirect = |root: &Path| {
+        let holds = homes.iter().filter(|(_, h)| root.starts_with(h));
+        let longest = holds.rev().max_by_key(|(_, h)| h.components().count());
+        longest.map(|(k, _)| k.to_string())
+    };
     let rows = c.native.iter();
     let native = NativeSources(
-        rows.map(|row| NativeSource {
-            name: row.name.clone(),
-            root: PathBuf::from(fill(&row.root)),
-            pattern: row.pattern.clone(),
-            form: row.form,
-            since: env.run_start,
-            warn_missing: row.warn_missing,
+        rows.map(|row| {
+            let root = PathBuf::from(fill(&row.root));
+            NativeSource {
+                name: row.name.clone(),
+                redirect: redirect(&root),
+                root,
+                pattern: row.pattern.clone(),
+                form: row.form,
+                since: env.run_start,
+                warn_missing: row.warn_missing,
+            }
         })
         .collect(),
     );

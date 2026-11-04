@@ -167,7 +167,11 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
         let host = note_str(n, "host");
         let line = match note_str(n, "what") {
             Some("native_missing") => {
-                text::native_missing(note_str(n, "row").unwrap_or("session"), cx.name)
+                let row = note_str(n, "row").unwrap_or("session");
+                match note_str(n, "redirect") {
+                    Some(var) => text::native_missing_redirect(row, cx.name, var),
+                    None => text::native_missing(row, cx.name),
+                }
             }
             Some("native_other_device") => {
                 text::native_other_device(note_str(n, "path").unwrap_or("a folder"), cx.name)

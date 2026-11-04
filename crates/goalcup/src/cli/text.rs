@@ -653,6 +653,14 @@ pub fn native_missing(row: &str, name: &str) -> String {
     )
 }
 
+pub fn native_missing_redirect(row: &str, name: &str, var: &str) -> String {
+    format!(
+        "goalcup has found no {row} file for {name} in its goalcup home. If this build no longer \
+         reads {var}, its sessions go to your usual folder and are not recorded; model requests \
+         still are."
+    )
+}
+
 pub fn native_other_device(path: &str, name: &str) -> String {
     format!(
         "goalcup does not read {path} for {name}: it is on another disk. Session files there are \
