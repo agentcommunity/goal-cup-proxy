@@ -183,7 +183,7 @@ pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -
         .next()
         .is_some_and(|w| w.eq_ignore_ascii_case(name));
     let held = named && super::version::parse(&line).is_some();
-    (!checked || held).then(|| cut_version(&line).to_owned())
+    (!checked || held).then_some(line)
 }
 
 /// The most of a version line goalcup keeps, in UTF-16 units: the server's limit, so a long

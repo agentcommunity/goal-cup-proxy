@@ -173,7 +173,7 @@ fn rebuild(
     let source = &server.connector;
     let file = (source.source != "builtin").then_some(source.source.as_str());
     let loaded = connector::load(file.unwrap_or(&source.id), server.hosts_file.as_deref()).ok()?;
-    if loaded.id != source.id {
+    if loaded.id != source.id && !loaded.old_ids.contains(&source.id) {
         return None;
     }
     // Without a start time the native sources' `since` would be a guess: refuse instead.
@@ -191,7 +191,7 @@ fn rebuild(
         goalcup_home: home.clone(),
         server_host: own.host().unwrap_or_default().to_owned(),
     };
-    let isolated = super::isolated_home(&home, &loaded.id);
+    let isolated = super::run_home(&home, &loaded, &source.id);
     let _lock = HomeLock::take(&isolated).ok()?;
     let mut plan = connector::plan(&loaded, &env, &isolated);
     plan.hosts = hosts;
@@ -221,6 +221,8 @@ fn rebuild(
     };
     let mut facts = start::start_facts(&workspace, &vars, &mut plan, &values, part);
     facts.harness_version = me.harness_version.clone();
+    // The first segment's start event names the row; a fresh probe here may read another build.
+    facts.version_row = None;
     // The first boot wrote these events; a recovered recorder does not write them again.
     facts.notes = Vec::new();
     facts.harness = Some(HarnessFacts {

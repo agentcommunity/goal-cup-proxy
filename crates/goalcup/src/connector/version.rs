@@ -48,19 +48,29 @@ fn numbers(s: &str) -> Option<Vec<u64>> {
         .collect()
 }
 
+/// One `,`-separated part of a spec: its op (`""` for a prefix) and its numbers.
+fn spec_part(part: &str) -> Option<(&'static str, Vec<u64>)> {
+    let (op, value) = [">=", "<=", ">", "<", "="]
+        .iter()
+        .find_map(|op| part.strip_prefix(op).map(|rest| (*op, rest)))
+        .unwrap_or(("", part));
+    let value = value
+        .strip_suffix('x')
+        .unwrap_or(value)
+        .trim_end_matches('.');
+    numbers(value).map(|want| (op, want))
+}
+
+/// Whether every part of `spec` reads, so it can hold for some version.
+pub fn spec_ok(spec: &str) -> bool {
+    spec.split(',').all(|part| spec_part(part).is_some())
+}
+
 /// Whether `v` holds every `,`-separated part of `spec`: `>=1.2`, `<2`, `=1.0.105`, or a bare
 /// prefix such as `1.`, `1.x` or `0.22.6`. An empty spec or an unreadable part never holds.
 pub fn matches(v: &HarnessVersion, spec: &str) -> bool {
     spec.split(',').all(|part| {
-        let (op, value) = [">=", "<=", ">", "<", "="]
-            .iter()
-            .find_map(|op| part.strip_prefix(op).map(|rest| (*op, rest)))
-            .unwrap_or(("", part));
-        let value = value
-            .strip_suffix('x')
-            .unwrap_or(value)
-            .trim_end_matches('.');
-        let Some(want) = numbers(value) else {
+        let Some((op, want)) = spec_part(part) else {
             return false;
         };
         let order = (0..v.nums.len().max(want.len()))
@@ -140,10 +150,11 @@ mod tests {
         );
         assert_eq!(probe("echo 'error: needs Python 3.11.4' >&2; exit 1"), None);
         assert_eq!(probe("echo fakev 1.2.3; exit 1"), some("fakev 1.2.3"));
-        // A long line is cut at the probe, so it never fills the start line.
-        let long = probe(&format!("echo fakev 1.2.3 {}", "é".repeat(5000))).unwrap();
-        assert_eq!(long.encode_utf16().count(), 64);
-        assert!(long.starts_with("fakev 1.2.3 "));
+        // Cut at a char boundary to 64 UTF-16 units.
+        let long = format!("fakev 1.2.3 {}", "é".repeat(5000));
+        let cut = crate::connector::launch::cut_version(&long);
+        assert_eq!(cut.encode_utf16().count(), 64);
+        assert!(cut.starts_with("fakev 1.2.3 "));
         assert_eq!(probe("echo warning: no config >&2"), None);
         assert_eq!(probe("echo 'warning: node 2.0.1 deprecated' >&2"), None);
         assert_eq!(probe("echo 'fakev: requires bun 2.1.0' >&2; exit 1"), None);

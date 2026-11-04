@@ -254,10 +254,12 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     }
     // The probe runs with the base environment; the rows then pick the rules for that build.
     let program = launch::resolve_program(&connector.program, &env.vars);
-    let harness_version = free
+    let line = free
         .then(|| launch::harness_version(&program, &launch::build_env(connector, env, home)))
         .flatten();
-    let read = harness_version.as_deref().and_then(version::parse);
+    // Parsed whole, kept cut: a long line never fills the start line (launch::cut_version).
+    let read = line.as_deref().and_then(version::parse);
+    let harness_version = line.map(|l| launch::cut_version(&l).to_owned());
     let (effective, version_row) = connector.for_version(read.as_ref());
     let c = &effective;
     let mut argv: Vec<String> = c.args.iter().map(|a| fill(a)).collect();

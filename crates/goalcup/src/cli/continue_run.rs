@@ -203,7 +203,8 @@ pub fn prepare(
         goalcup_home: home.to_path_buf(),
         server_host: server.host().unwrap_or_default().to_owned(),
     };
-    let mut plan = connector::plan(&connector, &env, &super::isolated_home(home, &connector.id));
+    let iso = super::run_home(home, &connector, &sj.connector.id);
+    let mut plan = connector::plan(&connector, &env, &iso);
     if let Some(r) = &plan.refusal {
         return Err(refuse(text::refusal(r)));
     }

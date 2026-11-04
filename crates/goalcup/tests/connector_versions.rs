@@ -87,10 +87,26 @@ fn a_row_is_checked_like_the_base() {
 }
 
 #[test]
+fn a_row_match_must_read_and_unset_only_adds() {
+    for spec in ["", "1,x", ">= 1.2", "soon"] {
+        let row = format!("[[versions]]\nmatch = \"{spec}\"\n");
+        assert!(
+            matches!(c(&row), Err(ConnectorError::Invalid { key, .. }) if key == "versions[0].match"),
+            "{spec}"
+        );
+    }
+    let k = c("unset = [\"T_PROXY_URL\"]\n[[versions]]\nmatch = \"1.x\"\nunset = [\"T_NEW\"]\n")
+        .unwrap();
+    let (e, _) = k.for_version(v("1.0.0").as_ref());
+    assert_eq!(e.unset, ["T_PROXY_URL", "T_NEW"]);
+}
+
+#[test]
 fn checked_must_be_a_version() {
     assert!(c("checked = \"soon\"\n").is_err());
     assert!(c("checked = \"v2.2.2\"\n").is_err());
     assert!(c("checked = \"2.2.2\"\n").is_ok());
+    assert!(c("checked = \"2.2.2\"\n[[versions]]\nmatch = \">=2\"\n").is_err());
 }
 
 #[test]

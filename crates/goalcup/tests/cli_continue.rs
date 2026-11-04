@@ -473,6 +473,8 @@ fn continue_opencode2(line: &str, written: Value) -> Result<Ready, Stop> {
     std::fs::write(&fake, format!("#!/bin/sh\necho {line}\n")).unwrap();
     std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     w.part(1, false, Some(World::sealed(written)));
+    // The 1.0 run's home, which holds its sign-in and sessions.
+    std::fs::create_dir_all(w.gc().join("homes/opencode2-cli")).unwrap();
     let mut sj: Value = serde_json::from_slice(&w.server_json()).unwrap();
     sj["connector"] = json!({"id": "opencode2-cli", "name": "OpenCode", "source": "builtin"});
     put(&w.run_dir(), "server.json", &sj);
@@ -496,6 +498,12 @@ fn an_opencode2_run_continues_as_opencode() {
     let ready = continue_opencode2("opencode v2.2.2", json!({"model_requests": 1}))
         .unwrap_or_else(|s| panic!("{}", s.text));
     assert_eq!(ready.plan.connector.id, "opencode-cli");
+    // It goes on in the 1.0 home, which holds its sign-in and sessions.
+    assert!(
+        ready.plan.home.ends_with("homes/opencode2-cli"),
+        "{:?}",
+        ready.plan.home
+    );
     assert_eq!(
         ready.plan.harness_version.as_deref(),
         Some("opencode v2.2.2")

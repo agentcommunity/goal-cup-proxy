@@ -101,7 +101,12 @@ impl Connector {
         let r = &self.versions[i];
         over(&mut c.args, &r.args);
         over(&mut c.resume, &r.resume);
-        over(&mut c.unset, &r.unset);
+        // `unset` only adds: a row never lets back a variable the base removes.
+        for name in r.unset.iter().flatten() {
+            if !c.unset.contains(name) {
+                c.unset.push(name.clone());
+            }
+        }
         over(&mut c.host_hints, &r.host_hints);
         over(&mut c.secret_files, &r.secret_files);
         over(&mut c.no_prompts, &r.no_prompts);
@@ -507,8 +512,24 @@ fn check_versions(c: &Connector, file: &str) -> Result<(), ConnectorError> {
             reason: "must be a version such as 2.2.2",
         });
     }
+    // An unread version gets the base and is told it got `checked`'s rules: so no row may hold it.
+    let checked = c.checked.as_deref().and_then(super::version::parse);
+    if checked.is_some() && c.for_version(checked.as_ref()).1.is_some() {
+        return Err(ConnectorError::Invalid {
+            file: file.to_string(),
+            key: "checked".into(),
+            reason: "a [[versions]] row holds for it; checked names the base's build",
+        });
+    }
     for i in 0..c.versions.len() {
         let prefix = |key: String| format!("versions[{i}].{key}");
+        if !super::version::spec_ok(&c.versions[i].spec) {
+            return Err(ConnectorError::Invalid {
+                file: file.to_string(),
+                key: prefix("match".into()),
+                reason: "must be a version spec such as 1.x, 0.22.6 or >=1.2,<2",
+            });
+        }
         check(&c.apply(i), file).map_err(|e| match e {
             ConnectorError::Invalid { file, key, reason } => ConnectorError::Invalid {
                 file,

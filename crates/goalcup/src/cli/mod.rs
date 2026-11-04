@@ -154,6 +154,24 @@ pub fn isolated_home(home: &Path, id: &str) -> PathBuf {
     home.join("homes").join(id)
 }
 
+/// The isolated home a new start or setup uses for `c`: its own, else an existing one under an
+/// old id, so a home made under that id keeps its sign-in.
+pub fn connector_home(home: &Path, c: &crate::connector::Connector) -> PathBuf {
+    let own = isolated_home(home, &c.id);
+    let old = c.old_ids.iter().map(|id| isolated_home(home, id));
+    match own.exists() {
+        true => own,
+        false => old.into_iter().find(|p| p.exists()).unwrap_or(own),
+    }
+}
+
+/// The isolated home of a run recorded under `recorded`: that id's home when it is an old id of
+/// `c`, as the run's harness used it, else `c`'s own.
+pub fn run_home(home: &Path, c: &crate::connector::Connector, recorded: &str) -> PathBuf {
+    let old = c.old_ids.iter().any(|id| id == recorded);
+    isolated_home(home, if old { recorded } else { &c.id })
+}
+
 /// `runs/<run>/server.json`: never holds the credential.
 pub fn server_json(run_dir: &Path) -> PathBuf {
     run_dir.join("server.json")

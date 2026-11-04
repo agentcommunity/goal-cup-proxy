@@ -237,7 +237,7 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
     let plan = connector::plan(
         &connector,
         &env,
-        &super::isolated_home(&c.home, &connector.id),
+        &super::connector_home(&c.home, &connector),
     );
     if let Some(r) = &plan.refusal {
         return Err(stop(text::refusal(r)));
@@ -494,6 +494,7 @@ fn tier_line(name: &str, probed: Option<&str>, id: &str) -> String {
     let row = rows.remove(id).unwrap_or_default();
     let text = |v: &str| connector::version::parse(v).map_or(v.to_owned(), |p| p.text);
     let mut builds: Vec<(String, String)> = (row.builds.iter())
+        .filter(|b| !b.version.is_empty())
         .map(|b| (text(&b.version), b.os.clone()))
         .collect();
     if builds.is_empty() && !row.version.is_empty() {
@@ -574,6 +575,14 @@ mod tests {
         assert_eq!(
             row(None, &b, "macos"),
             "Fakev: verified with goalcup on 0.22.6, 0.22.5 (macOS); goalcup cannot say the build here is one of those."
+        );
+        let mac = [
+            ("0.22.6".to_owned(), "darwin-arm64".to_owned()),
+            ("0.22.6".to_owned(), "darwin-x86_64".to_owned()),
+        ];
+        assert_eq!(
+            row(None, &mac, "linux"),
+            "Fakev: verified with goalcup on 0.22.6 (macOS), not on Linux; goalcup cannot say the build here is one of those."
         );
         let one = [("2.1.312".to_owned(), String::new())];
         assert_eq!(

@@ -1251,6 +1251,7 @@ pub fn tier_line(
         for (v, os) in list {
             let os = label(os);
             match groups.iter_mut().find(|(o, _)| *o == os) {
+                Some((_, vs)) if vs.contains(&v.as_str()) => {}
                 Some((_, vs)) => vs.push(v),
                 None => groups.push((os, vec![v])),
             }
@@ -1273,10 +1274,17 @@ pub fn tier_line(
         ("verified", _) if pool.is_empty() => format!(
             "{who}: not verified. goalcup records what reaches it; goalcup status says if model requests are missing."
         ),
-        ("verified", None) => format!(
-            "{name}: verified with goalcup on {}; goalcup cannot say the build here is one of those.",
-            on(&pool)
-        ),
+        ("verified", None) => {
+            let not_here = if here.is_empty() && !host.is_empty() {
+                format!(", not on {host}")
+            } else {
+                String::new()
+            };
+            format!(
+                "{name}: verified with goalcup on {}{not_here}; goalcup cannot say the build here is one of those.",
+                on(&pool)
+            )
+        }
         ("verified", Some(v)) if this.is_empty() => format!(
             "{who}: not verified on {v}; verified with goalcup on {}. {same}",
             on(&pool)

@@ -189,6 +189,11 @@ fn a_held_home_refuses_and_the_version_probe_never_holds_the_start() {
     );
     assert!(plan.version_notes.is_empty());
     drop(plan);
+    // A long line is parsed whole and kept cut to 64 UTF-16 units.
+    let plan = probe(d, &format!("echo fakev {} 1.9.0", "x".repeat(80)));
+    let kept = plan.harness_version.as_deref().unwrap();
+    assert_eq!((kept.len(), plan.version_row.as_deref()), (64, Some("1.x")));
+    drop(plan);
     let plan = probe(d, "sleep 30");
     assert_eq!((plan.harness_version, plan.refusal), (None, None));
 }

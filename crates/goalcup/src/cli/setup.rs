@@ -19,7 +19,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Server, awake, fail, folder, isolated_home, record_hosts};
+use super::{Server, awake, fail, folder, record_hosts};
 use super::{setup_json, text};
 use crate::connector::launch::{fill, make_dir, resolve_program};
 use crate::connector::{self, Connector, Decision, Env, Form, HostList, LaunchPlan};
@@ -111,7 +111,7 @@ fn write_home(
     vars: BTreeMap<String, String>,
     ask: bool,
 ) -> Result<Option<String>, String> {
-    let iso = isolated_home(home, &c.id);
+    let iso = super::connector_home(home, c);
     let env = Env {
         vars,
         // Setup has no project folder: a `{workspace}` row then reads in the isolated home, which
