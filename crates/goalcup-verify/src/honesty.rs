@@ -53,7 +53,7 @@ struct Counts {
     unnamed: u64,
     empty: u64,
     checked: u64,
-    warn: u64,
+    named: u64,
     fail: u64,
     no_plain_tail: u64,
     unaccounted: u64,
@@ -395,7 +395,7 @@ impl Honesty {
             check.raise(Res::Named, "", Some(at));
         }
         if c.after_trust && !c.quiet {
-            check.raise(Res::Warn, "", Some(at));
+            check.raise(Res::Named, "", Some(at));
             let fp = c.fp.clone().unwrap_or_default();
             self.refused.insert((c.host.clone(), fp));
         }
@@ -436,7 +436,7 @@ impl Honesty {
             let res = if big && un > plain / 2 && c.gaps == 0 {
                 Res::Fail
             } else if big && un > plain / 10 {
-                Res::Warn
+                Res::Named
             } else {
                 Res::Pass
             };
@@ -447,7 +447,7 @@ impl Honesty {
             inc(&mut self.n.checked, 1);
             match w {
                 Res::Fail => inc(&mut self.n.fail, 1),
-                Res::Warn => inc(&mut self.n.warn, 1),
+                Res::Named => inc(&mut self.n.named, 1),
                 _ => {}
             }
         }
@@ -506,7 +506,7 @@ impl Honesty {
         fill(&mut listed, why, facts);
         let mut why = format!(
             "{} of {} decrypted connections have bytes no stream accounts for ({} bytes)",
-            n.warn + n.fail,
+            n.named + n.fail,
             n.checked,
             n.unaccounted
         );
@@ -516,7 +516,7 @@ impl Honesty {
                 n.no_plain_tail
             );
         }
-        let facts = json!({"checked": n.checked, "warn": n.warn, "fail": n.fail,
+        let facts = json!({"checked": n.checked, "named": n.named, "fail": n.fail,
             "unaccounted_bytes": n.unaccounted, "no_plain_tail": n.no_plain_tail});
         fill(&mut bytes, why, facts);
         let why = format!(

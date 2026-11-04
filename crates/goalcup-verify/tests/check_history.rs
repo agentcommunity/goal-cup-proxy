@@ -448,10 +448,10 @@ fn a_gap_on_an_unrelated_stream_does_not_cover_a_dropped_call() {
 }
 
 #[test]
-fn a_missing_text_answer_only_warns() {
+fn history_text_missing_is_named() {
     for s in [Anthropic, Chat] {
         let d = rec("h-text", |e| drop(chain(e, s, true, 5, Some((2, false)))));
-        assert_eq!(missing(&verdict(&d, "warn", 0)), (0, 1, 0));
+        assert_eq!(missing(&verdict(&d, "named", 1)), (0, 1, 0));
     }
 }
 
@@ -785,8 +785,12 @@ fn a_masked_resend_of_a_streamed_answer_matches() {
 }
 
 #[test]
-fn a_masked_resend_whose_call_was_dropped_still_warns() {
-    let h = verdict(&masked_resend("h-mask-drop", false, false, None), "warn", 0);
+fn a_masked_resend_whose_call_was_dropped_is_named() {
+    let h = verdict(
+        &masked_resend("h-mask-drop", false, false, None),
+        "named",
+        1,
+    );
     assert_eq!(missing(&h), (0, 1, 0));
 }
 
@@ -797,12 +801,12 @@ fn a_masked_resend_with_a_dropped_tool_call_still_fails() {
 }
 
 #[test]
-fn a_masked_resend_with_a_rewritten_tail_warns() {
+fn a_masked_resend_with_a_rewritten_tail_is_named() {
     let tail = format!("{}, changed", &TAIL[..TAIL.len() - 10]);
     let h = verdict(
         &masked_resend("h-mask-tail", true, false, Some(&tail)),
-        "warn",
-        0,
+        "named",
+        1,
     );
     assert_eq!(missing(&h), (0, 1, 0));
 }

@@ -332,6 +332,13 @@ fn gap_reason_8_warns_and_does_not_crash() {
     assert_eq!(code, 1, "{:?}", ids_with(&v, "fail"));
 }
 
+/// A warn moves no exit, but the text form still prints it.
+#[test]
+fn a_warn_is_printed_in_the_text_form() {
+    let t = text(&m_gap_reason_8("gap-reason-8-text"));
+    assert!(t.contains("gap_reason_unknown warn"), "{t}");
+}
+
 #[test]
 fn missing_input_exits_3() {
     let gone = tmp("missing").join("no-such-entry");

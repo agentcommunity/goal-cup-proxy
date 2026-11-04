@@ -864,6 +864,16 @@ pub fn run(args: &[&str]) -> (i32, Option<Value>) {
     )
 }
 
+/// The text form of `check <dir>`: what it prints on stderr.
+pub fn text(dir: &Path) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
+        .arg("check")
+        .arg(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
 /// `check <dir> --json [extra]`.
 pub fn check(dir: &Path, extra: &[&str]) -> (i32, Value) {
     let mut args = vec!["check", dir.to_str().unwrap(), "--json"];

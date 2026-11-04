@@ -349,6 +349,17 @@ fn refusal_after_trust_lists_a_learned_refusal_but_not_a_silent_one() {
     }
 }
 
+/// A learned refusal that moved nothing and has no GAP of its own is still a named loss.
+#[test]
+fn refusal_after_trust_with_no_gap_is_named() {
+    let mut e = Entry::new("refusal-bare");
+    e.exchange(EndReason::Complete);
+    tunnel_bytes(&mut e, HOST, "tls_refused", None, (0, 0));
+    let (code, v) = sealed(e);
+    assert_eq!(result(&v, "listed_hosts_decrypted"), "named");
+    assert_eq!(code, 1);
+}
+
 /// One request stream of `n` bytes, all `*` and all under one `fail_closed` MASK (rule 2).
 fn fail_closed_span(n: u64) -> (i32, Value) {
     let mut e = Entry::new("fail-closed");

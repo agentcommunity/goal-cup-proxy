@@ -129,12 +129,12 @@ fn entry(name: String, o: &Outcome, checks: &[Check]) -> Value {
         "links": o.links, "checks": checks, "counts": counts, "history": hist.map(|k| &k.facts), "threads": threads})
 }
 
-/// The text form of one entry: `why` per failed or named check, then the coverage line.
+/// The text form of one entry: `why` per warned, failed or named check, then the coverage line.
 fn text(name: &str, o: &Outcome, checks: &[Check]) -> String {
     let c = &o.counts;
     let mut t = format!("goalcup-verify: entry {name}\n");
     let hist = (checks.iter().find(|k| k.id == "history_complete")).map(history::line);
-    for k in checks.iter().filter(|k| k.result >= Res::Named) {
+    for k in checks.iter().filter(|k| k.result >= Res::Warn) {
         t += &format!("  {} {}: {}\n", k.id, k.result.name(), k.why);
     }
     if !o.sealed {

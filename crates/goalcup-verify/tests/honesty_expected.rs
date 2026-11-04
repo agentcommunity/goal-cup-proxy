@@ -88,22 +88,24 @@ fn a_sign_in_tunnel_to_a_never_host_is_still_free() {
 
 /// A clean entry whose start event's `hosts_sha256` is `to`; `None` removes the key, as in a
 /// record an older build wrote.
-fn with_hosts_sha256(name: &str, to: Option<&str>) -> Value {
-    let dir = mutate(&clean(name), None, |recs| {
+fn with_hosts_sha256(name: &str, to: Option<&str>) -> std::path::PathBuf {
+    mutate(&clean(name), None, |recs| {
         edit_event(recs, "start", 0, |s| match to {
             Some(h) => s["hosts_sha256"] = json!(h),
             None => drop(s.as_object_mut().unwrap().remove("hosts_sha256")),
         })
-    });
-    check(&dir, &[]).1
+    })
 }
 
 #[test]
 fn a_different_host_list_hash_is_a_visible_warn() {
-    let v = with_hosts_sha256("hosts-other", Some(&"a".repeat(64)));
+    let dir = with_hosts_sha256("hosts-other", Some(&"a".repeat(64)));
+    let v = check(&dir, &[]).1;
     assert_eq!(result(&v, "listed_hosts_decrypted"), "warn");
     let why = item(&v, "listed_hosts_decrypted")["why"].as_str().unwrap();
     assert!(why.contains("host list"), "{why}");
+    let t = text(&dir);
+    assert!(t.contains("host list"), "{t}");
 }
 
 #[test]
@@ -116,14 +118,14 @@ fn a_fresh_record_and_an_old_one_without_the_hash_do_not_warn() {
         ),
         "pass"
     );
-    let v = with_hosts_sha256("hosts-none", None);
+    let v = check(&with_hosts_sha256("hosts-none", None), &[]).1;
     assert_eq!(result(&v, "listed_hosts_decrypted"), "pass");
 }
 
 #[test]
 fn an_empty_or_all_zero_host_list_hash_is_absent() {
     for h in ["", &"0".repeat(64)] {
-        let v = with_hosts_sha256("hosts-zero", Some(h));
+        let v = check(&with_hosts_sha256("hosts-zero", Some(h)), &[]).1;
         assert_eq!(result(&v, "listed_hosts_decrypted"), "pass", "{h:?}");
     }
 }
