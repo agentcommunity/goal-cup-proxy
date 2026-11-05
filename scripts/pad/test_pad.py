@@ -1345,20 +1345,27 @@ class MiniFixRound(unittest.TestCase):
 class WorkEvidence(unittest.TestCase):
     """A row that committed nothing yet but made many model requests did work; one with neither did not (W2)."""
 
-    def row(self, commits, reqs, native=1):
+    def row(self, commits, reqs, native=1, calls=None):
+        use = {"verify/usage/e1.json": {"coverage": {"native_calls": calls}, "tokens": {"merged": {"input": 9, "output": 9}}}} if calls is not None else {}
         return evaluate({"meta.json": {"connector": "codex-cli", "case": "direct", "known_box": True, "entry": "e1",
-                                       "commits_since_start": commits},
+                                       "commits_since_start": commits}, **use,
                          "verify/check-local.json": {"exit": 0, "entries": [{"entry": "e1", "counts": {"model_requests": reqs, "native_files": native},
                                                                               "checks": []}]},
                          "verify/exits.json": {"secrets": 0, "secrets-out": 0, "secrets-plain": 0}})
 
     def test_many_requests_without_commits_is_work(self):
-        row = self.row(0, 380)
+        row = self.row(0, 380, calls=40)
         self.assertFalse(any("did no work" in w for w in row["why"]), row["why"])  # the fixture has no S6 checks, so C1 stays INCONCLUSIVE for its own reason
 
     def test_many_requests_without_a_tool_turn_or_commit_is_no_work(self):  # chat only, or a permission-screen retry loop (W3)
         row = self.row(0, 380, native=0)
         self.assertEqual(row["checks"]["C1"], "INCONCLUSIVE")
+        self.assertTrue(any("tool turn none" in w for w in row["why"]), row["why"])
+
+    def test_a_native_session_file_alone_is_not_a_tool_turn(self):  # Codex whose model never answered still leaves a session file
+        row = self.row(0, 380, native=1)
+        self.assertTrue(any("tool turn none" in w for w in row["why"]), row["why"])
+        row = self.row(0, 380, native=1, calls=0)
         self.assertTrue(any("tool turn none" in w for w in row["why"]), row["why"])
 
     def test_wire_threads_with_parents_are_a_tool_turn_without_a_native_reader(self):  # S1: opencode, 479 requests, linked subagents, no native stream
