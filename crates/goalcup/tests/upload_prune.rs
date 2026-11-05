@@ -123,8 +123,13 @@ fn closed_parts_go_during_the_run_once_confirmed_and_the_open_part_stays() {
         keep: false,
     });
     let open = parts.last().unwrap().clone();
+    // The uploader removes the closed parts first and records the count in `upload.json` after,
+    // so wait for both, not only for the files to go (bounded by HANG, never a speed check).
     let start = Instant::now();
-    while on_disk(&dir).len() > 1 && start.elapsed() < common::HANG {
+    let pruned = parts.len() as u64 - 1;
+    while (on_disk(&dir).len() > 1 || state::read(&dir).is_none_or(|j| j.pruned.parts < pruned))
+        && start.elapsed() < common::HANG
+    {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(fake.stream(ENTRY), all, "every byte reached the server");
