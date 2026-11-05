@@ -38,8 +38,8 @@ Exit codes: 0 done; 1 refused, and you can fix it; 3 the command could not do it
     )
 }
 
-pub const FILE_FLAGS_COMPETE: &str = "--connector and --hosts are for practice and test runs. \
-A competition run uses the connectors built into goalcup.";
+pub const FILE_FLAGS_COMPETE: &str = "--connector, --hosts and a connector file given to --harness \
+are for practice and test runs. A competition run uses the connectors built into goalcup.";
 
 pub const BAD_SERVER: &str = "GOALCUP_SERVER must be off, an https:// address, or an http:// \
 address on this computer (127.0.0.1, ::1 or localhost).";
@@ -114,7 +114,16 @@ pub fn prompt_inside(file: &Path) -> String {
 }
 
 pub fn prompt_missing(file: &Path) -> String {
-    format!("The prompt file \"{}\" does not exist.", file.display())
+    format!(
+        "The prompt file \"{}\" does not exist. A relative path is taken inside the project folder; \
+         give a path outside it, such as ~/goal-prompt.txt.",
+        file.display()
+    )
+}
+
+/// A server message without its closing full stop and spaces, so the sentence around it adds one.
+fn sentence(said: &str) -> String {
+    said.trim_end_matches(['.', ' ']).to_string()
 }
 
 pub fn synced_folder(project: &Path) -> String {
@@ -154,7 +163,13 @@ pub fn harness_found(name: &str, version: Option<&str>, program: &Path) -> Strin
 }
 
 pub fn not_installed(name: &str) -> String {
-    format!("{name} is not installed. Install it, then run goalcup setup again.")
+    format!("{name} is not installed. Install it, then run the command again.")
+}
+
+pub fn setup_needs_terminal(name: &str) -> String {
+    format!(
+        "Nothing was written and sign-in was not checked. Run goalcup setup in a terminal to sign in to {name}, or goalcup setup --yes to write its settings only."
+    )
 }
 
 pub fn no_harness(installed: &[&str]) -> String {
@@ -175,10 +190,6 @@ pub fn refusal(r: &Refusal) -> String {
         Refusal::SettingSet { file, key } => format!(
             "\"{}\" sets {key}, which routes around the recorder. Remove it, then run this again.",
             file.display()
-        ),
-        Refusal::VersionMismatch { program, want } => format!(
-            "{program} --version does not show {want}, the version goalcup works with. Install \
-             that one, then run this again."
         ),
     }
 }
@@ -228,6 +239,8 @@ pub fn no_sleep_lock(why: &str) -> String {
     )
 }
 
+pub const LID_NOTE: &str = "On a laptop the lock does not keep the Mac awake on battery or with the lid closed: use mains power and keep the lid open.";
+
 pub const SERVER_OFF: &str = "Server check skipped: GOALCUP_SERVER=off, so nothing is uploaded.";
 
 pub fn server_unreachable(e: &ServerError) -> String {
@@ -274,19 +287,25 @@ pub fn approval_stopped(why: &str) -> String {
 }
 
 pub fn approval_refused(said: &str) -> String {
-    format!("The server refused the approval request: {said}. {NOTHING_CREATED}")
+    format!(
+        "The server refused the approval request: {}. {NOTHING_CREATED}",
+        sentence(said)
+    )
 }
 
 /// Ctrl-C landed after the server opened the run and it was saved: nothing was launched.
 pub fn opened_then_stopped(run: &str) -> String {
     format!(
-        "You pressed Ctrl-C after the run {run} was opened and saved. The harness was not started. \
-         Running goalcup start again opens a new run; the run {run} stays open and its deadline keeps running."
+        "You pressed Ctrl-C after run {run} was opened and saved. The harness was not started. \
+         Its deadline keeps running. To go on, run: goalcup continue {run}"
     )
 }
 
 pub fn open_refused(said: &str) -> String {
-    format!("The server did not open the run: {said}. {NOTHING_CREATED} Run the command again.")
+    format!(
+        "The server did not open the run: {}. {NOTHING_CREATED} Run the command again.",
+        sentence(said)
+    )
 }
 
 pub fn bad_answer() -> String {
@@ -307,7 +326,8 @@ pub fn repo_missing(repo: &str) -> String {
 
 pub fn repo_not_empty(repo: &str) -> String {
     format!(
-        "{repo} already has commits. A run needs a new, empty, public repository: no README, .gitignore or license. {NOTHING_CREATED}"
+        "{repo} already has commits. A run needs a new, empty, public repository: no README, .gitignore or license. {NOTHING_CREATED} \
+         To go on with a run you already started, run: goalcup continue."
     )
 }
 
@@ -319,7 +339,7 @@ pub fn masking(db: Option<&str>) -> String {
         ("", format!(", and {n}'s database"))
     });
     format!(
-        "Goal Cup Proxy hides known secret shapes in memory, before anything is saved: API keys with a \
+        "goalcup hides known secret shapes in memory, before anything is saved: API keys with a \
          known prefix, login headers, cookies, passwords in URLs, private keys, login tokens, values \
          named like `api_key`, `secret`, `token` or `password`, and your project's GitHub token. The \
          values of known keys found in your project's own files and in your environment are hidden \
@@ -461,10 +481,11 @@ pub fn gap_words(name: &str) -> String {
         "protocol_other" => "a connection in a form goalcup does not read",
         "source_changed" => "a session file was replaced or cut short",
         "tls_refused" => "the program refused the recorder",
-        "pinned" => "the host list pins it",
+        "pinned" => "the host list says to pass it through unread",
         "cut_at_seal" => "still arriving when the part ended",
         "mask_failed" => "goalcup could not check it for secrets, so it dropped it",
         "upstream_untrusted" => "the model service's certificate was not one goalcup trusts",
+        "upstream_handshake_failed" => "the connection to the model service failed twice",
         "after_stop" => "sent after the agent ended",
         _ => {
             let n = name
@@ -535,7 +556,8 @@ pub fn state_line(state: &State, run: &str) -> String {
         State::Null { since } => format!(
             "{}it stopped right after each restart, so goalcup lets your agent's traffic pass \
              unrecorded for now. Your agent keeps working. goalcup tries again at most 5 minutes \
-             apart until the run ends. The server is told.",
+             apart until the run ends. The server is told. You need do nothing. If it stays off, \
+             write to {SUPPORT_ADDRESS}.",
             off(since)
         ),
         State::NotAnswering { since } => format!(
@@ -620,7 +642,8 @@ pub fn quiet_proxy(name: &str) -> String {
 pub fn no_request_yet() -> String {
     format!(
         "{PROBLEM} No model request was written yet. If your agent is working, it may not use the \
-         recording proxy."
+         recording proxy. Give it a few minutes, then run goalcup status again. If this stays \
+         after 10 minutes of work, write to {SUPPORT_ADDRESS}."
     )
 }
 
@@ -628,6 +651,14 @@ pub fn native_missing(row: &str, name: &str) -> String {
     format!(
         "goalcup has found no {row} file for {name} yet. Its session may be stored somewhere \
          goalcup does not read."
+    )
+}
+
+pub fn native_missing_redirect(row: &str, name: &str, var: &str) -> String {
+    format!(
+        "goalcup has found no {row} file for {name} in its goalcup home. If this build no longer \
+         reads {var}, its sessions go to your usual folder and are not recorded; model requests \
+         still are."
     )
 }
 
@@ -693,6 +724,12 @@ pub fn fd_limit(limit: Option<u64>) -> String {
     format!("Many connections are open at once{limit}. New ones wait a moment; none is refused.")
 }
 
+pub fn harness_changed(name: &str) -> String {
+    format!(
+        "{name} changed on disk during the run (an update?). goalcup keeps recording; the record shows when."
+    )
+}
+
 pub fn fail_closed(bytes: u64) -> String {
     format!(
         "goalcup hid {} it could not check for secrets in time. Those bytes are stars in the record.",
@@ -746,7 +783,7 @@ pub fn continue_now(run: &str) -> String {
 pub fn no_request_written(name: &str, pinned: Option<&str>) -> String {
     match pinned {
         Some(host) => format!(
-            "No model request was written. The host list pins {host}, so its traffic passed through unread."
+            "No model request was written. The host list says to pass {host} through unread, so its traffic was not recorded."
         ),
         None => format!(
             "No model request was written. {name} may not use the recording proxy, or it made no call."
@@ -1031,12 +1068,28 @@ this computer, so there is no time left to show.";
 pub const PUSH_FRAME: &str = "Your first message must start with these lines. Without them your \
 agent cannot push, and you may not send them later.";
 
+/// After the push lines on `continue` when `start` never wrote the first message.
+pub const PROMPT_AFTER_PUSH: &str =
+    "If you gave goalcup start a --prompt, put it after these lines, in the same first message.";
+
 pub fn first_message(file: &Path, copied: bool) -> String {
     let clip = if copied { "on your clipboard and " } else { "" };
     format!(
         "Your first message (the push block, then your prompt) is {clip}in {}. Paste it once as your first message and press Enter.",
         file.display()
     )
+}
+
+/// `status` of a run whose newest part was never started (Ctrl-C after the open).
+pub fn not_launched(run: &str, name: &str) -> String {
+    format!(
+        "Run {run} was opened but {name} was not started. To go on, run: goalcup continue {run}"
+    )
+}
+
+/// The `status` line for the file holding the first message.
+pub fn first_message_line(file: &Path) -> String {
+    format!("First message: {}", file.display())
 }
 
 pub fn prompt_not_utf8(file: &Path) -> String {
@@ -1125,6 +1178,27 @@ pub const NEEDS_REPO: &str =
 
 pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harness <id>";
 
+/// The end screen's first line when the harness never started; `kind` is the logged io error.
+pub fn harness_not_started(name: &str, kind: Option<&str>, run: &str) -> String {
+    // `PermissionDenied` reads "permission denied".
+    let words = |k: &str| {
+        k.chars().enumerate().fold(String::new(), |mut s, (i, ch)| {
+            if ch.is_uppercase() && i > 0 {
+                s.push(' ');
+            }
+            s.extend(ch.to_lowercase());
+            s
+        })
+    };
+    match kind.map(words) {
+        Some(kind) => format!(
+            "{name} did not start ({kind}). Check that it runs on its own, then run goalcup \
+             continue {run}."
+        ),
+        None => format!("{name} did not start."),
+    }
+}
+
 pub fn mask_refused() -> String {
     format!("goalcup could not set up masking, so nothing was started. Write to {SUPPORT_ADDRESS}.")
 }
@@ -1139,8 +1213,11 @@ pub fn run_kind(mode: RunMode) -> &'static str {
 
 /// The harness version could not be read. The upload sentence is said only when there is an upload,
 /// because the upload carries "unknown".
-pub fn version_unread(name: &str, upload: bool) -> String {
-    let said = format!("{name}'s version could not be read, so the run starts without it.");
+/// The one start line for an unread version; `rules` names whose rules apply, on a connector with
+/// `[[versions]]` rows.
+pub fn version_unread(name: &str, upload: bool, rules: Option<&str>) -> String {
+    let with = rules.map_or_else(String::new, |r| format!(", with the rules for {r}"));
+    let said = format!("{name}'s version could not be read, so the run starts without it{with}.");
     if upload {
         format!("{said} The upload says unknown.")
     } else {
@@ -1155,17 +1232,80 @@ pub fn upload_to(host: Option<&str>) -> String {
     }
 }
 
-pub fn tier_line(name: &str, version: Option<&str>, tier: &str, verified: &str) -> String {
+/// `os` is the tiers row's (`darwin-arm64`), `host_os` is `std::env::consts::OS`; `""` names none.
+pub fn tier_line(
+    name: &str,
+    version: Option<&str>,
+    tier: &str,
+    builds: &[(String, String)],
+    host_os: &str,
+) -> String {
+    let label = |os: &str| match os.split('-').next().unwrap_or_default() {
+        "darwin" | "macos" => "macOS".to_owned(),
+        "linux" => "Linux".to_owned(),
+        other => other.to_owned(),
+    };
+    let host = label(host_os);
+    // Builds on this OS (or with no OS) first; with none, every build under its own OS.
+    let near = |(_, os): &&(String, String)| label(os).is_empty() || label(os) == host;
+    let here: Vec<&(String, String)> = builds.iter().filter(near).collect();
+    let pool = if here.is_empty() {
+        builds.iter().collect()
+    } else {
+        here.clone()
+    };
+    // "0.22.6, 0.22.5 (macOS), 0.22.5 (Linux)": versions grouped by OS, in order.
+    let on = |list: &[&(String, String)]| {
+        let mut groups: Vec<(String, Vec<&str>)> = Vec::new();
+        for (v, os) in list {
+            let os = label(os);
+            match groups.iter_mut().find(|(o, _)| *o == os) {
+                Some((_, vs)) if vs.contains(&v.as_str()) => {}
+                Some((_, vs)) => vs.push(v),
+                None => groups.push((os, vec![v])),
+            }
+        }
+        let group = |(os, vs): &(String, Vec<&str>)| match os.is_empty() {
+            true => vs.join(", "),
+            false => format!("{} ({os})", vs.join(", ")),
+        };
+        groups.iter().map(group).collect::<Vec<_>>().join(", ")
+    };
+    let same =
+        "goalcup records it the same way; goalcup status says if model requests are missing.";
     let who = version.map_or_else(|| name.to_owned(), |v| format!("{name} {v}"));
-    match tier {
-        "verified" if version.is_some_and(|v| v != verified) => {
+    let this: Vec<&(String, String)> = pool
+        .iter()
+        .copied()
+        .filter(|(b, _)| Some(b.as_str()) == version)
+        .collect();
+    match (tier, version) {
+        ("verified", _) if pool.is_empty() => format!(
+            "{who}: not verified. goalcup records what reaches it; goalcup status says if model requests are missing."
+        ),
+        ("verified", None) => {
+            let not_here = if here.is_empty() && !host.is_empty() {
+                format!(", not on {host}")
+            } else {
+                String::new()
+            };
             format!(
-                "{who}: verified with goalcup on {verified}, not on {}.",
-                version.unwrap_or_default()
+                "{name}: verified with goalcup on {}{not_here}; goalcup cannot say the build here is one of those.",
+                on(&pool)
             )
         }
-        "verified" => format!("{who}: verified with goalcup on {verified}."),
-        "not supported" => format!(
+        ("verified", Some(v)) if this.is_empty() => format!(
+            "{who}: not verified on {v}; verified with goalcup on {}. {same}",
+            on(&pool)
+        ),
+        ("verified", _) if here.is_empty() => {
+            format!(
+                "{who}: verified with goalcup on {}, not on {host}. {same}",
+                on(&this)
+            )
+        }
+        ("verified", _) => format!("{who}: verified with goalcup on {}.", on(&this)),
+        ("not supported", _) => format!(
             "{name}: not supported. goalcup records its session files and the connections it can see, not its model calls."
         ),
         _ => format!(
@@ -1255,12 +1395,19 @@ pub fn file_changed(what: &str, first: &str) -> String {
     )
 }
 
+pub fn wrong_folder(run: &str, folder: &str) -> String {
+    format!("Run {run} was started in \"{folder}\". Run goalcup continue there.")
+}
+
 pub fn updated(name: &str, from: &str, to: &str) -> String {
     format!("{name} was updated from {from} to {to} since the last part.")
 }
 
 pub fn refused(said: &str) -> String {
-    format!("The server did not continue the run: {said}. Nothing was started.")
+    format!(
+        "The server did not continue the run: {}. Nothing was started.",
+        sentence(said)
+    )
 }
 
 // `goalcup recover` (section 3.2).

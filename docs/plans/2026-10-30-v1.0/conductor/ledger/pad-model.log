@@ -1,9 +1,0 @@
-19:32Z | pad-model planner PRD-12 | decision | branch v1.0/prd-12-haiku created from integration; slice: pin Claude Code to Haiku both cases, Codex gateway to cheapest, rig records pinned model, C5 flags mismatch
-19:32Z | pad-model builder PRD-12 | start | model-pin-data
-19:32Z | pad-model builder PRD-12 | start | model-pin-rig
-19:35Z | pad-model builder PRD-12 | stop | model-pin-rig pushed, pad tests green (100) on merge with data branch
-19:35Z | pad-model merger PRD-12 | start | merging integration and task branches
-19:36Z | pad-model merger PRD-12 | stop | pushed 306e4016, pad tests pass in box
-19:39Z | pad-model fixer PRD-12 | fix | pin mismatch is a warning, subagent aliases pinned, tests trimmed, pushed
-19:40Z | pad-model fixer PRD-12 | fix | A5 gateway fallback ceiling line restored, tests green, pushed
-19:41Z | pad-model merge-requester PRD-12 | seam | queued 194106-prd-12-haiku for v1.0/prd-12-haiku

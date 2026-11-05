@@ -1,0 +1,13 @@
+# A release row template: scripts/pad/release-rows fills its @...@ placeholders (see that script).
+# The two exec rows (h2-parallel, long-tunnel); their verdicts are the owner's judgement (release-rows prints how).
+# curl 8.10 or later from Homebrew: it offers only h2 in ALPN with prior knowledge. The home is kept for goalcup-verify dump.
+harness = "hermes-cli"
+key = "deepseek"
+case = "direct"
+mode = "micro"
+where = "here"
+build = "@BUILD@"
+steps = ["exec h2-parallel.sh@1", "exec long-tunnel.sh@2"]
+versions = ["0.22.6"]
+here_path = ["@HARNESS_INSTALLS@/hermes-cli-0.22.6/bin", "/opt/homebrew/opt/curl/bin"]
+goalcup_home = "@EXEC_HOME@"

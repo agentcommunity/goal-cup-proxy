@@ -1,14 +1,17 @@
 //! `goalcup-verify check` on PRD-01's 14 invariants (PRD-08 section 3, "Integrity"): a clean
 //! entry passes, as part files and as a fetched copy; one mutation per invariant, plus wrong or
-//! missing COUNT and seal keys, a torn tail and a repeated native `path` and `gen`, fails its own
-//! check with exit 2 (PRD-17 VR3: never 3); an unknown record kind and GAP reason 8 only warn.
+//! missing COUNT and seal keys, a broken PART chain, a torn tail and a repeated native `path`
+//! and `gen`, fails its own check with exit 2 (PRD-17 VR3: never 3); an unknown record kind and
+//! GAP reason 8 only warn.
 
 mod common;
 
 use common::*;
 use goalcup_format::codec::Record;
+use goalcup_format::read::part_files;
 use goalcup_format::{GapReason, StreamKind};
 use serde_json::{Value, json};
+use std::fs;
 use std::path::PathBuf;
 
 fn is_open(r: &Record, kind: StreamKind) -> bool {
@@ -205,6 +208,20 @@ fn m_torn_tail(name: &str) -> PathBuf {
     d
 }
 
+/// The same cut record in an entry that is not sealed: the recorder closes a frame only at a
+/// LINK, so a closed frame never ends inside a record, sealed or not.
+fn m_torn_tail_unsealed(name: &str) -> PathBuf {
+    let d = mutate(&clean(name), None, |r| {
+        let ev = |j: &[u8]| serde_json::from_slice::<Value>(j).unwrap()["ev"].clone();
+        r.truncate(find(
+            r,
+            |x| matches!(x, Record::Event { json, .. } if ev(json) == "seal"),
+        ));
+    });
+    append_raw(&d, &[0x07, 0x20, 0x00]);
+    d
+}
+
 fn m_native_path_gen_twice(name: &str) -> PathBuf {
     let mut e = standard(name);
     e.native("fake:sessions/s1.jsonl", 0, 22);
@@ -215,6 +232,76 @@ fn m_gap_reason_8(name: &str) -> PathBuf {
     let mut e = standard(name);
     e.gap(0, GapReason::from_u8(8), 1_000, 0, 1, Value::Null);
     e.seal()
+}
+
+fn m_event_not_json(name: &str) -> PathBuf {
+    mutate(&clean(name), None, |r| {
+        let i = find(r, |x| matches!(x, Record::Event { .. }));
+        if let Record::Event { json, .. } = &mut r[i] {
+            *json = b"{not json".to_vec();
+        }
+    })
+}
+
+fn m_end_tail_not_json(name: &str) -> PathBuf {
+    mutate(&clean(name), None, |r| {
+        let i = find(r, |x| matches!(x, Record::End { .. }));
+        if let Record::End { tail, .. } = &mut r[i] {
+            *tail = b"{not json".to_vec();
+        }
+    })
+}
+
+/// A sealed entry of two part files: the recorder died and a second boot came back.
+fn two_parts(name: &str) -> PathBuf {
+    let mut e = standard(name);
+    e.crash("killed", 5_000);
+    e.count();
+    e.seal()
+}
+
+fn m_part_prev_wrong(name: &str) -> PathBuf {
+    mutate_part(&two_parts(name), 1, |r| {
+        if let Record::Part { prev, .. } = r {
+            prev[0] ^= 1;
+        }
+    })
+}
+
+fn m_part_raw_offset_wrong(name: &str) -> PathBuf {
+    mutate_part(&two_parts(name), 1, |r| {
+        if let Record::Part { raw_offset, .. } = r {
+            *raw_offset += 1;
+        }
+    })
+}
+
+fn m_part_number_skips(name: &str) -> PathBuf {
+    mutate_part(&two_parts(name), 1, |r| {
+        if let Record::Part { part, .. } = r {
+            *part += 1;
+        }
+    })
+}
+
+fn m_part_entry_name_changes(name: &str) -> PathBuf {
+    mutate_part(&two_parts(name), 1, |r| {
+        if let Record::Part { entry, .. } = r {
+            *entry = "efedcba9876543210".into();
+        }
+    })
+}
+
+/// After the seal's frame ends, a new frame begins and is never closed.
+fn m_frame_sealed_then_open(name: &str) -> PathBuf {
+    let d = clean(name);
+    let last = part_files(&d.join("rec")).unwrap().pop().unwrap();
+    let mut b = fs::read(&last).unwrap();
+    let frame = zstd::encode_all(&b"\x07\x00"[..], 3).unwrap();
+    // The frame's header and nothing of its block.
+    b.extend_from_slice(&frame[..frame.len() - 5]);
+    fs::write(last, b).unwrap();
+    d
 }
 
 type Build = fn(&str) -> PathBuf;
@@ -242,8 +329,46 @@ const FAILS: &[(&str, Build)] = &[
     ("counts_match_seal", m_seal_totals_wrong),
     ("counts_match_seal", m_seal_totals_key_missing),
     ("torn_tail", m_torn_tail),
+    ("torn_tail", m_torn_tail_unsealed),
     ("native_path_gen", m_native_path_gen_twice),
+    ("record_json", m_event_not_json),
+    ("record_json", m_end_tail_not_json),
+    ("inv2", m_part_prev_wrong),
+    ("inv1", m_part_raw_offset_wrong),
+    ("inv1", m_part_number_skips),
+    ("inv1", m_part_entry_name_changes),
+    ("inv8", m_frame_sealed_then_open),
 ];
+
+/// The two-part entry the PART mutations start from, rewritten with no change, passes.
+#[test]
+fn a_two_part_entry_passes() {
+    let (code, v) = check(&mutate_part(&two_parts("two-parts"), 1, |_| {}), &[]);
+    assert_eq!(result(&v, "inv1"), "pass");
+    assert_eq!(result(&v, "inv2"), "pass");
+    assert_ne!(code, 2, "{:?}", ids_with(&v, "fail"));
+}
+
+/// What the recorder writes for no tail (empty bytes) or a `Value::Null` one (`null`) is JSON.
+#[test]
+fn a_null_tail_is_fine() {
+    let d = mutate(&clean("null-tail"), None, |r| {
+        let i = find(
+            r,
+            |x| matches!(x, Record::End { tail, .. } if tail.is_empty()),
+        );
+        if let Record::End { tail, .. } = &mut r[i] {
+            *tail = b"null".to_vec();
+        }
+        assert!(
+            r.iter()
+                .any(|x| matches!(x, Record::End { tail, .. } if tail.is_empty()))
+        );
+    });
+    let (code, v) = check(&d, &[]);
+    assert_eq!(result(&v, "record_json"), "pass");
+    assert_eq!(code, 0, "{:?}", ids_with(&v, "fail"));
+}
 
 #[test]
 fn vr3_every_mutation_fails_its_check_with_exit_2() {
@@ -330,6 +455,13 @@ fn gap_reason_8_warns_and_does_not_crash() {
     // A GAP is a named loss: exit 1, from `gaps_named`, never a crash.
     assert_eq!(result(&v, "gaps_named"), "named");
     assert_eq!(code, 1, "{:?}", ids_with(&v, "fail"));
+}
+
+/// A warn moves no exit, but the text form still prints it.
+#[test]
+fn a_warn_is_printed_in_the_text_form() {
+    let t = text(&m_gap_reason_8("gap-reason-8-text"));
+    assert!(t.contains("gap_reason_unknown warn"), "{t}");
 }
 
 #[test]

@@ -72,8 +72,8 @@ The connector is the only one that sets `HOME`, plus the four XDG folders, all u
 
 ## Run without permission prompts
 
-None needed: Amp runs tools without asking by default (strings in the binary; a Mac run made 19 commits with no prompt). Do not add `amp.permissions` rules that ask. The connector has no `no_prompts` row. See [HARNESS-SETUP](../HARNESS-SETUP.md#amp).
+None needed: Amp runs tools without asking by default (strings in the binary; a Mac run made 19 commits with no prompt). Do not add `amp.permissions` rules that ask. The connector has no `no_prompts` row. See [HARNESS-SETUP](../HARNESS-SETUP.md#what-setup-writes-per-harness).
 
 ## Pad result
 
-The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `docs/plans/2026-10-30-v1.0/PAD-RESULTS.md`; this sheet does not copy them.
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `scripts/pad/rows/PAD-RESULTS.md`; this sheet does not copy them.

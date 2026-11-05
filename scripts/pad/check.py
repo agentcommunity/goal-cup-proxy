@@ -63,6 +63,7 @@ RECOVER = ("nothing to recover", "Recording is on again")  # PRD-10 acceptance 1
 STATUS_RECOVER = "Run: goalcup recover"  # PRD-10 acceptance 11: the status line after the recorder kill
 C1_IDS = ("gap_has_end", "history_complete", "streams_closed", "seen_matches_written", "recorder_alive", "listed_hosts_decrypted")
 RANK = {"pass": 0, "warn": 1, "skip": 2, "named": 3, "fail": 4}
+OK = ("pass", "warn")  # a warn never blocks: e.g. listed_hosts_decrypted on a record made with another model-hosts list
 ORDER = {"PASS": 0, "INCONCLUSIVE": 1, "FAIL": 2}
 CHECKS = ("C1", "C2", "C3", "C4", "C5", "C6")
 SEAL_SLACK = datetime.timedelta(seconds=120)  # pad's seal-now limit: a seal may begin that long before its line
@@ -304,7 +305,7 @@ def judge(r):
     pin = r.meta.get("model_host") if r.meta.get("case") == "dodger" else None  # meta.json, written by pad
     tunnels = (r.hosts("s6_tunnel_hosts") or {}).get(pin, 0)  # section 2: a dodger's calls ride `pinned` tunnels
     subagent = any(dig(t, "t_parent") for t in dig(r.usage, "s7_threads") or [] if isinstance(t, dict))  # a linked subagent is a tool use seen on the wire (S1: a harness with no native reader)
-    tool_turn = bool(r.native or dig(r.usage, "s7_native") or subagent)  # the harness's own stream, or a linked subagent, shows a tool call
+    tool_turn = bool(dig(r.usage, "s7_native") or subagent)  # a native call the verifier read, or a linked subagent; a native session file alone (counts.native_files) shows no call
     work = (seen or tunnels or tool_turn) and ((r.meta.get("commits_since_start") or 0) >= 1 or ((seen or 0) >= WORK_REQUESTS and tool_turn))  # W2: a young Paynest row commits nothing yet; chat or a retry loop is not work
     idle = "the harness did no work (commits since start %s, model requests %s, tool turn %s; work is a commit, or %d model requests with a tool-using turn)" % (r.meta.get("commits_since_start"), seen, "seen" if tool_turn else "none", WORK_REQUESTS)
     stop = cause(r) or (None if work else ("the harness lost its terminal; " if lost_terminal(r) else "") + idle)
@@ -431,7 +432,7 @@ def case_rows(r):
                "%s not decrypted in counts.hosts" % (own or "no model host"))
     if kind == "gateway":
         got = r.check("listed_hosts_decrypted")
-        r.flag(need("listed_hosts_decrypted", got) and got != "pass", "C1", "FAIL", "listed_hosts_decrypted %s" % got)
+        r.flag(need("listed_hosts_decrypted", got) and got not in OK, "C1", "FAIL", "listed_hosts_decrypted %s" % got)
         r.flag(need("counts.hosts", hs) and not hs.get(GATEWAY), "C1", "FAIL", GATEWAY + " not decrypted in counts.hosts")
         wire = [c for c in (r.calls if need("usage call rows", r.calls) else []) if dig(c, "c_host")]  # native rows have no host
         bad = sorted({str(dig(c, "c_host")) for c in wire if dig(c, "c_kind") != "gateway"})  # the vendor's host is kind provider
@@ -829,7 +830,7 @@ def route_row(r):
                "a decode_failed gap outside the route drop")
     r.flag(back.get("default") is not True, "faults", "INCONCLUSIVE", "the default route was not back")
     got = r.check("listed_hosts_decrypted")
-    r.flag(got != "pass", "faults", "FAIL" if got else "INCONCLUSIVE", "listed_hosts_decrypted %s" % (got or "not in the report"))
+    r.flag(got not in OK, "faults", "FAIL" if got else "INCONCLUSIVE", "listed_hosts_decrypted %s" % (got or "not in the report"))
     r.flag((worst(r.entries, "listed_hosts_decrypted").get("facts") or {}).get("refusal_after_trust"), "faults", "FAIL",
            "refusal_after_trust is set")
     reqs = [(when(s.get("pad_at")), work(s, r.meta.get("case"), r.meta.get("model_host"))) for s in r.samples]
@@ -903,7 +904,7 @@ def verdict(folder, script):
 
 def trusted_at(repo, pad_commit):
     """The commit the pad was trusted at, or None. Needs a passing, complete selftest, a trust note naming the same
-    commit with a non-empty read, and no change to scripts/pad or crates/goalcup-verify since."""
+    commit with a non-empty read, and no change since to scripts/pad, crates/goalcup-verify, or what the verifier reads (connectors/, crates/goalcup-format)."""
     try:
         with open(os.path.join(repo, "pad-out", "selftest.json")) as f:
             st = json.load(f)
@@ -914,7 +915,8 @@ def trusted_at(repo, pad_commit):
               and tr["read"] != "" and isinstance(at, str) and at and pad_commit)
         if not ok:
             return None
-        r = subprocess.run(["git", "-C", repo, "diff", "--quiet", at, pad_commit, "--", "scripts/pad", "crates/goalcup-verify"],
+        r = subprocess.run(["git", "-C", repo, "diff", "--quiet", at, pad_commit, "--", "scripts/pad", "crates/goalcup-verify",
+                            "connectors", "crates/goalcup-format"],
                            capture_output=True, timeout=30)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError):
         return None
@@ -931,7 +933,7 @@ def evaluate(folder):
     got = [r.v[c] for c in CHECKS] + ([fault] if fault else [])
     row = {k: meta.get(k) for k in ("connector", "harness_version", "case", "mode", "prompt", "variant", "where",
                                     "server", "image", "run", "entry", "started", "minutes")}
-    row.update(os=meta.get("os"), goalcup=meta.get("goalcup"), pad_trusted_at=trusted_at(REPO, meta.get("pad_commit")), checks={c: r.v[c] for c in CHECKS}, faults=fault, why=r.why,
+    row.update(os=meta.get("os"), goalcup=meta.get("goalcup"), pad_trusted_at=trusted_at(REPO, meta.get("pad_commit")), pad_only=meta.get("pad_only") or [], checks={c: r.v[c] for c in CHECKS}, faults=fault, why=r.why,
                exec={s: verdict(folder, s) for _, s in watchers(meta) if s not in JUDGED}, notes=owner_notes(r),
                result="FAIL" if "FAIL" in got else "PASS" if set(got) == {"PASS"} else "INCONCLUSIVE", facts=facts(r))
     return row

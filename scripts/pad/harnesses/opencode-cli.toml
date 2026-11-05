@@ -5,12 +5,12 @@
 # Measured in a build box 31 Oct 2026: opencode-ai@1.19.5 installs under its own prefix and prints 1.19.5.
 # Read from docs and the audit facts sheet, not run against a live harness: the auth.json shape, the model ids, the TUI.
 #
-# OpenCode 1 and 2 are both the program `opencode` (connectors/opencode-cli.toml and opencode2-cli.toml differ by version).
+# OpenCode 1 and 2 are both the program `opencode` (connectors/opencode-cli.toml, with a 1.x row).
 # Each major lives in $HOME/.opencode/<version>; `~/.local/bin/opencode` is a link to one of them (the image PATH reaches
 # it, and goalcup finds `opencode` there). version_cmd points the link at this file's version first, so every run
 # starts the major its file pins; where the image layout is absent (a run by hand), it only prints the version.
 version = "1.19.5"
-version_cmd = 'if [ -x "$HOME/.opencode/1.19.5/bin/opencode" ]; then mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/1.19.5/bin/opencode" "$HOME/.local/bin/opencode"; fi; opencode --version'
+version_cmd = 'v=${PAD_VERSION:-1.19.5}; if [ -x "$HOME/.opencode/$v/bin/opencode" ]; then mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/$v/bin/opencode" "$HOME/.local/bin/opencode"; fi; opencode --version'
 install = 'npm i -g --prefix "$HOME/.opencode/1.19.5" opencode-ai@1.19.5 && mkdir -p "$HOME/.local/bin" && ln -sfn "$HOME/.opencode/1.19.5/bin/opencode" "$HOME/.local/bin/opencode"'
 key_kind = "deepseek"
 key_route = "file"

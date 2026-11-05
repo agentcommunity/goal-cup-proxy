@@ -14,7 +14,7 @@ use std::time::{Duration, UNIX_EPOCH};
 
 use serde_json::{Value, json};
 
-use crate::connector::{Form, NativeSources};
+use crate::connector::{Form, NativeSource, NativeSources};
 use crate::pipeline::{Mono, Recorder};
 use snapshot::{Interval, Sets};
 use tail::{Stop, Tail};
@@ -53,7 +53,7 @@ pub struct NativeFinish {
 /// Spawns the reader thread (section 1).
 pub fn start(rec: Recorder, sources: NativeSources) -> NativeReader {
     let (tx, rx) = mpsc::channel();
-    let notes: Vec<Value> = sources.0.iter().map(|s| missing_note(&s.name)).collect();
+    let notes: Vec<Value> = sources.0.iter().map(missing_note).collect();
     let r = rec.clone();
     let body = move || {
         crate::pipeline::low_priority();
@@ -95,7 +95,7 @@ impl Reader {
         for s in &sources.0 {
             // PRD-11's loader refuses a bad pattern; a row that still fails is named at once.
             let Ok(pattern) = pattern::parse(&s.pattern) else {
-                rec.event(missing_note(&s.name));
+                rec.event(missing_note(s));
                 missing.took(&s.name);
                 continue;
             };
@@ -219,22 +219,22 @@ fn elapsed(from: Mono, to: Mono) -> Duration {
     Duration::from_nanos(to.ns().saturating_sub(from.ns()))
 }
 
-fn missing_note(row: &str) -> Value {
-    json!({"ev": "note", "what": "native_missing", "row": row})
+fn missing_note(s: &NativeSource) -> Value {
+    json!({"ev": "note", "what": "native_missing", "row": s.name, "redirect": s.redirect})
 }
 
 /// Rows that find nothing (section 2): each `warn_missing` row that has taken no file `after` the
 /// first time `requests` was seen above 0 is named once. The reader checks each pass with
 /// `rec.counts().model_requests()`, 5 minutes and `rec.now()`.
 pub struct Missing {
-    waiting: Vec<String>,
+    waiting: Vec<Value>,
     first: Option<Mono>,
 }
 
 impl Missing {
     pub fn new(sources: &NativeSources) -> Missing {
         let warn = sources.0.iter().filter(|s| s.warn_missing);
-        let waiting = warn.map(|s| s.name.clone()).collect();
+        let waiting = warn.map(missing_note).collect();
         Missing {
             waiting,
             first: None,
@@ -243,7 +243,7 @@ impl Missing {
 
     /// A file of row `name` was taken: the row is never named.
     pub fn took(&mut self, name: &str) {
-        self.waiting.retain(|w| w != name);
+        self.waiting.retain(|w| w["row"] != name);
     }
 
     pub fn check(&mut self, rec: &Recorder, requests: u64, after: Duration, now: Mono) {
@@ -251,9 +251,7 @@ impl Missing {
             self.first.get_or_insert(now);
         }
         if self.first.is_some_and(|f| elapsed(f, now) >= after) {
-            self.waiting
-                .drain(..)
-                .for_each(|w| rec.event(missing_note(&w)));
+            self.waiting.drain(..).for_each(|w| rec.event(w));
         }
     }
 }
@@ -267,5 +265,29 @@ impl Noted {
         if self.0.insert(ev.to_string()) {
             rec.event(ev);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_row_names_its_redirect() {
+        let s = NativeSource {
+            name: "transcripts".into(),
+            root: "/h/projects".into(),
+            pattern: "**/*.jsonl".into(),
+            form: Form::Append,
+            since: UNIX_EPOCH,
+            warn_missing: true,
+            redirect: Some("T_HOME".into()),
+        };
+        let want =
+            r#"{"ev":"note","what":"native_missing","row":"transcripts","redirect":"T_HOME"}"#;
+        assert_eq!(
+            missing_note(&s),
+            serde_json::from_str::<Value>(want).unwrap()
+        );
     }
 }

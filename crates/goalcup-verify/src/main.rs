@@ -69,7 +69,7 @@ struct CheckArgs {
     /// The local entry to compare the server copy with.
     #[arg(long, value_name = "ENTRY_DIR")]
     local: Option<PathBuf>,
-    /// Known secret values, one per line: adds the `secrets` check to every entry.
+    /// Known secret values, one per line: the `secrets` check looks for them besides the shapes.
     #[arg(long, value_name = "FILE")]
     known: Option<PathBuf>,
     /// The pad's list of harness files on disk, `[{"path": "<source>:<path>", "size": n}]`:
@@ -137,13 +137,8 @@ fn check(a: &CheckArgs) -> ExitCode {
     };
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH);
     let now = now.map_or(0, |d| u64::try_from(d.as_nanos()).unwrap_or(u64::MAX));
-    let r = report::build(
-        &input,
-        a.live.then_some(now),
-        l.as_ref(),
-        k.as_ref(),
-        f.as_deref(),
-    );
+    let k = k.unwrap_or_else(secrets::Rules::shapes);
+    let r = report::build(&input, a.live.then_some(now), l.as_ref(), &k, f.as_deref());
     eprint!("{}", r.text);
     if a.json {
         let _ = writeln!(std::io::stdout(), "{}", r.json);

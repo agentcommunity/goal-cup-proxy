@@ -1,11 +1,11 @@
 # Connector schema
 
 A harness is one data file, `connectors/<id>.toml`, and every harness goes through the same code. A new
-connector is its TOML file plus one `entry!("<id>")` line in `crates/goalcup/src/connector/builtin.rs`, the
-one source file that names connector files; `tests/connector_builtin.rs` fails on a file missing from that
-list or an `id` that differs. Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a
-connector. Nothing is pinned. The `start` event names the connector (`connector`, `connector_source`,
-`connector_sha256`) and the host list's hash (`hosts_sha256`).
+connector is its TOML file alone; `crates/goalcup-format/build.rs` builds every `connectors/*.toml`
+into both binaries, and the connector tests fail on an `id` that differs from the file name.
+Tiers live in [`connectors/tiers.toml`](../connectors/tiers.toml), not in a connector.
+The `start` event names the connector (`connector`, `connector_source`, `connector_sha256`)
+and the host list's hash (`hosts_sha256`).
 
 ## The connector contract
 
@@ -19,8 +19,9 @@ is the participant's project folder.
 | `id` | string `[a-z0-9-]{1,32}` | | The connector id: `goalcup start --harness <id>` |
 | `name` | string | | Shown to the participant |
 | `program` | string | | The executable, found on the participant's `PATH` |
-| `version` | string | none | A word of the first non-empty line of `program --version`, with a leading `v` stripped, must start with it, else the start refuses, naming the program. A version that cannot be read (no output, a failed exit, 5 s without an exit) refuses nothing |
-| `version_notes` | list of `{versions, say}` | `[]` | When the read version has a word starting with one of `versions` (as `version` matches, but no digit may follow it: `0.22.6` is not `0.22.60`), `say` is printed by `goalcup start`, `continue` and `setup` and recorded as a `note` event (`what = "version_note"`). It never refuses a run; an unread version prints nothing |
+| `old_ids` | string list | `[]` | Built-in ids this connector had before. `--harness`, `goalcup continue` and the usage reader take a run that names one as this connector |
+| `checked` | string | none | The build these values were checked on, as `version` parsing reads it (`2.2.2`, no `v`). Named in the line printed when the version cannot be read on a connector with `[[versions]]` rows (no row may match it) |
+| `versions` | list of rows | `[]` | Per-version overrides. A row has `match` (a version spec: `1.x`, `0.22.6`, `>=1.2,<2`), an optional `say` (printed at start, continue and setup, and recorded as a `note` event, `what = "version_note"`), and any of `args`, `resume`, `env`, `unset`, `host_hints`, `secret_files`, `no_prompts`, `update_off`, `native`, `first_screen`, `before`, `after`. The first row whose `match` holds wins; a list or string replaces the base value, `env` merges key by key, `unset` only adds, `first_screen = ""` clears it. Any other key fails the load, among them `id`, `name`, `program`, `old_ids`, `checked`, `home`, `ca_env`, `ca_settings`, `refuse_if_set`, `mask`, `hint_env`, `end_note`, `skills_dir` and `usage`. The merged connector passes the same checks as the base. An unread version gets the base. Never refuses a run |
 | `args` | string list | `[]` | Arguments for `goalcup start`. Template `{workspace}` only |
 | `resume` | string list | `[]` | Appended to `args` for `goalcup continue`. Template `{workspace}` only |
 | `home` | map, variable to template | empty | Variables pointed into the isolated home; each value starts with `{home}`. The folders are created with mode 0700. Where it sets `HOME`, goalcup also writes `$HOME/.profile`, putting the handed `PATH` back after a login shell resets it: replaced only when goalcup wrote it, else kept with a log line |
@@ -38,6 +39,7 @@ is the participant's project folder.
 | `first_screen` | string | none | One line printed just before the harness opens: a first-run question to expect |
 | `no_prompts` | list of `{file, key, value}` | `[]` | Settings `goalcup setup` writes into the isolated home after its one question, so the harness never stops to ask approval |
 | `update_off` | list of `{file, key, value}` | `[]` | An auto-update switch that exists only as a setting. Written into the isolated home with no question, again at every `goalcup start` and `continue`. Where an env switch exists, it goes in `env` |
+| `ca_settings` | table `{file, entries, uses, add, key, value, fallback}` | none | Trust per model address, written at every `goalcup start` and `continue`, never by setup. Each `https` address in `file` (not local) gets `key = value` beside it: at each `entries` key (one `*` part for the entry; an entry already holding another CA value keeps it), and for each other address at a `uses` key on a new entry, `add` with its `*` as `goalcup-trust-<address>`. When `file` names no address, the new entries are for the `fallback` addresses: each `https` on a shared-list host (Hermes: its nine built-in routes). The participant's own addresses come first; `fallback` is used only when `file` names none. `value` is never an address |
 | `skills_dir` | template | none | Where the goal-cup skill is installed, under `{home}`. Absent: no skill is installed |
 
 A key is dotted (`env.HTTPS_PROXY`); in a hint or refusal key a part may hold `*`, matching any key
@@ -50,6 +52,64 @@ are not writable), never through a link, keeping the other keys; there, as in `s
 a literal name. `"true"` and `"false"` become the format's boolean, any other value a string. A row
 not written is a log line, not a refusal.
 
+## The usage table
+
+`[usage]` says where a harness keeps its threads. The recorder accepts it and never reads it;
+`goalcup-verify usage` does. Every key is optional. A built-in table with an unknown key or a
+broken rule fails the gate; at run time it reads as none. A connector without the table is wire
+only.
+
+| Key | Type | What it says |
+|---|---|---|
+| `readers` | list of `{row, file, reader}` | The reader of a `native` row's files. `reader` is `codex-rollout`, `claude-transcript`, `claude-meta`, `hermes-db`, `hermes-task`, `hermes-manifest`, `gemini-chat`, `qwen-chat` or `kimi-wire`. The first row that fits wins, before `thread_db` |
+| `thread` | string list | Where a wire request names its thread: a request header name (any case), or a `/`-led JSON pointer into a WebSocket `response.create`. The first key present wins |
+| `parent` | string list | Where a wire request names its parent thread, as `thread` |
+| `join` | `"thread"`, `"reply-id"` or `"time"` | How native calls join the wire: by the request's thread (`thread` must not be empty), by the reply's request id, or by time. Required once any other key is set |
+| `thread_rpc` | bool | The WebSocket is a thread socket of JSON-RPC frames that report each model turn |
+| `thread_db` | `{row, file, table, id, parent, xxh3}` | A session database copy read for parent links only: its table, id and parent columns, and whether the wire names a session by the xxh3-64 of its id. Not beside `readers` |
+
+A `file` is a file name (no `/`) with at most one `*`. Rows are not checked against `native`, so a
+row of an earlier build still reads. `usage` never varies by harness version: a release that
+changes its thread headers gets a second `thread` entry.
+
+A harness that writes a session format already read, or names its threads in request headers,
+needs data only. A new session format needs a reader in goalcup-verify, a core PR. The verifier
+reads `[usage]` from the built-in connector of that id, so a `--connector` file's table counts only
+in a build that includes the file.
+
+From [`connectors/crush-cli.toml`](../connectors/crush-cli.toml):
+
+```toml
+[usage]
+thread = ["x-session-id"]
+join = "thread"
+thread_db = { row = "db", file = "crush.db*", table = "sessions", id = "id", parent = "parent_session_id", xxh3 = true }
+```
+
+## Harness versions
+
+Goal Cup Proxy reads the harness version, records it and says one plain line. No version refuses
+a start.
+
+- Read: the first version-looking token of `<program> --version` (stdout, else stderr).
+- Recorded: `harness_version` in the `start` event of every boot, a continue included (see
+  [RECORD-FORMAT](RECORD-FORMAT.md)).
+- Rules per version: `[[versions]]` rows over the base keys (table above). The first row whose
+  `match` holds wins, so order rows most specific first. An unread version gets the base.
+- "Verified" is not a connector field. [`connectors/tiers.toml`](../connectors/tiers.toml) is
+  written from pad rows, as (version, os) pairs under `builds`.
+
+From [`connectors/opencode-cli.toml`](../connectors/opencode-cli.toml): the base is OpenCode 2
+(`checked = "2.2.2"`); this row overrides the keys OpenCode 1 reads differently.
+
+```toml
+[[versions]]
+match = "1.x"
+args = []
+first_screen = ""
+no_prompts = [{ file = "{home}/.config/opencode/opencode.json", key = "permission", value = "allow" }]
+```
+
 ## Load checks
 
 Besides the table's types, patterns and templates, the loader checks these rules and nothing else.
@@ -57,7 +117,8 @@ A parse error names the file and the line; a rule error names the file and the k
 
 - **No model address.** goalcup never sets a model base URL. A connector is refused when an `env`
   name contains `BASE_URL`, `API_BASE`, `ENDPOINT`, `_HOST` or `PROXY` (any case), or when an
-  `env`, `no_prompts` or `update_off` value contains `://`. This check runs first, so `HTTPS_PROXY`
+  `env`, `no_prompts` or `update_off` value, or the `ca_settings` value, contains `://`. The one
+  exception: a `ca_settings` `fallback` address names a shared-list host over `https`. This check runs first, so `HTTPS_PROXY`
   in `env` gets this error.
 - `env` names no variable the code owns: the proxy and CA variables it removes and sets
   (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` in both cases, `NODE_EXTRA_CA_CERTS`,

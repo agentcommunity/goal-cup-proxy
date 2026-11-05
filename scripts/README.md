@@ -25,7 +25,7 @@ sandbox and model keys from the environment (names only in `pad.toml`).
 - `pad <settings file>` (a file from `runs/`): walks the steps of one run, a limit on each, always cleans up, prints one table. Exit 0 every row PASS, 1 any FAIL, 3 any INCONCLUSIVE.
 - `pad-run <run dir> <step>`: the half that runs inside the box, one step at a time. It prints no key.
 - `check.py <run folder>`: reads the JSON a run left, maps it to checks C1 to C6, writes `row.json` and `report.txt`. It never runs `goalcup-verify`.
-- `table`: gathers the `row.json` files into `connectors/tiers.toml`, `pad-rows.jsonl` and `PAD-RESULTS.md`. `table --release-check <commit>` exits 0 only when the release rows hold for that commit; `release.sh tag` runs it first.
+- `table`: gathers the `row.json` files into `connectors/tiers.toml`, `pad-rows.jsonl` and `PAD-RESULTS.md` (both in `scripts/pad/rows/`). `table --release-check <commit>` exits 0 only when the release rows hold for that commit; `release.sh tag` runs it first.
 - `sbx.mjs` is the one place that talks to the sandbox service; `pad.toml`, `harnesses/`, `prompts/`, `runs/` and `image` are its data.
 
 ## Tests of the scripts

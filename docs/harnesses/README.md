@@ -12,16 +12,15 @@ sends its sheet with status `facts only`, and the sheet shows what to build.
 ## The 15 harnesses
 
 This is the one harness table; other pages link here and never copy it. Each Connector links to its
-sheet. Each harness has one connector file, `connectors/<id>.toml` (OpenCode has two, one per major
-version; there is no `opencode2-cli.md` because one sheet covers both OpenCode connectors).
+sheet. Each harness has one connector file, `connectors/<id>.toml` (OpenCode 1 and 2 share `opencode-cli`, which has a `1.x` version row; runs started as `opencode2-cli` continue under it).
 "Wire only" means the model calls are recorded through the proxy, but the session files are not.
 
 | # | Harness (version checked) | Connector | Reaches models | Sessions and subagents | Tier (from `connectors/tiers.toml`) | What goalcup cannot record or stop |
 |---|---|---|---|---|---|---|
-| 1 | Claude Code 2.1.312 | [`claude-code-cli`](claude-code-cli.md) | HTTPS to `api.anthropic.com` or a gateway | `projects/<p>/<session>.jsonl`; subagents under `<session>/subagents/` | not verified | A settings `env` block that sets a proxy or CA value is refused at start |
-| 2 | Codex 0.165.0 | [`codex-cli`](codex-cli.md) | WebSocket and HTTPS to `api.openai.com`; `chatgpt.com` on ChatGPT sign-in | `sessions/YYYY/MM/DD/rollout-*.jsonl`, child threads too | not verified | `$CODEX_HOME/.env` overwrites the proxy and CA, so a proxy or CA value there is refused at start; started with `--no-daemon` |
-| 3 | Hermes 0.22.5 | [`hermes-cli`](hermes-cli.md) | Chat Completions from its gateway process | delegation `manifest.json` and `task-*.log` files under `cache/delegation/live/`; `state.db` is not copied (its search index can hold text out of context) | not verified | Its `copilot-acp` child is wire only; goalcup stops the gateway for its own home before and after the run |
-| 4 | OpenCode 1.19.5 and 2.2.2 | [`opencode-cli`](opencode-cli.md), [`opencode2-cli`](opencode-cli.md) | HTTPS to the chosen provider, or OpenCode's gateway on `opencode.ai` | One `opencode.db`; subagents are child sessions in it | both connectors not verified | `opencode.ai` serves both the gateway and the console page where a participant copies a key; OpenCode 2 is started `--standalone`, so it does not attach to a shared background server |
+| 1 | Claude Code 2.1.312 | [`claude-code-cli`](claude-code-cli.md) | HTTPS to `api.anthropic.com` or a gateway | `projects/<p>/<session>.jsonl`; subagents under `<session>/subagents/` | verified (2.1.312, darwin-arm64) | A settings `env` block that sets a proxy or CA value is refused at start |
+| 2 | Codex 0.165.0 | [`codex-cli`](codex-cli.md) | WebSocket and HTTPS to `api.openai.com`; `chatgpt.com` on ChatGPT sign-in | `sessions/YYYY/MM/DD/rollout-*.jsonl`, child threads too | verified (0.165.0, darwin-arm64) | `$CODEX_HOME/.env` overwrites the proxy and CA, so a proxy or CA value there is refused at start; started with `--no-daemon` |
+| 3 | Hermes 0.22.5 to 0.22.7 | [`hermes-cli`](hermes-cli.md) | Chat Completions from its gateway process | delegation `manifest.json` and `task-*.log` files under `cache/delegation/live/`; `state.db` is not copied (its search index can hold text out of context) | verified (0.22.6, darwin-arm64) | Its `copilot-acp` child is wire only; goalcup stops the gateway for its own home before and after the run |
+| 4 | OpenCode 1.19.5 and 2.2.2 | [`opencode-cli`](opencode-cli.md) | HTTPS to the chosen provider, or OpenCode's gateway on `opencode.ai` | One `opencode.db`; subagents are child sessions in it | not verified | `opencode.ai` serves both the gateway and the console page where a participant copies a key; OpenCode 2 is started `--standalone`, so it does not attach to a shared background server |
 | 5 | OpenClaw 2026.10.9 | [`openclaw-cli`](openclaw-cli.md) | Chat Completions through provider plugins | `agents/<agent>/agent/openclaw-agent.sqlite`, `state/openclaw.sqlite` | not verified | Subagents are not recorded on the wire when they run in a Gateway started outside goalcup; its own proxy setting is refused at start (sheet section 8); the agent works in its own workspace under `OPENCLAW_HOME`, so its commits can land outside the participant's repo |
 | 6 | Amp 0.0.1793275344 | [`amp-cli`](amp-cli.md) | One WebSocket to `ampcode.com`; Amp's servers call the model | No transcript; a metadata log per thread | not verified | Provider calls are made on Amp's servers |
 | 7 | GitHub Copilot CLI 1.0.105 | [`copilot-cli`](copilot-cli.md) | HTTPS to `*.githubcopilot.com`, or a provider key | `session-state/<id>/events.jsonl`, `session-store.db` | not verified | Sign-in and token exchange to `github.com` and `api.github.com` pass through as tunnels and are not read; `/delegate` runs a cloud agent (sheet section 8) |
@@ -37,7 +36,7 @@ version; there is no `opencode2-cli.md` because one sheet covers both OpenCode c
 The Tier column is a snapshot of [`connectors/tiers.toml`](../../connectors/tiers.toml), which the test
 pad writes; that file is the record, and the column is not regenerated. Until the pad has run a harness
 its tier is "not verified" with the reason "not yet run on the pad". A verified or unsupported tier
-appears only after the pad records it (`PAD-RESULTS.md` in `docs/plans/2026-10-30-v1.0/`). Each sheet
+appears only after the pad records it (`scripts/pad/rows/PAD-RESULTS.md`). Each sheet
 ends with a "Pad result" section that points to the file. The full list of limits is in section 8 of
 each sheet.
 
@@ -74,4 +73,5 @@ When a release changes something a sheet says (a path, a variable, the session f
 flow, a host), open a PR that edits the sheet and updates "Facts for version" and "Last checked".
 If the harness has a connector, change the connector in the same PR and follow
 [HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md) again. A new build of a known harness needs no
-connector change when the sheet's facts still hold: builds are recorded, not pinned.
+connector change when the sheet's facts still hold: builds are recorded, never refused
+([Harness versions](../CONNECTOR-SCHEMA.md#harness-versions)).

@@ -7,7 +7,8 @@
 #   the smoke tests check it. Use `sh scripts/release.sh prepare <x.y.z>` for the version PR when
 #   needed, then merge it, run `sh scripts/gate.sh full` on `origin/main`, and use
 #   `sh scripts/release.sh tag <x.y.z>`, which first runs the pad's release check
-#   (`scripts/pad/table --release-check`).
+#   (`scripts/pad/table --release-check`). The workflow repeats both checks before it publishes:
+#   the tag commit must be on origin/main and pass the pad release check.
 # - A manual start builds and packages only: the tarballs are the run's artifacts, and nothing
 #   is published. Use it to try package builds before pushing a release tag.
 #
@@ -113,7 +114,14 @@ jobs:
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
+          fetch-depth: 0
           persist-credentials: false
+      - name: tag is on main
+        run: |
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "::error::tag commit is not on origin/main"; exit 1; }
+      - name: pad release check
+        run: python3 scripts/pad/table --release-check "$GITHUB_SHA"
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist

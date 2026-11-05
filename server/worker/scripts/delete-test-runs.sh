@@ -3,6 +3,7 @@
 # objects. A dry run by default: it prints what would go and changes nothing. Only --yes deletes.
 #
 #   sh scripts/delete-test-runs.sh [--older-than '7 days'] [--yes]
+#   sh scripts/delete-test-runs.sh --objects delete-test-runs.failed [--yes]
 #
 # Needs: psql, curl, python3, and in the environment
 #   DATABASE_URL           the website's Supabase Postgres URL (it calls goal_cup_tracer.delete_test_runs)
@@ -11,22 +12,28 @@
 # Only these bucket:prefix pairs are touched: goalcup-traces:traces/test/,
 # goalcup-traces-staging:traces/test-staging/, goalcup-usage:usage/test/ and
 # goalcup-usage-staging:usage/test-staging/ (usage stats). R2 is listed before the database changes,
-# so a failed listing changes nothing. A usage bucket that is missing or not open to the token is
-# skipped with one line. Without --older-than every test run goes and all prefixes are emptied; with
-# it, only what is under <prefix><run>/ for the runs deleted.
+# so a failed listing changes nothing; the objects are deleted after the commit. A usage bucket that
+# is missing or not open to the token is skipped with one line. Without --older-than every test run
+# goes and all prefixes are emptied; with it, only what is under <prefix><run>/ for the runs deleted.
+# Objects that fail to delete are written to delete-test-runs.failed ("<bucket> <key>" lines);
+# --objects FILE skips the database and deletes only the objects in FILE, all inside the pairs above.
 set -eu
 
-older='0' yes=no
+older='0' yes=no objects=
+pairs='goalcup-traces:traces/test/ goalcup-traces-staging:traces/test-staging/
+  goalcup-usage:usage/test/ goalcup-usage-staging:usage/test-staging/'
 while [ $# -gt 0 ]; do
   case $1 in
     --older-than) older=${2:?--older-than needs an interval, like '7 days'}; shift ;;
+    --objects) objects=${2:?--objects needs a file}; shift ;;
     --yes) yes=yes ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "delete-test-runs: unknown argument $1" >&2; exit 2 ;;
   esac
   shift
 done
-: "${DATABASE_URL:?set DATABASE_URL}" "${CLOUDFLARE_ACCOUNT_ID:?set CLOUDFLARE_ACCOUNT_ID}" "${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN}"
+[ -n "$objects" ] || : "${DATABASE_URL:?set DATABASE_URL}"
+: "${CLOUDFLARE_ACCOUNT_ID:?set CLOUDFLARE_ACCOUNT_ID}" "${CLOUDFLARE_API_TOKEN:?set CLOUDFLARE_API_TOKEN}"
 case $older in *\'*) echo "delete-test-runs: bad interval" >&2; exit 2 ;; esac
 base="https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/r2/buckets"
 tmp=$(mktemp -d) && trap 'rm -rf "$tmp"' EXIT
@@ -58,11 +65,53 @@ PY
   done
 }
 
+# delete: with --yes, delete every object in $tmp/plan; write the ones that fail to
+# delete-test-runs.failed and exit 1. Without --yes, change nothing.
+delete() {
+  if [ "$yes" != yes ]; then
+    echo "Dry run: nothing changed. Run again with --yes to delete."
+    return
+  fi
+  # Keep the lines of an earlier delete-test-runs.failed that this run does not retry.
+  : >"$tmp/failed"
+  [ ! -f delete-test-runs.failed ] ||
+    awk 'FILENAME == ARGV[1] { p[$0]; next } !($0 in p)' "$tmp/plan" delete-test-runs.failed >"$tmp/failed"
+  while read -r bucket key; do
+    enc=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$key")
+    # 404: the object is already gone (an earlier delete went through), so it counts as deleted.
+    code=$(curl -sS -o /dev/null -w '%{http_code}' -X DELETE "$base/$bucket/objects/$enc" \
+      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN") || code=000
+    case $code in 2??|404) ;; *) echo "$bucket $key" >>"$tmp/failed" ;; esac
+  done <"$tmp/plan"
+  [ -s "$tmp/failed" ] || { rm -f delete-test-runs.failed; return; }
+  mv "$tmp/failed" delete-test-runs.failed
+  echo "delete-test-runs: $(grep -c . delete-test-runs.failed) object(s) not deleted, listed in delete-test-runs.failed." \
+    "Retry only these: sh scripts/delete-test-runs.sh --objects delete-test-runs.failed --yes" >&2
+  exit 1
+}
+
+# 0. With --objects, only the objects in FILE, each inside one of the pairs.
+if [ -n "$objects" ]; then
+  while read -r bucket key; do
+    ok=no
+    for pair in $pairs; do
+      if [ "$bucket" = "${pair%%:*}" ]; then
+        case $key in "${pair#*:}"?*) ok=yes ;; esac
+      fi
+    done
+    case /$key/ in */../* | */./*) ok=no ;; esac
+    [ "$ok" = yes ] || { echo "delete-test-runs: '$bucket $key' in $objects is outside the test prefixes; nothing changed" >&2; exit 1; }
+  done <"$objects"
+  cp "$objects" "$tmp/plan"
+  echo "  R2: $(grep -c . "$tmp/plan") object(s) from $objects"
+  delete
+  exit 0
+fi
+
 # 1. R2, before anything changes: every object under each prefix.
 : >"$tmp/plan"
 buckets=
-for pair in goalcup-traces:traces/test/ goalcup-traces-staging:traces/test-staging/ \
-  goalcup-usage:usage/test/ goalcup-usage-staging:usage/test-staging/; do
+for pair in $pairs; do
   bucket=${pair%%:*} prefix=${pair#*:}
   : >"$tmp/keys"
   list "$bucket" "$prefix"
@@ -109,13 +158,4 @@ for bucket in $buckets; do
   echo "  R2 $bucket: $(grep -c "^$bucket " "$tmp/plan") object(s)"
 done
 
-if [ "$yes" = yes ]; then
-  failed=0
-  while read -r bucket key; do
-    enc=$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1], safe=""))' "$key")
-    curl -fsS -X DELETE "$base/$bucket/objects/$enc" -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" >/dev/null || failed=$((failed + 1))
-  done <"$tmp/plan"
-  [ "$failed" -eq 0 ] || { echo "delete-test-runs: $failed object(s) not deleted; run again without --older-than" >&2; exit 1; }
-else
-  echo "Dry run: nothing changed. Run again with --yes to delete."
-fi
+delete

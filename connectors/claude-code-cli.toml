@@ -1,7 +1,8 @@
-# Claude Code 2.1.312: values checked against the vendor's docs on 30 Oct 2026.
+# Claude Code: values checked against the vendor's docs on 30 Oct 2026.
 id = "claude-code-cli"
 name = "Claude Code"
 program = "claude"
+checked = "2.1.312"
 resume = ["--continue"]
 home = { CLAUDE_CONFIG_DIR = "{home}" }
 env = { DISABLE_AUTOUPDATER = "1", DISABLE_UPDATES = "1", CLAUDE_CODE_DISABLE_AGENT_VIEW = "1", CLAUDE_CODE_RETRY_WATCHDOG = "1" }
@@ -33,3 +34,11 @@ no_prompts = [
   { file = "{home}/settings.json", key = "skipDangerousModePermissionPrompt", value = "true" },
 ]
 skills_dir = "{home}/skills"
+
+[usage]
+readers = [
+  { row = "transcripts", file = "*.jsonl", reader = "claude-transcript" },
+  { row = "meta", file = "*.meta.json", reader = "claude-meta" },
+]
+# The native requestId equals the reply's request-id header.
+join = "reply-id"

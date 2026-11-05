@@ -261,6 +261,9 @@ describe("upload API against wrangler dev", { concurrency: false }, () => {
     test("the same offset with a different length or head is 409", async () => {
       assertError(await put({ body: c1.body, headers: { ...c1.headers, "goalcup-length": String(c1.length + 1) } }, 0), 409, "conflict");
       assertError(await put({ body: c1.body, headers: { ...c1.headers, "goalcup-head": "f".repeat(64) } }, 0), 409, "conflict");
+      assertError(await put({ body: c1.body, headers: { ...c1.headers, "goalcup-sha256": "e".repeat(64) } }, 0), 409, "conflict");
+      assertError(await put({ body: c1.body, headers: { ...c1.headers, "goalcup-prev": "9".repeat(64) } }, 0), 409, "conflict");
+      assertError(await put({ body: c1.body, headers: { ...c1.headers, "goalcup-first-seq": "1", "goalcup-last-seq": String(c1.lastSeq + 1) } }, 0), 409, "conflict");
       assertError(await put(makeChunk(entryId, 0, 5, GENESIS, "other"), 0), 409, "conflict");
     });
 

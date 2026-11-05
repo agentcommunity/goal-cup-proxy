@@ -1,7 +1,7 @@
 //! Crash recovery (section 12) at window 2^27: a part file cut at any byte recovers to its last
 //! index line, is closed with `01 00 00` and a recovery frame, and the entry decodes as one stream
 //! with one `recorder_down` gap; every part file decodes alone. A boot that left no index line is
-//! deleted and its number reused; a part file already closed by `R` takes a second recovery frame;
+//! set aside as `.orphan` and its number reused; a part file already closed by `R` takes a second recovery frame;
 //! the recovery frame's COUNT equals a recount of its boot; a sealed entry takes nothing more.
 
 use goalcup_format::read::{Item, decode, open_dir, part_files, read_index};
@@ -257,7 +257,7 @@ fn a_part_file_cut_at_any_byte_recovers_to_its_last_index_line() {
 }
 
 #[test]
-fn a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second_frame() {
+fn a_boot_with_no_index_line_is_set_aside_and_an_r_closed_part_file_takes_a_second_frame() {
     let d = dir("recovery-twice");
     let mut c = Clock(0);
     let mut counts = HashMap::new();
@@ -270,10 +270,13 @@ fn a_boot_with_no_index_line_is_deleted_and_an_r_closed_part_file_takes_a_second
     assert_eq!(w.boot(), 1);
     work(&mut w, &mut c, 3, &mut HashMap::new());
     kill(w);
-    assert_eq!(part_files(&d).unwrap().len(), 2);
+    let dead = part_files(&d).unwrap().remove(1);
+    let dead_bytes = fs::read(&dead).unwrap();
 
-    // Its part file is deleted and boot 1 is reused; part file 0 takes a second recovery frame.
+    // Its part file is set aside and boot 1 is reused; part file 0 takes a second recovery frame.
     let r = recover(&d, &mut c, &counts);
+    let aside = dead.with_extension("zst.orphan");
+    assert_eq!(fs::read(&aside).unwrap(), dead_bytes, "{aside:?}");
     let mut w = r.writer.unwrap();
     assert_eq!(w.boot(), 1);
     work(&mut w, &mut c, 4, &mut HashMap::new());
@@ -424,4 +427,72 @@ fn a_sealed_entry_takes_nothing_more() {
         assert!(r.writer.is_none() && r.gap_after_start.is_none());
         assert_eq!((r.line, files()), (line, before));
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn part_and_index_files_are_private() {
+    use std::os::unix::fs::PermissionsExt;
+    let private = |d: &Path| {
+        let mut all = vec![d.to_path_buf()];
+        all.extend(fs::read_dir(d).unwrap().map(|e| e.unwrap().path()));
+        for p in all {
+            let mode = fs::metadata(&p).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "{p:?} is {mode:o}");
+        }
+    };
+    let d = Path::new(env!("CARGO_TARGET_TMPDIR")).join("recovery-private");
+    let _ = fs::remove_dir_all(&d);
+    let mut c = Clock(0);
+    let mut counts = HashMap::new();
+    let mut w = PartWriter::open(&d, PartOptions::default(), ENTRY, BOOT_A, c.now()).unwrap();
+    private(&d);
+    work(&mut w, &mut c, 4, &mut counts);
+    kill(w);
+    // The recovery frame and the next boot's part file are private too.
+    let mut w = recover(&d, &mut c, &counts).writer.unwrap();
+    w.sync().unwrap();
+    assert_eq!(part_files(&d).unwrap().len(), 2);
+    private(&d);
+}
+
+#[test]
+fn a_part_file_without_an_index_is_set_aside_not_deleted() {
+    let d = dir("recovery-orphan");
+    let none = |_: u64| unreachable!("no LINK, no COUNT");
+    let mut c = Clock(0);
+    let mut orphans = Vec::new();
+    // Two crashes in a row leave the same part file name twice: neither copy is lost.
+    for (crash, name) in ["orphan", "orphan.1"].into_iter().enumerate() {
+        let mut w = match crash {
+            0 => PartWriter::open(&d, PartOptions::default(), ENTRY, BOOT_A, c.now()).unwrap(),
+            _ => PartWriter::recover(&d, PartOptions::default(), rc(c.now(), &none))
+                .unwrap()
+                .writer
+                .unwrap(),
+        };
+        work(&mut w, &mut c, 3, &mut HashMap::new());
+        kill(w);
+        let part = part_files(&d).unwrap().remove(0);
+        if crash == 0 {
+            fs::remove_file(idx_of(&part)).unwrap();
+        }
+        let bytes = fs::read(&part).unwrap();
+        let aside = d.join(format!(
+            "{}.{name}",
+            part.file_name().unwrap().to_str().unwrap()
+        ));
+        orphans.push((aside, bytes));
+    }
+    PartWriter::recover(&d, PartOptions::default(), rc(c.now(), &none)).unwrap();
+    for (aside, bytes) in &orphans {
+        assert_eq!(&fs::read(aside).unwrap(), bytes, "{aside:?}");
+    }
+    assert!(
+        part_files(&d).unwrap().iter().all(|p| !p
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("orphan"))
+    );
 }

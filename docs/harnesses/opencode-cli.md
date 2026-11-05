@@ -1,8 +1,8 @@
 # OpenCode harness facts
 
-Connector ids: `opencode-cli` (OpenCode 1.x) and `opencode2-cli` (OpenCode 2.x) · Facts for versions: `1.19.5` and `2.2.2` · Written by: Goal Cup team · Last checked: 2026-11-01
+Connector id: `opencode-cli` (OpenCode 2.x base, a `1.x` row for OpenCode 1; runs started on 1.0 as `opencode2-cli` continue under it) · Facts for versions: `1.19.5` and `2.2.2` · Written by: Goal Cup team · Last checked: 2026-11-01
 Public disclosure: yes. Facts come from OpenCode's public docs, its public source and a run on 1.19.4 in a Linux container on 28 Oct 2026. No keys, tokens or personal paths are included.
-Status: shipped connectors ([`opencode-cli.toml`](../../connectors/opencode-cli.toml), [`opencode2-cli.toml`](../../connectors/opencode2-cli.toml)). This one sheet covers both; no separate OpenCode 2 sheet is written.
+Status: shipped connector ([`opencode-cli.toml`](../../connectors/opencode-cli.toml)): the base keys are for 2.x, and its `[[versions]]` row `1.x` gives OpenCode 1 its own keys. This one sheet covers both.
 
 Source words: "docs" is [opencode.ai/docs](https://opencode.ai/docs/cli/) for 1.x and [opencode.ai/v2/docs](https://opencode.ai/v2/docs/cli) for 2.x, read on 2026-10-31; "measured" is the 28 Oct run on 1.19.4; "source" is the public `dev` branch, which may be ahead of the 2.2.2 package; "unknown" is not measured or read. Nothing was run on 2.2.2.
 
@@ -15,7 +15,7 @@ Source words: "docs" is [opencode.ai/docs](https://opencode.ai/docs/cli/) for 1.
 ## 2. Install and record a version
 
 - 1.x: `curl -fsSL https://opencode.ai/install | bash`. 2.x: `curl -fsSL https://opencode.ai/v2/install | bash` or `npm install -g @opencode/cli` ([docs](https://opencode.ai/v2/docs)). A mise install older than 2026.10.9 gets OpenCode 1.
-- Both print the version with `opencode --version`. The two connectors share the program name and are told apart only by the version word-prefix rule: `"1."` for 1.x, `"2."` for 2.x. A mismatch refuses the start and names the program; the pad's first row of each is the proof on a real binary.
+- Both print the version with `opencode --version`. One connector serves both: the base keys are for 2.x and the `1.x` `[[versions]]` row replaces what 1.x reads differently. No version refuses a start; an unread version gets the 2.x base.
 - 1.x releases about weekly, 2.x often twice a day (npm, 29 Oct); expect several builds in a run.
 
 ## 3. Where it keeps things, per OS
@@ -66,8 +66,8 @@ Both connectors set the four XDG folders under the isolated home and read `openc
 
 ## Run without permission prompts
 
-1.x: `"permission": "allow"` in `opencode.json`; `external_directory`, `doom_loop` and `.env` reads default to `ask` otherwise ([docs](https://opencode.ai/docs/permissions/)). The `opencode-cli` connector's `no_prompts` row writes it. 2.x names the key `permissions`, an ordered rule list ([docs](https://opencode.ai/v2/docs/config)), so `opencode2-cli` has no `no_prompts` row. The 2.x CLI has a switch `--auto`: "Auto-approve permissions that are not explicitly denied" ([docs](https://opencode.ai/v2/docs/cli); listed by `opencode --help` on 2.2.2). The connector does not pass it: a switch in `args` would apply on every start whatever the participant answered to the setup question, and the `first_screen` line says approvals stay on. An unattended 2.x run therefore waits at the first approval. A switch that setup adds to `args` only after the participant says yes is not available yet.
+1.x: `"permission": "allow"` in `opencode.json`; `external_directory`, `doom_loop` and `.env` reads default to `ask` otherwise ([docs](https://opencode.ai/docs/permissions/)). The `opencode-cli` connector's `no_prompts` row writes it. 2.x names the key `permissions`, an ordered rule list ([docs](https://opencode.ai/v2/docs/config)), so the base (2.x) has no `no_prompts` row; only the `1.x` row has one. The 2.x CLI has a switch `--auto`: "Auto-approve permissions that are not explicitly denied" ([docs](https://opencode.ai/v2/docs/cli); listed by `opencode --help` on 2.2.2). The connector does not pass it: a switch in `args` would apply on every start whatever the participant answered to the setup question, and the `first_screen` line says approvals stay on. An unattended 2.x run therefore waits at the first approval. A switch that setup adds to `args` only after the participant says yes is not available yet.
 
 ## Pad result
 
-The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `docs/plans/2026-10-30-v1.0/PAD-RESULTS.md`; this sheet does not copy them.
+The tier, the tested version and the runs are in [`connectors/tiers.toml`](../../connectors/tiers.toml) and `scripts/pad/rows/PAD-RESULTS.md`; this sheet does not copy them.

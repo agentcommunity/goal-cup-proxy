@@ -8,7 +8,7 @@ import { getDb, readConfig } from "../src/context.ts";
 import { SupabaseDb } from "../src/db-supabase.ts";
 import type { Env } from "../src/env.ts";
 import { ApiError } from "../src/errors.ts";
-import { REPO_URL, boolField, parseSafeUint, versionTriple } from "../src/util.ts";
+import { REPO_URL, parseSafeUint, versionTriple } from "../src/util.ts";
 import { credentialFor, openBody } from "./helpers/client.ts";
 import { inProcess } from "./helpers/inproc.ts";
 
@@ -52,10 +52,12 @@ test("config defaults and validation", () => {
     testEventId: undefined,
     runSeconds: 168 * 3600,
     practiceRunSeconds: 600,
+    practiceMaxBytes: 1073741824,
     closeAfterSeconds: 86400,
     startWindow: undefined,
     githubCheck: false,
     minCompetitionVersion: { kind: "none" },
+    advisories: [],
   });
   assert.equal(readConfig({ ...baseEnv, RUN_HOURS: "2" }).runSeconds, 7200);
   assert.equal(readConfig({ ...baseEnv, PRACTICE_RUN_MINUTES: "30" }).practiceRunSeconds, 1800);
@@ -309,12 +311,4 @@ test("the version rule: the first x.y.z, whatever follows is ignored, none is un
   assert.deepEqual(versionTriple("1.2.3.4"), [1, 2, 3]);
   assert.deepEqual(versionTriple("1.2.3 then 4.5.6"), [1, 2, 3]);
   for (const bad of ["", "0.7", "latest", "1..2", "a.b.c", "99999999999999999999.1.1"]) assert.equal(versionTriple(bad), null, bad);
-});
-
-test("boolField takes a boolean, null or nothing, and nothing else", () => {
-  assert.equal(boolField({}, "dev", false), false);
-  assert.equal(boolField({}, "dev", true), true);
-  assert.equal(boolField({ dev: true }, "dev", false), true);
-  assert.equal(boolField({ dev: false }, "dev", true), false);
-  for (const bad of ["yes", "true", 1, 0, null, [], {}]) assert.throws(() => boolField({ dev: bad }, "dev", false), (e) => e instanceof ApiError && e.code === "malformed");
 });

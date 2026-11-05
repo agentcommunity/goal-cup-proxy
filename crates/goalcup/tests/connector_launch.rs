@@ -147,16 +147,15 @@ fn no_secret_value_is_read_in_the_default_build() {
     }
 }
 
-/// The plan's version and refusal for a connector whose program, on `PATH`, runs `body`.
-fn probe(d: &Path, body: &str) -> (Option<String>, Option<Refusal>) {
-    const FAKE: &str = "id = \"fake-cli\"\nname = \"F\"\nprogram = \"fakev\"\nversion = \"2.\"";
+/// The plan for a connector whose program, on `PATH`, runs `body`.
+fn probe(d: &Path, body: &str) -> LaunchPlan {
+    const FAKE: &str = "id = \"fake-cli\"\nname = \"T\"\nprogram = \"fakev\"\nchecked = \"2.0.0\"\n[[versions]]\nmatch = \"1.x\"\nargs = [\"one\"]\n";
     let (program, file) = (d.join("fakev"), d.join("fake-cli.toml"));
     std::fs::write(&program, format!("#!/bin/sh\n{body}\n")).unwrap();
     std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
     std::fs::write(&file, FAKE).unwrap();
     let c = connector::load(file.to_str().unwrap(), None).unwrap();
-    let plan = connector::plan(&c, &env(d, &[]), &d.join("home"));
-    (plan.harness_version, plan.refusal)
+    connector::plan(&c, &env(d, &[]), &d.join("home"))
 }
 
 #[test]
@@ -175,14 +174,50 @@ fn a_held_home_refuses_and_the_version_probe_never_holds_the_start() {
     assert!(!second.lock.is_held() && !yaml.exists());
     drop((first, second));
     assert!(finished("hermes-cli", &e, d).lock.is_held());
-    let (version, refusal) = probe(d, "echo; echo '  fakeharness v2.1.0  '");
-    assert_eq!(version.as_deref(), Some("fakeharness v2.1.0"));
-    assert_eq!(refusal, None);
-    for line in ["echo fakeharness 1.9.0", "echo fakeharness 1.2.0"] {
-        let refusal = probe(d, line).1;
-        assert!(matches!(refusal, Some(Refusal::VersionMismatch { .. })));
-    }
-    assert_eq!(probe(d, "sleep 30"), (None, None));
+    let plan = probe(d, "echo; echo '  fakeharness v2.1.0  '");
+    let version = plan.harness_version.as_deref();
+    assert_eq!(
+        (version, &plan.refusal),
+        (Some("fakeharness v2.1.0"), &None)
+    );
+    drop(plan);
+    let plan = probe(d, "echo fakeharness 1.9.0");
+    assert_eq!(plan.refusal, None);
+    assert_eq!(
+        (plan.argv.clone(), plan.version_row.as_deref()),
+        (vec!["one".to_string()], Some("1.x"))
+    );
+    assert!(plan.version_notes.is_empty());
+    drop(plan);
+    // A long line is parsed whole and kept cut to 64 UTF-16 units.
+    let plan = probe(d, &format!("echo fakev {} 1.9.0", "x".repeat(80)));
+    let kept = plan.harness_version.as_deref().unwrap();
+    assert_eq!((kept.len(), plan.version_row.as_deref()), (64, Some("1.x")));
+    drop(plan);
+    let plan = probe(d, "sleep 30");
+    assert_eq!((plan.harness_version, plan.refusal), (None, None));
+}
+
+/// A version that cannot be read gets the base rules and is told so; it is never refused.
+#[test]
+fn the_unread_version_uses_the_base_and_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = probe(dir.path(), "exit 1");
+    assert_eq!((&plan.refusal, &plan.version_row), (&None, &None));
+    assert!(plan.argv.is_empty());
+    let say = "goalcup could not read fakev --version, so it used the rules for T 2.0.0.";
+    assert_eq!(plan.version_notes, vec![say]);
+}
+
+/// A version line read but not understood is told as such, not as a line that could not be read.
+#[test]
+fn a_version_line_not_understood_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = probe(dir.path(), "echo fakev nightly");
+    assert_eq!(plan.harness_version.as_deref(), Some("fakev nightly"));
+    let say = "goalcup could not understand the version line fakev --version printed, so it used \
+        the rules for T 2.0.0.";
+    assert_eq!(plan.version_notes, vec![say]);
 }
 
 #[test]
@@ -263,4 +298,233 @@ fn with_home_swapped_a_login_shell_finds_goalcup() {
     std::fs::write(&profile, "# mine\n").unwrap();
     drop(connector::plan(&c, &e, &home));
     assert_eq!(std::fs::read_to_string(&profile).unwrap(), "# mine\n");
+}
+
+/// A connector whose `ca_settings` reads `{home}/config.yaml` as Hermes's does, and one plan of it
+/// on `home` holding `config` (none when `None`); the plan is dropped, so the home is free again.
+fn trusted(d: &Path, config: Option<&str>) -> (LaunchPlan, String) {
+    let file = d.join("trust-cli.toml");
+    let toml = "id = \"trust-cli\"\nname = \"T\"\nprogram = \"true\"\n\
+        host_hints = [{ file = \"{home}/config.yaml\", key = \"model.base_url\" }, \
+        { file = \"{home}/config.yaml\", key = \"providers.*.base_url\" }]\n[ca_settings]\n\
+        file = \"{home}/config.yaml\"\n\
+        entries = [\"custom_providers.*.base_url\", \"providers.*.base_url\"]\n\
+        uses = [\"model.base_url\"]\nadd = \"providers.*.base_url\"\nkey = \"ssl_ca_cert\"\n\
+        value = \"${env:SSL_CERT_FILE}\"\n\
+        fallback = [\"https://api.deepseek.com/v1\", \"https://openrouter.ai/api/v1\"]\n";
+    std::fs::write(&file, toml).unwrap();
+    let c = connector::load(file.to_str().unwrap(), None).unwrap();
+    let home = d.join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    if let Some(text) = config {
+        std::fs::write(home.join("config.yaml"), text).unwrap();
+    }
+    let plan = connector::plan(&c, &env(d, &[]), &home);
+    let text = std::fs::read_to_string(home.join("config.yaml")).unwrap_or_default();
+    (plan, text)
+}
+
+const CA: &str = "    ssl_ca_cert: \"${env:SSL_CERT_FILE}\"\n";
+
+#[test]
+fn trust_rows_fall_back_to_the_routes_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let (plan, text) = trusted(dir.path(), None);
+    for (name, url) in [
+        ("api-deepseek-com-v1", "https://api.deepseek.com/v1"),
+        ("openrouter-ai-api-v1", "https://openrouter.ai/api/v1"),
+    ] {
+        let entry = format!("  goalcup-trust-{name}:\n    base_url: \"{url}\"\n{CA}");
+        assert!(text.contains(&entry), "{text}");
+    }
+    assert!(
+        plan.log.iter().all(|l| !l.contains("ca_settings")),
+        "{:?}",
+        plan.log
+    );
+    drop(plan);
+    // The second start writes nothing: the bytes are equal.
+    let (_, again) = trusted(dir.path(), Some(&text));
+    assert_eq!(again, text);
+}
+
+#[test]
+fn a_custom_endpoint_entry_gets_the_bundle_and_is_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    // As Hermes's setup saves a custom endpoint: a list item at its key's indent.
+    let config = "model:\n  provider: custom\n  base_url: https://llm.example.net/v1\n\
+        custom_providers:\n- name: mine\n  base_url: https://llm.example.net/v1\n  model: m\n";
+    let (plan, text) = trusted(dir.path(), Some(config));
+    let want = "custom_providers:\n- name: mine\n  base_url: https://llm.example.net/v1\n  model: m\n  \
+        ssl_ca_cert: \"${env:SSL_CERT_FILE}\"\n";
+    assert!(text.ends_with(want), "{text}");
+    assert!(
+        !text.contains("goalcup-trust"),
+        "no second entry, no fallback: {text}"
+    );
+    // Not on the shared list, still decrypted and recorded as a config host.
+    let decided = plan.hosts.decide("llm.example.net");
+    assert!(
+        matches!(decided, connector::Decision::Listed { .. }),
+        "{decided:?}"
+    );
+}
+
+#[test]
+fn a_custom_base_url_without_an_entry_gets_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = "model:\n  provider: custom\n  base_url: https://llm.example.net/v1\n\
+        providers:\n  mine:\n    base_url: https://other.example.org/v1\n    ssl_ca_cert: /mine.pem\n  \
+        blank:\n    base_url: https://other.example.org/v2\n    ssl_ca_cert: \"\"\n";
+    let (_, text) = trusted(dir.path(), Some(config));
+    let entry = format!(
+        "  goalcup-trust-llm-example-net-v1:\n    base_url: \"https://llm.example.net/v1\"\n{CA}"
+    );
+    assert!(text.contains(&entry), "{text}");
+    // A participant entry whose own CA cannot be read is left as it is.
+    assert!(
+        text.contains(
+            "  mine:\n    base_url: https://other.example.org/v1\n    ssl_ca_cert: /mine.pem\n"
+        ),
+        "{text}"
+    );
+    // An empty CA is not the participant's own: it gets the bundle.
+    assert!(
+        text.contains(&format!(
+            "  blank:\n    base_url: https://other.example.org/v2\n{CA}"
+        )),
+        "{text}"
+    );
+    assert!(!text.contains("deepseek"), "no fallback: {text}");
+}
+
+#[test]
+fn trust_rows_skip_a_flow_map_and_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let (plan, text) = trusted(dir.path(), Some("providers: {}\n"));
+    let skipped = |l: &String| l.starts_with("ca_settings not written: ");
+    assert!(plan.log.iter().any(skipped), "{:?}", plan.log);
+    assert_eq!(text, "providers: {}\n");
+    assert!(plan.refusal.is_none());
+}
+
+#[test]
+fn a_host_left_undecrypted_keeps_the_os_trust() {
+    let dir = tempfile::tempdir().unwrap();
+    // A custom_providers entry no host hint names: goalcup does not decrypt it, so writes nothing.
+    let config = "custom_providers:\n- name: lan\n  base_url: https://lan.example.net/v1\n";
+    let (_, text) = trusted(dir.path(), Some(config));
+    assert!(
+        !text.contains("lan.example.net/v1\n  ssl_ca_cert"),
+        "{text}"
+    );
+}
+
+/// Two addresses that differ only in punctuation get two `goalcup-trust-*` entries, and a second
+/// start writes nothing.
+#[test]
+fn trust_names_never_collide() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, e) = (dir.path(), env(dir.path(), &[]));
+    let home = d.join("goalcup/homes/hermes-cli");
+    std::fs::create_dir_all(&home).unwrap();
+    let config = "model:\n  base_url: https://llm.example.net/v.1\n\
+        delegation:\n  base_url: https://llm.example.net/v-1\n";
+    std::fs::write(home.join("config.yaml"), config).unwrap();
+    drop(finished("hermes-cli", &e, d));
+    let text = std::fs::read_to_string(home.join("config.yaml")).unwrap();
+    let keys: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("goalcup-trust-"))
+        .collect();
+    assert_eq!(keys.len(), 2, "{text}");
+    assert_ne!(keys[0], keys[1], "{text}");
+    for url in ["https://llm.example.net/v.1", "https://llm.example.net/v-1"] {
+        assert!(
+            text.contains(&format!("    base_url: \"{url}\"\n")),
+            "{text}"
+        );
+    }
+    drop(finished("hermes-cli", &e, d));
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+        text
+    );
+}
+
+/// An entry with its own CA on a decrypted host keeps it and trusts the run CA too: it points at a
+/// file in the isolated home holding its CA, then the run bundle. The participant's file is never
+/// changed, and a second start leaves config.yaml as it is.
+#[test]
+fn an_entry_with_its_own_ca_gets_both_in_one_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, e) = (dir.path(), env(dir.path(), &[]));
+    let home = d.join("goalcup/homes/hermes-cli");
+    std::fs::create_dir_all(&home).unwrap();
+    let mine = d.join("mine.pem");
+    std::fs::write(&mine, "MINE CERT\n").unwrap();
+    std::fs::write(d.join("bundle.pem"), "RUN BUNDLE\n").unwrap();
+    let config = format!(
+        "custom_providers:\n- name: mine\n  base_url: https://llm.example.net/v1\n  \
+        ssl_ca_cert: {}\n",
+        mine.display()
+    );
+    std::fs::write(home.join("config.yaml"), &config).unwrap();
+    let plan = finished("hermes-cli", &e, d);
+    assert!(
+        plan.log.iter().all(|l| !l.contains("ca_settings")),
+        "{:?}",
+        plan.log
+    );
+    drop(plan);
+    let text = std::fs::read_to_string(home.join("config.yaml")).unwrap();
+    let ca = text
+        .lines()
+        .find_map(|l| l.strip_prefix("  ssl_ca_cert: \""))
+        .map(|l| l.trim_end_matches('"').to_string())
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(Path::new(&ca).starts_with(&home), "{ca}");
+    assert_eq!(
+        std::fs::read_to_string(&ca).unwrap(),
+        "MINE CERT\nRUN BUNDLE\n"
+    );
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "MINE CERT\n");
+    drop(finished("hermes-cli", &e, d));
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+        text
+    );
+    assert_eq!(
+        std::fs::read_to_string(&ca).unwrap(),
+        "MINE CERT\nRUN BUNDLE\n"
+    );
+}
+
+/// Each address goalcup could not give its certificate is one plain start line (point 6): an own
+/// CA that cannot be read, and `providers: null`.
+#[test]
+fn an_address_left_without_the_certificate_is_told() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, e) = (dir.path(), env(dir.path(), &[]));
+    let home = d.join("goalcup/homes/hermes-cli");
+    std::fs::create_dir_all(&home).unwrap();
+    let say = |url: &str| {
+        format!(
+            "goalcup could not add its certificate for {url} in Hermes's config.yaml; calls to it \
+            may fail on macOS."
+        )
+    };
+    let config = "custom_providers:\n- name: mine\n  base_url: https://llm.example.net/v1\n  \
+        ssl_ca_cert: /nowhere/mine.pem\n";
+    std::fs::write(home.join("config.yaml"), config).unwrap();
+    let plan = finished("hermes-cli", &e, d);
+    assert_eq!(plan.trust_notes, vec![say("https://llm.example.net/v1")]);
+    drop(plan);
+    let config = "providers: null\nmodel:\n  base_url: https://openrouter.ai/api/v1\n";
+    std::fs::write(home.join("config.yaml"), config).unwrap();
+    let plan = finished("hermes-cli", &e, d);
+    assert_eq!(plan.trust_notes, vec![say("https://openrouter.ai/api/v1")]);
+    drop(plan);
+    std::fs::write(home.join("config.yaml"), "").unwrap();
+    assert!(finished("hermes-cli", &e, d).trust_notes.is_empty());
 }

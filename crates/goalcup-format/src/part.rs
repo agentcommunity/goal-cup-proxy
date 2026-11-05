@@ -119,7 +119,11 @@ impl PartWriter {
         boot_id: [u8; 16],
         now: Now,
     ) -> io::Result<Self> {
-        fs::create_dir_all(dir)?;
+        let mut b = fs::DirBuilder::new();
+        b.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+        b.create(dir)?;
         let mut w = Self::empty(dir, opts, entry, boot_id);
         w.start_part(now, ZERO)?;
         Ok(w)
@@ -287,10 +291,11 @@ impl PartWriter {
     fn start_part(&mut self, now: Now, prev: [u8; 32]) -> io::Result<()> {
         let dir = self.dir.clone();
         let create = |name: String| {
-            OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(dir.join(name))
+            let mut o = OpenOptions::new();
+            o.write(true).create_new(true);
+            #[cfg(unix)]
+            std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+            o.open(dir.join(name))
         };
         let f = create(part_name(self.raw))?;
         self.idx = Some(create(index_name(self.raw))?);
@@ -330,7 +335,7 @@ impl PartWriter {
             }
         }
         // A part file with no usable index line (its boot died before its first LINK there) is
-        // deleted with its index; lines past the file's length are dropped.
+        // set aside with its index; lines past the file's length are dropped.
         let mut dead_mtime = None;
         let mut last = None;
         for p in files.iter().rev() {
@@ -344,8 +349,7 @@ impl PartWriter {
                 if dead_mtime.is_none() {
                     dead_mtime = fs::metadata(p)?.modified().ok();
                 }
-                fs::remove_file(p)?;
-                let _ = fs::remove_file(idx_path(p));
+                set_aside(p)?;
                 continue;
             }
             last = Some((p.clone(), lines));
@@ -355,7 +359,7 @@ impl PartWriter {
         let Some((path, lines)) = last else {
             // Nothing with an index line: start boot 0 afresh, with a recorder_down gap that the
             // caller writes right after its start event.
-            // The deleted file's time is taken on this boot's clock.
+            // The set-aside file's time is taken on this boot's clock.
             let (start, id) = rc.dead_start.unwrap_or_else(|| {
                 let wall = dead_mtime
                     .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
@@ -508,7 +512,7 @@ pub struct Recover<'a> {
     /// taken under another `boot_id` (section 6).
     pub tail: serde_json::Map<String, serde_json::Value>,
     /// For an entry that left no index line: the dead boot's start time and the `boot_id` it was
-    /// taken under, if the watchdog has them (else the deleted part file's modification time).
+    /// taken under, if the watchdog has them (else the set-aside part file's modification time).
     pub dead_start: Option<(Now, [u8; 16])>,
     /// A `recovered` seal event JSON: close the entry instead of starting a boot. For an entry
     /// that left no index line, the caller writes it after the start event and the gap instead.
@@ -575,6 +579,40 @@ fn idx_path(part: &Path) -> PathBuf {
     part.with_file_name(format!("{}.idx", name.trim_end_matches(".gcr.zst")))
 }
 
+/// Renames a part file and its index to `<name>.orphan`, or `.orphan.1` and up when an earlier
+/// crash left that name: no reader lists them, nothing uploads or deletes them.
+fn set_aside(part: &Path) -> io::Result<()> {
+    set_aside_by(part, |a, b| fs::rename(a, b))
+}
+
+/// [`set_aside`] with its rename given, so a test can stop it between the two.
+fn set_aside_by(
+    part: &Path,
+    mut rename: impl FnMut(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let idx = idx_path(part);
+    let to = |p: &Path, n: u32| {
+        let mut s = p.as_os_str().to_owned();
+        s.push(if n == 0 {
+            ".orphan".into()
+        } else {
+            format!(".orphan.{n}")
+        });
+        PathBuf::from(s)
+    };
+    let mut n = 0;
+    while to(part, n).try_exists()? || to(&idx, n).try_exists()? {
+        n += 1;
+    }
+    // The index first: a crash between the two leaves a part file without one, which the next
+    // recovery sets aside; never an index whose part file is gone.
+    match rename(&idx, &to(&idx, n)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
+    }
+    rename(part, &to(part, n))
+}
+
 /// Shortens a file to at most `len` bytes; a missing file stays missing.
 fn cut(p: &Path, len: u64) -> io::Result<()> {
     match OpenOptions::new().write(true).open(p) {
@@ -595,4 +633,36 @@ fn keep_lines(p: &Path, n: usize) -> io::Result<()> {
         .nth(n - 1)
         .map_or(text.len(), |(i, _)| i + 1);
     cut(p, end as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A crash between the two renames never leaves an index without its part file: that stale
+    /// index would make the next `start_part`'s `create_new` fail on every boot. A part file
+    /// left without its index is set aside by the next recovery.
+    #[test]
+    fn set_aside_stopped_halfway_leaves_no_index_behind() {
+        let d = std::env::temp_dir().join(format!("goalcup-set-aside-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        let part = d.join(part_name(0));
+        fs::write(&part, b"part").unwrap();
+        fs::write(idx_path(&part), b"").unwrap();
+        let mut first = true;
+        let crash = |a: &Path, b: &Path| {
+            if std::mem::take(&mut first) {
+                fs::rename(a, b)
+            } else {
+                Err(io::Error::other("killed"))
+            }
+        };
+        assert!(set_aside_by(&part, crash).is_err());
+        assert!(!idx_path(&part).exists(), "a stale index is left");
+        assert!(part.exists());
+        set_aside(&part).unwrap();
+        assert!(!part.exists());
+        fs::remove_dir_all(&d).unwrap();
+    }
 }

@@ -1,0 +1,10 @@
+# A release row template: scripts/pad/release-rows fills its @...@ placeholders (see that script).
+harness = "hermes-cli"
+key = "deepseek"
+case = "gateway"
+mode = "full"
+box_extra_minutes = 10
+where = "here"
+build = "@BUILD@"
+versions = ["0.22.5"]
+here_path = ["@HARNESS_INSTALLS@/hermes-cli-0.22.5/bin"]

@@ -1,8 +1,7 @@
 //! PRD-02 section 8.1 (ledger R3b, points 3 and 4): `watchdog::recover_with` after the watchdog
 //! and then the recorder died while the harness runs. The state is built by hand: a minted CA and its key
 //! file, a recorder started on a listener with the start line, `ready`, a shell harness sent as
-//! `launch`, one TLS request served, then the recorder SIGKILLed and everything closed. Linux only.
-#![cfg(target_os = "linux")]
+//! `launch`, one TLS request served, then the recorder SIGKILLed and everything closed.
 
 mod common;
 mod watchdog_share;
@@ -265,6 +264,16 @@ fn watchdog_recover_refusals_start_nothing() {
     drop(taken);
     std::fs::remove_file(d.entry_dir.join("rec").join(watchdog::KEY_FILE)).unwrap();
     assert_eq!(try_it(&d), Err(NotRecovered::KeyMissing));
+    // Recover starts the binary the entry recorded (so it pins nothing in this HOME), and a
+    // refusal leaves that record alone.
+    let pin = d.entry_dir.join("rec").join(watchdog::PIN_FILE);
+    std::fs::write(&pin, common::bin().as_os_str().as_encoded_bytes()).unwrap();
+    let pinned = watchdog::recover(&d.entry_dir, d.facts.clone());
+    assert_eq!(pinned, Err(NotRecovered::KeyMissing));
+    assert_eq!(
+        std::fs::read(&pin).unwrap(),
+        common::bin().as_os_str().as_encoded_bytes()
+    );
     assert!(watchdog_pid(&d.entry_dir).is_none());
     assert!(spawn::bind_exact(d.port).is_ok(), "port left bound");
     d.harness.kill().unwrap();
@@ -330,4 +339,70 @@ fn watchdog_recover_seal_says_the_harness_was_left() {
     assert!(!d.tmp.path().join("signalled").exists(), "signalled");
     d.harness.kill().unwrap();
     d.harness.wait().unwrap();
+}
+
+/// Review focus 5: the recovered watchdog holds the harness home lock (`flock`, a second open
+/// in this process conflicts) until it ends, so a `goalcup start` of the same harness is refused.
+#[test]
+fn watchdog_recover_holds_the_home_lock() {
+    let mut d = setup(false);
+    let got = watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
+    assert!(got.is_ok(), "{got:?}");
+    let homes = d.tmp.path().join("g/homes");
+    std::fs::create_dir_all(&homes).unwrap();
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(homes.join("fake.goalcup.lock"))
+        .unwrap();
+    assert!(matches!(
+        f.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+
+    d.harness.kill().unwrap();
+    d.harness.wait().unwrap();
+    until("the seal", || {
+        read_json::<Value>(&status_json(&d.entry_dir)).filter(|s| !s["seal"].is_null())
+    });
+    until("the lock freed", || f.try_lock().ok());
+}
+
+/// A run recorded under an old id (`opencode2-cli`) has its home there: the recovered watchdog
+/// locks that home, not the one of the id the connector reloads as.
+#[test]
+fn watchdog_recover_locks_the_recorded_home() {
+    let mut d = setup(false);
+    let run_dir = d.entry_dir.parent().unwrap().to_path_buf();
+    let server = json!({"v": 1, "server": null, "run": RUN, "mode": "practice", "deadline": null,
+        "repo": null, "connector": {"id": "opencode2-cli", "name": "OpenCode", "source": "builtin"},
+        "hosts_file": null, "entries": []});
+    std::fs::write(cli::server_json(&run_dir), server.to_string()).unwrap();
+    d.facts.connector["id"] = json!("opencode-cli");
+    let got = watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
+    assert!(got.is_ok(), "{got:?}");
+    let homes = d.tmp.path().join("g/homes");
+    std::fs::create_dir_all(&homes).unwrap();
+    let open = |name: &str| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(homes.join(name))
+            .unwrap()
+    };
+    let old = open("opencode2-cli.goalcup.lock");
+    until("the recorded home locked", || {
+        matches!(old.try_lock(), Err(std::fs::TryLockError::WouldBlock)).then_some(())
+    });
+    assert!(open("opencode-cli.goalcup.lock").try_lock().is_ok());
+
+    d.harness.kill().unwrap();
+    d.harness.wait().unwrap();
+    until("the seal", || {
+        read_json::<Value>(&status_json(&d.entry_dir)).filter(|s| !s["seal"].is_null())
+    });
 }

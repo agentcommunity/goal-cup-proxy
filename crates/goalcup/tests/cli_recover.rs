@@ -2,7 +2,6 @@
 //! held by another program and a missing run certificate key refuse with exit 1, and the harness
 //! is never signalled. Fake `status.json` and `server.json` files and shell stand-ins for the
 //! harness and the other goalcup processes. Facts only; the full recover is acceptance 11 on the pad.
-#![cfg(target_os = "linux")]
 
 mod cli_common;
 mod common;

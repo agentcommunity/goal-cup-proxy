@@ -713,7 +713,8 @@ pub fn judge(h: &Hist, t: &CallTable, covers: &[Cover]) -> Check {
                 (res, "never recorded as a response")
             } else {
                 missing_text += 1;
-                (Res::Warn, "text not found in any response")
+                let res = if named { Res::Named } else { Res::Warn };
+                (res, "text not found in any response")
             };
             e.0 = e.0.max(res);
             let kind = if miss.contains(&true) {

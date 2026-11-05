@@ -112,14 +112,15 @@ pub(super) fn summary(t: &CallTable) -> Value {
         .collect();
     let native = || rows().filter(|r| r.leg == Leg::Native);
     json!({"v": 1, "reader": env!("CARGO_PKG_VERSION"), "run": t.run, "entry": t.entry,
-        "connector": t.connector, "harness_version": t.harness_version, "sealed": t.sealed,
+        "connector": t.connector, "harness_version": t.harness_version, "harness_semver": t.harness_semver,
+        "version_row": t.version_row, "native_checked_on": t.native_checked_on, "sealed": t.sealed,
         "readable": t.readable(), "reason": t.reason.map(snake), "native_until": t.native_until.map(wall),
         "db_set": t.db_set, "harness_exited": t.harness_exited,
         "coverage": {"wire_calls": rows().filter(wire).count(), "native_calls": native().count(),
             "matched": n(Join::Matched), "native_only": n(Join::NativeOnly),
             "wire_only": n(Join::WireOnly), "unattributed": n(Join::Unattributed),
             "joined_by_time": t.joined_by_time, "repeats_skipped": t.repeats_skipped,
-            "copied_skipped": t.copied_skipped},
+            "copied_skipped": t.copied_skipped, "lines_unread": t.lines_unread},
         "not_on_wire": t.not_on_wire.iter().map(|(host, reason, conns)| json!({"host": host,
             "reason": reason, "conns": conns})).collect::<Vec<_>>(),
         "status": st, "models": models, "threads": threads,

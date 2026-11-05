@@ -22,15 +22,18 @@ not a signature.
 
 It edits no shell profile. When the bin folder is not on `PATH` it prints one line which, when the
 participant runs it, exports `PATH` and appends the same export to `~/.zshrc`, `~/.bashrc`
-(`~/.bash_profile` on macOS) or `~/.profile` (by `$SHELL`).
+(`~/.bash_profile` on macOS) or `~/.profile` (by `$SHELL`); for fish it is `fish_add_path`.
 
 **Run guard.** Before anything in the prefix changes, the installer asks the `goalcup` it would
 replace (`<prefix>/bin/goalcup`, else the one on `PATH`) for `goalcup status --json`, one JSON
-object `{"status": ..., "upload": ..., "run": ...}` on one line. When `status.mode` is
-`recording`, `losing`, `writer_slow` or `null` it stops with a line starting `INSTALL_BLOCKED:`,
-which names `--force`. Any other mode (`sealed`), exit 1 with nothing on stdout (no run on this computer yet)
-and a first install go on. An answer it cannot read (exit 3, output it cannot parse, a `goalcup`
-from before 1.0, no answer within 10 s) prints a line starting `INSTALL_UNSURE:` and goes on. The JSON is
+object `{"status": ..., "upload": ..., "run": ...}` on one line. It replaces the old binary only
+when that answer says for certain that no run is live: `status.mode` is `sealed`, or exit 1 with
+nothing on stdout (no run on this computer yet), or there is no old `goalcup` (a first install).
+A live mode (`recording`, `losing`, `writer_slow`, `null`) stops with a line starting
+`INSTALL_BLOCKED:`. Anything else (a mode it does not know, another exit code, output it cannot
+parse, a `goalcup` from before 1.0, no answer within 10 s) stops with a line starting
+`INSTALL_UNSURE:`, which names `--force`. Both say to finish the run with `goalcup seal` first.
+The JSON is
 read with `awk` only, as a participant may have no `jq` or `python3`.
 
 The binaries are unsigned and not notarized. A download by `curl` is not quarantined on macOS, so

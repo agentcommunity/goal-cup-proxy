@@ -16,6 +16,7 @@ use goalcup_format::{
 use goalcup_format::{StreamKind, index_name, part_name};
 use goalcup_verify::usage::{CallTable, Calls};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -127,7 +128,8 @@ impl Tally {
     }
 
     fn add(&mut self, k: &'static str, v: u64) {
-        *self.n.entry(k).or_default() += v;
+        let n = self.n.entry(k).or_default();
+        *n = n.saturating_add(v);
     }
 
     fn model_request(&mut self, host: String, whole: bool) {
@@ -718,14 +720,18 @@ pub fn clean(name: &str) -> PathBuf {
     e.seal()
 }
 
+/// The start event. `hosts_sha256` is the recorder's: SHA-256 of the shared host file's bytes,
+/// lowercase hex (crates/goalcup/src/connector/hosts.rs `HostList::from_file`).
 pub fn start(resume: bool) -> Value {
     let zeros = "0".repeat(64);
+    let hosts = include_str!("../../../../connectors/model-hosts.toml");
+    let hosts_sha256 = goalcup_format::hex(&Sha256::digest(hosts));
     json!({"ev": "start", "run": RUN, "entry": ENTRY, "segment": 0, "goalcup": "1.0.0",
         "build": null, "os": "linux", "arch": "x86_64", "connector": "fake",
         "connector_source": "file", "connector_sha256": zeros, "harness_version": null,
         "hosts": {"shared": [{"host": HOST, "kind": "provider", "pinned": false}],
                   "participant": [], "config": []},
-        "hosts_sha256": zeros, "mask_rules": MASK_RULES, "mask_values": {"skipped": 0},
+        "hosts_sha256": hosts_sha256, "mask_rules": MASK_RULES, "mask_values": {"skipped": 0},
         "fd_limit": 1024, "keep": true, "deadline": null, "server_time": null,
         "local_wall_at_server_time": null, "workspace_head": null, "resume": resume})
 }
@@ -740,6 +746,17 @@ pub fn read_records(rec: &Path) -> Vec<Record> {
 /// with seq `bad_link`, which gets a wrong hash. Each part file is one zstd frame up to its last
 /// LINK, with one `E` index line there, and a second frame for anything after it.
 pub fn write_raw(rec: &Path, recs: &[Record], bad_link: Option<u64>) {
+    write_raw_with(rec, recs, bad_link, |_, _| {});
+}
+
+/// [`write_raw`], then `edit(n, part)` on the `n`th PART (from 0) after its fields are set to fit:
+/// the PART continuity mutations.
+pub fn write_raw_with(
+    rec: &Path,
+    recs: &[Record],
+    bad_link: Option<u64>,
+    edit: impl Fn(usize, &mut Record),
+) {
     for p in part_files(rec).unwrap() {
         fs::remove_file(&p).unwrap();
         let _ = fs::remove_file(p.with_extension("").with_extension("idx"));
@@ -747,6 +764,7 @@ pub fn write_raw(rec: &Path, recs: &[Record], bad_link: Option<u64>) {
     let (mut codec, mut chain, mut prev) = (Codec::default(), Chain::new(ZERO), ZERO);
     let (mut buf, mut start, mut off) = (Vec::new(), 0u64, 0u64);
     let mut last_link: Option<(u64, usize, [u8; 32])> = None;
+    let mut parts = 0;
     for (i, r) in recs.iter().enumerate() {
         let mut r = r.clone();
         if let Record::Part {
@@ -761,6 +779,8 @@ pub fn write_raw(rec: &Path, recs: &[Record], bad_link: Option<u64>) {
                 start = off;
             }
             (*raw_offset, *p) = (off, prev);
+            edit(parts, &mut r);
+            parts += 1;
         }
         let mut b = Vec::new();
         codec.encode(&r, &mut b).unwrap();
@@ -804,6 +824,25 @@ pub fn mutate(dir: &Path, bad_link: Option<u64>, f: impl FnOnce(&mut Vec<Record>
     let mut recs = read_records(&rec);
     f(&mut recs);
     write_raw(&rec, &recs, bad_link);
+    dir.to_path_buf()
+}
+
+/// Decodes an entry and writes it back with `f` applied to its `n`th PART (from 0), after the
+/// PART's `raw_offset` and `prev` are set to fit (see [`write_raw_with`]).
+pub fn mutate_part(dir: &Path, n: usize, f: impl Fn(&mut Record)) -> PathBuf {
+    let rec = dir.join("rec");
+    let recs = read_records(&rec);
+    assert!(
+        recs.iter()
+            .filter(|r| matches!(r, Record::Part { .. }))
+            .count()
+            > n
+    );
+    write_raw_with(&rec, &recs, None, |i, r| {
+        if i == n {
+            f(r)
+        }
+    });
     dir.to_path_buf()
 }
 
@@ -857,6 +896,16 @@ pub fn run(args: &[&str]) -> (i32, Option<Value>) {
         out.status.code().unwrap_or(-1),
         serde_json::from_slice(&out.stdout).ok(),
     )
+}
+
+/// The text form of `check <dir>`: what it prints on stderr.
+pub fn text(dir: &Path) -> String {
+    let out = Command::new(env!("CARGO_BIN_EXE_goalcup-verify"))
+        .arg("check")
+        .arg(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
 /// `check <dir> --json [extra]`.

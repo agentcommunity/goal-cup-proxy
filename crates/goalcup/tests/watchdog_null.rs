@@ -75,6 +75,16 @@ fn crash_wrapper(d: &Path) -> PathBuf {
 
 /// A plain request to `up` through the proxy on `port`: a CONNECT tunnel, then one GET.
 fn through_proxy(port: u64, up: std::net::SocketAddr) -> String {
+    let mut s = tunnel(port, up);
+    s.write_all(b"GET / HTTP/1.1\r\nHost: up\r\nConnection: close\r\n\r\n")
+        .unwrap();
+    let mut answer = String::new();
+    let _ = s.read_to_string(&mut answer);
+    answer
+}
+
+/// A CONNECT tunnel to `up` through the proxy on `port`, its `200` head read.
+fn tunnel(port: u64, up: std::net::SocketAddr) -> TcpStream {
     let mut s = TcpStream::connect(("127.0.0.1", port as u16)).unwrap();
     s.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
     write!(s, "CONNECT {up} HTTP/1.1\r\nHost: {up}\r\n\r\n").unwrap();
@@ -85,11 +95,7 @@ fn through_proxy(port: u64, up: std::net::SocketAddr) -> String {
         head.push(b[0]);
     }
     assert!(head.starts_with(b"HTTP/1.1 200"), "{head:?}");
-    s.write_all(b"GET / HTTP/1.1\r\nHost: up\r\nConnection: close\r\n\r\n")
-        .unwrap();
-    let mut answer = String::new();
-    let _ = s.read_to_string(&mut answer);
-    answer
+    s
 }
 
 fn setup() -> Setup {
@@ -169,6 +175,43 @@ fn watchdog_null_crash_loop_serves_and_retries() {
     assert!(start < end);
     let ns = |s: f64| (s * 1e9) as u64;
     assert!(*start <= ns(null_at) && *end >= ns(try_at), "{down:?}");
+}
+
+/// Point 3: the `restart` line comes 30 s after the null boot starts; a stream open then, still
+/// moving bytes every 200 ms, finishes before the null recorder exits.
+#[test]
+fn watchdog_null_retry_lets_a_live_stream_finish() {
+    let Setup {
+        _tmp,
+        d,
+        entry_dir,
+        plan,
+        recorder,
+        facts,
+    } = setup();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let upstream = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut s, _) = listener.accept().unwrap();
+        for _ in 0..30 {
+            let _ = s.write_all(b"x");
+            std::thread::sleep(Duration::from_millis(200));
+        }
+    });
+    let (dir, m) = (entry_dir.clone(), d.clone());
+    let driver = std::thread::spawn(move || {
+        let null = crash_to_null(&dir);
+        // About 26.5 s into the null boot: the 6 s stream spans the `restart` line at 30 s.
+        std::thread::sleep(Duration::from_secs(26));
+        let mut s = tunnel(null["port"].as_u64().unwrap(), upstream);
+        let mut got = Vec::new();
+        let _ = s.read_to_end(&mut got);
+        std::fs::write(m.join("stop"), "").unwrap();
+        got
+    });
+    let _ = watchdog::run_with(plan, facts, &recorder);
+    let got = driver.join().unwrap();
+    assert_eq!(got.len(), 30, "{:?}", boot_log(&d));
 }
 
 /// Section 11 "In null mode" (PRD-02 section 12): the harness exits while the null recorder

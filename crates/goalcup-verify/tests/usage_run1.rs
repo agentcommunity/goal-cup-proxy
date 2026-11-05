@@ -458,6 +458,9 @@ fn usage_files_repeat_and_add_up() {
     }
     let calls = CALLS.split_whitespace().count();
     assert_eq!(sum["coverage"]["wire_calls"], calls);
+    assert_eq!(sum["coverage"]["lines_unread"], 0);
+    let build = ["harness_semver", "version_row", "native_checked_on"].map(|k| &sum[k]);
+    assert_eq!(build, [&Value::Null, &Value::Null, &json!("0.165.0")]);
     // Which subagent used which model is in the summary's thread rows, not only in the calls file.
     let kid = sum["threads"]
         .as_array()

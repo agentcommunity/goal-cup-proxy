@@ -93,8 +93,8 @@ export interface RunRow {
   current_sealed_at: string | null;
   /**
    * What the run holds in R2 so far, over all its entries: the compressed bytes (each committed
-   * chunk's Content-Length) and the number of committed chunks. There is no per-run size limit;
-   * the chunk path logs each 10 GiB a run crosses.
+   * chunk's Content-Length) and the number of committed chunks. Only a practice run has a size
+   * limit (PRACTICE_MAX_BYTES); the chunk path logs each 10 GiB a run crosses.
    */
   stored_bytes: number;
   chunk_count: number;
@@ -341,11 +341,6 @@ export interface TickRun extends RunRow {
   flag_reason: "gaps" | "failed" | null;
   /** The judged GitHub commit (see `FinalCommitDetail`): 40 hex, `none` for a repository GitHub does not have, null until decided. */
   final_commit: string | null;
-  /**
-   * The start of the latest disk pause that is owed a disk_full email (see `HeartbeatResult`); null
-   * until a heartbeat reports one.
-   */
-  disk_notice_at: string | null;
 }
 
 /**
@@ -443,6 +438,8 @@ export interface Db {
    * many this call queued. A batch that fails is retried whole: the key makes that safe.
    */
   queueNotices(notices: NoticeArgs[]): Promise<number>;
+  /** Delete this deployment's device requests that expired more than a day before `now`. Returns how many. */
+  purgeDevices(now: string): Promise<number>;
   /**
    * Claim up to `limit` unsent notices for the mailer. A claim lasts 15 minutes, so a send that died
    * is claimed again; suppressed or address-less members are skipped by the database and not returned.

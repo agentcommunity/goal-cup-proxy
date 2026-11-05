@@ -41,9 +41,11 @@ copy, on an organizer machine (`scripts/fetch-run.sh`, then `goalcup-verify chec
   offset of the chunk's first byte. `Content-Type: application/zstd`.
 - Every put is create-only and R2 checks the SHA-256, so a key holds only those bytes. A chunk is at
   most 32 MiB compressed; any JSON body at most 64 KiB.
-- There is no per-run size limit. The database counts `stored_bytes` and `chunk_count` per entry in the
-  step that commits a chunk, and the log line `large-run <run_id> stored=<bytes>` marks each 10 GiB a
-  run crosses.
+- Only a practice run has a size limit: `PRACTICE_MAX_BYTES` compressed bytes over all its entries
+  (1 GiB), then `410 closed` ("This practice run has reached its upload limit."). Competition and test
+  runs have none. The database counts `stored_bytes` and `chunk_count` per entry in the step that
+  commits a chunk, and the log line `large-run <run_id> stored=<bytes>` marks each 10 GiB a run crosses.
+  There is no total storage limit or alert: the server keeps everything.
 - The bucket lock (180 days) covers the competition prefix only (`traces/goalcup-cup-2026/`). Dry run,
   practice and test prefixes are not locked. No lifecycle rule deletes objects.
 
@@ -65,8 +67,9 @@ requests carry a `staging` column, set by the database from the caller's role (a
 it), so **every organizer query filters `staging`**.
 
 **What the server stores about a person.** Hashes of the codes and credential, never the plain
-values. The machine facts sent at open (operating system, architecture, CPUs, memory, disk, WSL2,
-container, mains power; no host name, user name or serial number). The IP address and country of the
+values. The machine facts sent at open (goalcup sends the operating system and the CPU count; no
+host name or serial number). The workspace path of each entry: the absolute folder goalcup ran in,
+which may hold the OS user name. The IP address and country of the
 open call and the latest pair from each `continue` and heartbeat. Each heartbeat's counts of what the
 client wrote and lost. None of this is in an answer, a key, a log or a public page. The Worker does
 not redact: goalcup masks secrets on the participant's machine before any byte reaches disk. Raw
@@ -78,14 +81,18 @@ build box, a log or a command line. Every organizer script opens `BEGIN READ ONL
 `ROLLBACK`, as `scripts/fetch-run.sh` does. `scripts/delete-test-runs.sh` writes, so only the owner
 runs it.
 
-**Website database: nothing to migrate in 1.0.** The 1.0 Worker fits the tables as they are:
+**Website database.** The 1.0 Worker needs website migration `20261021100000` (applied 22 Oct 2026),
+which adds `stored_bytes` and `chunk_count`. One migration is pending:
+`sql/pending/20261105100000_goal_cup_purge_device_requests.sql`, for the cron's purge of expired
+device requests ([Deploying a pending migration](#deploying-a-pending-migration)). Otherwise the
+Worker fits the tables as they are:
 
 | 1.0 | How it fits |
 |---|---|
 | No signed chunk answer | `{}` in `chunks.ack` (NOT NULL) and `entries.last_ack` |
 | No seal documents | the final head in both seal digest columns, null keys |
 | Heartbeat counts | `heartbeats.vitals` and `runs.last_vitals` hold `{"counts": ...}`; the column keeps its name. A `counts` that is not a flat object within 2 KiB is stored as `{"counts_dropped": <bytes>}` with the log line `counts-dropped <run_id>`, never refused |
-| No disk pause | `runs.disk_paused_at` and `disk_notice_at` stay null |
+| No disk pause | `runs.disk_paused_at` and `disk_notice_at` stay null; the cron no longer queues `disk_full` |
 | One connector digest | `connector_sha256` written into both digest columns |
 | 24-hour close, credential life | unchanged |
 
@@ -139,7 +146,8 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/auth.ts` | Bearer run credential to member, and the one run it may touch |
 | `src/runs.ts` | Open, continue, position, heartbeat, and the seal (`trySeal`) |
 | `src/chunks.ts` | The chunk upload: early refusals, retry rule, streaming to R2, atomic commit, the seal on the completing chunk |
-| `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit, queue the run emails |
+| `src/notices.ts` | The 5-minute cron: close runs, record the judged GitHub commit, queue the run emails, purge expired device requests |
+| `src/notes.ts`, `src/advisories.json` | Server notes: the rows of `advisories.json` that match a run's connector, harness version and OS, sent as `notes` in the open and continue answers |
 | `src/github.ts` | The GitHub API: the judged commit (last push before the deadline) and the headers every GitHub call carries |
 | `src/mail.ts` | Sends each queued notice once through Resend |
 | `src/db.ts` | The `Db` interface: one method per step, and the run-state rules (`endsAt`, `statusAt`) |
@@ -147,8 +155,8 @@ curl -s -XPOST localhost:8787/v1/device/token -H 'content-type: application/json
 | `src/db-local.ts` | `wrangler dev` and tests only: JSON state in the R2 bucket under `state/`, atomic by etag |
 | `src/context.ts`, `env.ts`, `errors.ts`, `util.ts` | Configuration, bindings, error types, helpers |
 | `sql/goal-cup-tracer-upload.sql` | Copy of the website's migration that `db-supabase.ts` calls. The website repo is the authority. |
-| `sql/pending/` | A migration written here first, until it is applied (with a README that says how to land it). Empty since 27 Oct 2026; `git show 32808ff8:server/worker/sql/pending/README.md` is the last such README |
-| `scripts/check-sql.sh` | Applies the mirror and the pending migration to a throwaway local Postgres and smoke-calls the new functions (needs a file in `sql/pending/`: exits 2 while it is empty) |
+| `sql/pending/` | A migration written here first, until the owner applies it ([Deploying a pending migration](#deploying-a-pending-migration)). Holds `20261105100000_goal_cup_purge_device_requests.sql` |
+| `scripts/check-sql.sh`, `sql-scenarios.sql` | Applies the mirror (and any pending migration) to a throwaway local Postgres, smoke-calls the new functions, runs the Worker's scenarios, and 8 sessions at once on one chunk and one device pickup |
 | `scripts/delete-test-runs.sh` | Deletes all organizer test runs, rows and R2 objects in the traces and usage buckets ([OPERATING](../../docs/OPERATING.md#test-runs)) |
 | `test/` | `config`, `github`, `supabase` (RPC names, stubbed fetch), `local-db`, `ratelimit`, `mail`, `device-unit`; `integration`, `device`, `segments` (HTTP against `wrangler dev`); `lifecycle`, `notices`, `test-mode` (the Worker in this process on a clock the test moves) |
 
@@ -163,6 +171,7 @@ Variables (in `wrangler.toml` `[vars]`, or `--var` / `.dev.vars` locally):
 | `TEST_EVENT_ID` | none | Event that organizer test runs (mode `test`) belong to. Unset: the server opens no test run (`403`). |
 | `RUN_HOURS` | `168` | A competition run's `deadline_at` = `official_start` + this many hours. |
 | `PRACTICE_RUN_MINUTES` | `10` | A practice run's length. |
+| `PRACTICE_MAX_BYTES` | `1073741824` (1 GiB) | The compressed bytes a practice run may store, over all its entries. A chunk past it is `410 closed`. Competition and test runs have no limit. |
 | `MIN_COMPETITION_VERSION` | empty (no minimum) | The oldest goalcup (`x.y.z`; the first three numbers of what it sends) that may sign in for, or open, a run in any mode. Older, or a version with no `x.y.z` while a minimum is set, is `403` with the update line. A value with no `x.y.z` in it is malformed (parsing is lenient: the first `x.y.z` counts) and makes those two calls `500 misconfigured`; `continue`, heartbeats and everything else are untouched. `wrangler.toml` sets `1.0.0` in both blocks ([steps to raise it](#set-the-minimum-competition-version)). |
 | `DB_BACKEND` | `supabase` | `supabase` (production) or `local` (`wrangler dev` and tests only). Never set `local` in the deployed `wrangler.toml`. |
 | `APPROVAL_URL` | in `wrangler.toml` | The website page where a member approves a device request, without a query string. `verification_uri_complete` adds `?code=<user code>`. |
@@ -192,10 +201,11 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
 ## What is checked where
 
 - **Before a chunk body is read:** the credential; the run exists and is the credential's own; the
-  entry is one of the run's. A chunk the server already holds (same offset, `Goalcup-Length` and
-  `Goalcup-Head`) is answered `200` from the stored row. Then: the run is not closed, the entry is
-  not sealed, the end rules allow it (after `ends_at`: `503` until the entry's final
-  heartbeat, then nothing past the committed end), `Content-Length` is present and at most
+  entry is one of the run's. A chunk the server already holds (same offset, length, head, SHA-256,
+  prev and sequence numbers) is answered `200` from the stored row. Then: the run is not closed, the
+  entry is not sealed, a practice run stays under `PRACTICE_MAX_BYTES` (`410`), the end rules allow
+  it (after `ends_at`: `503` until the entry's final heartbeat, then nothing past the committed end),
+  `Content-Length` is present and at most
   33,554,432, `Content-Type` and all seven `Goalcup-*` headers are well formed, and the maintenance
   switch is off.
 - **Then:** offset, `prev` and first sequence must continue exactly where the entry stands (`409`).
@@ -214,7 +224,7 @@ Short steps for the people who run the event. Run the wrangler commands in `serv
 where `CLOUDFLARE_ACCOUNT_ID` is set to the Agent Community account id (`export CLOUDFLARE_ACCOUNT_ID=<id>`).
 Sign in with `npx wrangler login`, or set `CLOUDFLARE_API_TOKEN`. Production is the Worker `goalcup-ingest`
 at `https://ingest.agentcommunity.org`. Staging is `goalcup-ingest-staging` at
-`https://goalcup-ingest-staging.b-9a5.workers.dev`: add `--env staging` to each wrangler command, and use
+`https://<staging host>`: add `--env staging` to each wrangler command, and use
 the staging address in each `curl`. Do not put a secret in this file, in a commit or in a chat message.
 
 Run `npm ci` in `server/worker` before any `npx wrangler` step, and again after you switch to another
@@ -224,7 +234,8 @@ commit. It installs the pinned wrangler. Check that `npx wrangler --version` pri
 [Deploy checks](#deploy-checks) · [Maintenance](#maintenance-on-and-off) · [Rollback](#rollback) ·
 [Logs](#logs) · [Change a start window](#change-a-start-window) · [Add a test operator](#add-a-test-operator) ·
 [Clean up test runs](#clean-up-test-runs) · [Minimum competition version](#set-the-minimum-competition-version) ·
-[EVENT_ID switch](#event_id-switch-6-nov-2026) · [Deploying 1.0](#deploying-10)
+[EVENT_ID switch](#event_id-switch) · [Deploying 1.0](#deploying-10) ·
+[Deploying a pending migration](#deploying-a-pending-migration)
 
 ### Deploy checks
 
@@ -350,7 +361,7 @@ cannot find a good version, switch maintenance on and ask the owner.
 
 A start window is a row of `goal_cup_tracer.events` in the website's database. The Worker reads it on each
 open. A window change needs no Worker deploy. (A change of `EVENT_ID` does: see the
-[EVENT_ID switch](#event_id-switch-6-nov-2026).) Steps 1 to 6 run in the website
+[EVENT_ID switch](#event_id-switch).) Steps 1 to 6 run in the website
 checkout (`agentCommunity_PAGE`), not in `server/worker`.
 
 1. Add a migration in `supabase/migrations/` with `goal_cup_tracer` in its file name. It holds an
@@ -399,10 +410,11 @@ environment. `DATABASE_URL` is the website database URL: set it from `DATABASE_U
 
 1. Run `sh scripts/delete-test-runs.sh`. This is a dry run. It prints what would go and changes nothing.
 2. Read the list. If it is right, run `sh scripts/delete-test-runs.sh --yes`.
-3. To keep recent runs, add `--older-than '7 days'`. If the script reports objects not deleted, run it
-   again without `--older-than`. That run deletes every test run. (With `--older-than`, a second run no longer
-   knows the runs, because the rows are gone.) A test run still uploading while the script runs can leave
-   objects behind; a run without `--older-than` removes them too.
+3. To keep recent runs, add `--older-than '7 days'`. If the script reports objects not deleted, it lists
+   them in `delete-test-runs.failed` (the database rows are already gone). Retry only those with
+   `sh scripts/delete-test-runs.sh --objects delete-test-runs.failed --yes`; without `--yes` it prints the
+   count. A test run still uploading while the script runs can leave objects behind; a run without
+   `--older-than` removes them too.
 
 More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 
@@ -411,8 +423,8 @@ More on test runs: [OPERATING](../../docs/OPERATING.md#test-runs).
 `MIN_COMPETITION_VERSION` refuses a device request and an open from an older goalcup, in every mode,
 with `403` and an install line (D70; `continue` is never refused). `wrangler.toml` sets `1.0.0` in
 both blocks: a 0.7 goalcup cannot work with the 1.0 Worker. Raise it when a later release must be the
-least any participant runs, for example the cup's minimum. It must be live before 7 Nov 00:00 UTC
-if the cup needs it.
+least any participant runs, for example the cup's minimum. It must be live before the start window
+opens ([RULES](../../docs/RULES.md#timeline)) if the cup needs it.
 
 **Only after that release is published and GitHub's latest release serves it.** The refusal's install
 line installs `releases/latest`. Set the minimum before that and it installs an older goalcup, which
@@ -439,22 +451,23 @@ is refused again. Below, `<minimum>` is that release's number and `<older>` is t
    `<older>` answers `403`, `<minimum>` answers `200` (a device request nobody approves; it expires by
    itself).
 
-The EVENT_ID switch may carry the same change in its PR, if step 1 already passes on 6 Nov.
+The EVENT_ID switch may carry the same change in its PR, if step 1 already passes on the switch day.
 
-## EVENT_ID switch: 6 Nov 2026
+## EVENT_ID switch
 
-Do the switch between 6 Nov 00:00 and 7 Nov 00:00 UTC. It does not wait for a release: releases
+Do the switch on the day before the start window opens (the start is stated once, in
+[RULES](../../docs/RULES.md#timeline)), any time on that UTC day. It does not wait for a release: releases
 continue during the cup (D70). Production `EVENT_ID` stays `goalcup-dryrun-2026` until then. The start windows are database rows
 (website migration `20261016120000_goal_cup_tracer_event_windows.sql`): the dry run closes
-6 Nov 00:00 UTC and the cup opens 7 Nov 00:00 UTC, so any time on 6 Nov is safe. If the switch is
-missed, every cup start on 7 Nov is refused ("after the start window ..."): competition starts read
-the dry-run row, which closed 6 Nov 00:00 UTC.
+at 00:00 UTC on the switch day and the cup opens when the start window opens, so any time on the switch
+day is safe. If the switch is missed, every cup start is refused ("after the start window ..."):
+competition starts read the dry-run row, which has closed.
 
 1. On a branch, set `EVENT_ID = "goalcup-cup-2026"` in `wrangler.toml` `[vars]` (not
    `[env.staging.vars]`). If `MIN_COMPETITION_VERSION` is not the cup's minimum yet and that release is
    the latest release, set it in the same PR ([Minimum competition version](#set-the-minimum-competition-version),
    step 1 first). If that release is not out yet, leave it and do that section on its own once it is,
-   before 7 Nov 00:00 UTC. Open a PR and merge it to main.
+   before the start window opens. Open a PR and merge it to main.
 2. On main at that merge commit: `npm test` (in `server/worker`).
 3. From main only, at that merge commit: run `npm ci`, then the maintenance state check. Run
    `npx wrangler deployments list` (before). Run `SHA=$(git rev-parse --short HEAD)`, then
@@ -462,16 +475,17 @@ the dry-run row, which closed 6 Nov 00:00 UTC.
    is on, add `--var MAINTENANCE:on`, or the deploy ends it. Run `npx wrangler deployments list` (after).
    Check that `ingest.agentcommunity.org` still routes to `goalcup-ingest`
    ([Deploy checks](#deploy-checks), rule 3). Every later production deploy is from main, so it keeps the cup
-   (a 7 Nov hotfix too).
+   (a hotfix during the cup too).
 4. Check the live Worker: `npx wrangler deployments status` names the live version, and
    `npx wrangler versions view <version-id>` shows `EVENT_ID` = `goalcup-cup-2026` (or the dashboard:
    goalcup-ingest, Settings, Variables), and `MIN_COMPETITION_VERSION` = the cup's minimum once it is set.
 5. Open one practice run and one organizer test run against production; both start. Then
    `sh scripts/delete-test-runs.sh --yes` ([Clean up test runs](#clean-up-test-runs)).
 6. A competition start now answers "The start window has not opened yet." (before the switch it
-   answered "after the start window ..."). After 7 Nov 00:00 UTC, `select distinct event_id from
-   goal_cup_tracer.runs where mode = 'competition' and official_start >= '2026-11-07'` shows only
+   answered "after the start window ..."). After the start window opens, `select distinct event_id from
+   goal_cup_tracer.runs where mode = 'competition' and official_start >= '<START_DATE>'` shows only
    `goalcup-cup-2026`, and the R2 prefix `traces/goalcup-cup-2026/` holds its chunks.
+   (`<START_DATE>` is the date the start window opens, from RULES.md; fill it in when you run the query.)
 
 ## Deploying 1.0
 
@@ -492,11 +506,28 @@ Once, in this order. The 1.0 Worker and a 0.7 goalcup do not work together, so t
    never before). Create the `goalcup-usage` bucket.
 6. Smoke (owner): one practice run with the 1.0 goalcup on production, sealed, fetched with
    `scripts/fetch-run.sh` and checked.
-7. The [EVENT_ID switch](#event_id-switch-6-nov-2026) stays a manual deploy on 6 Nov; it can be the
+7. The [EVENT_ID switch](#event_id-switch) stays a manual deploy on the switch day; it can be the
    same deploy as step 5 if the timing fits.
 
 There is no rollback to 0.7 after step 5. A bad 1.0 Worker is held with
 [maintenance](#maintenance-on-and-off) on (clients back off and keep everything) and fixed forward.
+
+## Deploying a pending migration
+
+A migration in `sql/pending/` is applied by the owner, in the website repo, before the Worker that
+calls it is deployed. Pending now: `20261105100000_goal_cup_purge_device_requests.sql` (a new
+function only, no table change).
+
+1. `sh scripts/check-sql.sh` passes: it applies the mirror and the pending file to a throwaway
+   Postgres and runs the Worker's scenarios.
+2. In the website checkout, add the same file to `supabase/migrations/`, merge it to `main`, and
+   apply it as in [Change a start window](#change-a-start-window), steps 3 to 5.
+3. Here, remove the file from `sql/pending/` and note it as applied in the mirror's header.
+4. Deploy the Worker, with every [deploy check](#deploy-checks).
+
+A Worker deployed before the migration only loses the purge: each tick logs
+`supabase upload_purge_device_requests: ...` and `tick purgeDevices: ...`, and the other cron steps
+run as before. Expired device requests stay in the table until it lands.
 
 ## Checked on real R2 (staging, 26 Oct 2026)
 
@@ -531,10 +562,11 @@ There is no rollback to 0.7 after step 5. A bad 1.0 Worker is held with
 
 ## The cron
 
-`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Four steps, in this
+`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Five steps, in this
 order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
-(`src/mail.ts`). All take the time as a parameter. They read `Db.runsForTick(now)` (open runs, and runs
-that ended in the last 48 hours). Every notice is decided here, never in a request handler, and a
+(`src/mail.ts`) and `purgeDevices` (deletes device requests that expired more than a day ago; needs
+the [pending migration](#deploying-a-pending-migration)). All take the time as a parameter. All but `sendNotices` and `purgeDevices` read `Db.runsForTick(now)` (open
+runs, and runs that ended in the last 48 hours). Every notice is decided here, never in a request handler, and a
 staging Worker sends every email to its test inbox. The constants (20 minutes of silence, idle at 3
 and 6 hours, an hour to wait for the commit, 5 minutes before GitHub is asked, an hour of grace for a
 `404` or a failing activity API, 50 runs asked of GitHub per tick, 20 emails per tick) are in
@@ -547,7 +579,7 @@ GitHub about at most 50 runs (taking turns when more are due), each with 2 to 4 
 activity, and the commit list and `commits/HEAD` only as a fallback; up to 8 for a run with more than
 100 activities), and makes 50 writes. That is a few hundred subrequests in a busy tick, so the cron
 needs the paid Workers plan (the free plan allows 50 per invocation). A failed step is logged
-(`tick <step> <run_id>: <message>` or `tick queueNotices: <message>`) and the next tick retries; a notice
+(`tick <step> <run_id>: <message>` or `tick <step>: <message>`) and the next tick retries; a notice
 is stored once per run, kind and key, so a retry is safe.
 
 Locally, `wrangler dev --test-scheduled` and `curl localhost:8787/__scheduled` run one tick. The outbox

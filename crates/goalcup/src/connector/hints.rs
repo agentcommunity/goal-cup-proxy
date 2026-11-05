@@ -9,9 +9,10 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 use super::hosts::{self, Decision, HostList, Source};
-use super::{Connector, Env, Host, Refusal, launch};
+use super::{CaSettings, Connector, Env, Host, Refusal, SettingRow, launch};
 use crate::native::pattern;
 
 /// Reads one start's hint and refusal files and keeps what PRD-10 shows: each file there but not
@@ -117,7 +118,7 @@ impl Reader<'_> {
 
 /// Whether a URL is `https`, and its host and port, the userinfo dropped first. `None` without a
 /// `://`, or when the authority holds a backslash, a space or a control byte (PRD-17 N1).
-fn authority(value: &str) -> Option<(bool, &str, u16)> {
+pub(super) fn authority(value: &str) -> Option<(bool, &str, u16)> {
     let (scheme, rest) = value.trim().split_once("://")?;
     let authority = &rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())];
     let clean = |b: u8| b > b' ' && b != 0x7f && b != b'\\';
@@ -153,21 +154,167 @@ fn read(path: &Path) -> Option<Value> {
     }
 }
 
+/// One address's `ca_settings` rows, or why none can be written; and for an entry holding its own
+/// CA, the file to fill with that CA's PEM and then the run bundle (`LaunchPlan::finish_env`).
+pub(crate) struct Trust {
+    pub(crate) url: String,
+    pub(crate) rows: Result<Vec<SettingRow>, String>,
+    pub(crate) combine: Option<(PathBuf, Vec<u8>)>,
+}
+
+/// The rows giving each address the harness uses the run bundle (`ca_settings`): the CA key on
+/// each participant entry holding an address, and a `goalcup-trust-*` entry for every other
+/// address used; when the file names none, one for each `fallback` address. An entry holding its
+/// own CA points at a file in the isolated home holding that CA and the run bundle; its own file
+/// is never changed, and one that cannot be read leaves the entry as it is. An address is an
+/// `https` URL whose host `hosts` decrypts, so a host left to the OS trust store (local, private,
+/// never) keeps it.
+pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<Trust> {
+    let file = launch::fill(&t.file, home, Path::new(""));
+    let doc = read(Path::new(&file)).unwrap_or_default();
+    let address = |v: &Value| {
+        let url = v.as_str()?.trim();
+        let (https, host, _) = authority(url)?;
+        let decrypted = matches!(hosts.decide(host), Decision::Listed { .. });
+        (https && hosts::check(host, Source::Config).is_ok() && decrypted).then(|| url.to_string())
+    };
+    let same = |url: &str| url.trim_end_matches('/').to_ascii_lowercase();
+    let row = |key: String, value: &str| SettingRow {
+        file: t.file.clone(),
+        key,
+        value: value.to_string(),
+    };
+    let (mut trusts, mut have) = (Vec::new(), Vec::new());
+    for pattern in &t.entries {
+        let parts = pattern.split('.').count();
+        for (path, value) in at_paths(&doc, pattern) {
+            let ours = path.split('.').any(|p| p.starts_with("goalcup-"));
+            // A key holding a `.` would not write back to the same entry.
+            let (Some(url), false, true) = (address(value), ours, path.split('.').count() == parts)
+            else {
+                continue;
+            };
+            have.push(same(&url));
+            let ca = format!("{}.{}", path.rsplit_once('.').unwrap().0, t.key);
+            let mut own = at(&doc, &ca).into_iter().filter_map(Value::as_str);
+            let own = own.find(|v| !v.trim().is_empty() && *v != t.value);
+            let (rows, combine) = match own.map(|own| combined(home, &path, own)) {
+                None => (Ok(vec![row(ca, &t.value)]), None),
+                Some(Ok((to, pem))) => (Ok(vec![row(ca, &to.to_string_lossy())]), Some((to, pem))),
+                Some(Err(why)) => (Err(format!("{file}: {ca}: {why}")), None),
+            };
+            trusts.push(Trust { url, rows, combine });
+        }
+    }
+    let mut used: Vec<String> = t
+        .uses
+        .iter()
+        .flat_map(|k| at(&doc, k))
+        .filter_map(address)
+        .collect();
+    if have.is_empty() && used.is_empty() {
+        used = t
+            .fallback
+            .iter()
+            .filter_map(|u| address(&Value::from(&**u)))
+            .collect();
+    }
+    let mut names = Vec::new();
+    for url in used {
+        if have.contains(&same(&url)) {
+            continue;
+        }
+        have.push(same(&url));
+        let rest = url
+            .split_once("://")
+            .map_or(&*url, |r| r.1)
+            .to_ascii_lowercase();
+        let name: Vec<&str> = rest
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .filter(|p| !p.is_empty())
+            .collect();
+        let mut name = name.join("-");
+        // Addresses that differ only in punctuation share a name: the later one adds a hash.
+        if names.contains(&name) {
+            name = format!("{name}-{}", short(&url));
+        }
+        names.push(name.clone());
+        let key = t.add.replace('*', &format!("goalcup-trust-{name}"));
+        let ca = format!("{}.{}", key.rsplit_once('.').unwrap().0, t.key);
+        let rows = Ok(vec![row(key, &url), row(ca, &t.value)]);
+        trusts.push(Trust {
+            url,
+            rows,
+            combine: None,
+        });
+    }
+    trusts
+}
+
+/// The file in the isolated home that the entry at `path`, holding its own CA `own`, points at
+/// instead, and that CA's PEM. The participant's path is kept beside it, so a later start, which
+/// reads the file's path in the entry, still finds their CA.
+fn combined(home: &Path, path: &str, own: &str) -> Result<(PathBuf, Vec<u8>), &'static str> {
+    let to = home
+        .join(".goalcup-ca")
+        .join(format!("{}.pem", short(path)));
+    let from = to.with_extension("from");
+    let theirs = match Path::new(own) == to {
+        true => std::fs::read_to_string(&from).map_err(|_| "its own CA path is lost")?,
+        false => own.to_string(),
+    };
+    let pem = read_ca(Path::new(&theirs)).ok_or("its own CA file cannot be read")?;
+    if theirs == own {
+        launch::replace(&from, own.as_bytes()).map_err(|_| "cannot keep its own CA path")?;
+    }
+    Ok((to, pem))
+}
+
+/// 8 hex of the SHA-256 of `s`: a name part that stays the same from start to start.
+fn short(s: &str) -> String {
+    hex::encode(&Sha256::digest(s.as_bytes())[..4])
+}
+
+/// A participant's CA file: a regular file of at most 1 MiB, opened without blocking (a link is
+/// followed: the file is theirs).
+fn read_ca(path: &Path) -> Option<Vec<u8>> {
+    let file = (std::fs::OpenOptions::new().read(true))
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    let meta = file.metadata().ok()?;
+    (meta.is_file() && meta.len() <= 1 << 20).then_some(())?;
+    let mut pem = Vec::new();
+    file.take(1 << 20).read_to_end(&mut pem).ok()?;
+    Some(pem)
+}
+
 /// The values at a dotted key; a segment may be or hold a `*` glob (any key or index, `*_URL`).
 fn at<'a>(doc: &'a Value, key: &str) -> Vec<&'a Value> {
-    let mut found = vec![doc];
+    at_paths(doc, key).into_iter().map(|(_, v)| v).collect()
+}
+
+/// `at`, each value with its dotted path (a list index as its number).
+fn at_paths<'a>(doc: &'a Value, key: &str) -> Vec<(String, &'a Value)> {
+    let mut found = vec![(String::new(), doc)];
     for seg in key.split('.') {
         let glob = pattern::parse(seg).ok();
         // The glob matches one path component, so a `/` in a key is not a separator to it.
         let one = |k: &str| PathBuf::from(k.replace('/', "\u{2215}"));
         let fits = |k: &str| k == seg || glob.as_ref().is_some_and(|g| g.matches(&one(k)));
         let mut next = Vec::new();
-        for value in found {
+        for (path, value) in found {
+            let join = |k: &str| match path.is_empty() {
+                true => k.to_string(),
+                false => format!("{path}.{k}"),
+            };
             match value {
-                Value::Object(map) => next.extend(map.iter().filter(|e| fits(e.0)).map(|e| e.1)),
+                Value::Object(map) => {
+                    next.extend(map.iter().filter(|e| fits(e.0)).map(|e| (join(e.0), e.1)))
+                }
                 Value::Array(items) => {
-                    let items = items.iter().enumerate();
-                    next.extend(items.filter(|e| fits(&e.0.to_string())).map(|e| e.1));
+                    let items = items.iter().enumerate().map(|(i, v)| (i.to_string(), v));
+                    next.extend(items.filter(|e| fits(&e.0)).map(|e| (join(&e.0), e.1)));
                 }
                 _ => {}
             }

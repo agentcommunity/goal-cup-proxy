@@ -7,8 +7,9 @@ start and an end, never skipped. It uploads the record to the Goal Cup server wh
 Everything runs on your machine, and anyone can check a record later with `goalcup-verify`.
 
 Its first use is the /goal Cup: one prompt, one agent, 168 hours. The organizer is
-[Agent Community](https://agentcommunity.org). Sign-up, the rules summary, the demo video and the
-questionnaire are on the event site, [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup).
+[Agent Community](https://agentcommunity.org). Sign-up, the rules summary, and where you hand in the
+videos and the questionnaire are on the event site,
+[agentcommunity.org/goalcup](https://agentcommunity.org/goalcup).
 
 Agents working in this repository: read [AGENTS.md](AGENTS.md) first.
 
@@ -38,10 +39,10 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
    GitHub repository (no README, `.gitignore` or licence). Make a fine-grained token for that one
    repository: Contents read and write, expiry 30 days. Make a new folder holding `.env.local`
    (exactly one line, `GH_TOKEN=<token>`) and a `.gitignore` with the line `.env*`. Write your
-   prompt in a file outside that folder, for example `prompt.txt`. Details:
+   prompt in a file outside that folder, for example `~/goal-prompt.txt`. Details:
    [the guide, step 6](docs/PARTICIPANT-GUIDE.md#6-your-run).
 5. **Start** inside the start window, in that folder:
-   `goalcup start --repo <you>/<repo> --prompt prompt.txt`. goalcup checks the folder and the
+   `goalcup start --repo <you>/<repo> --prompt ~/goal-prompt.txt`. goalcup checks the folder and the
    repository before it asks for the browser approval. Your first message is the push lines and
    your prompt in one block; paste it as the first thing you send. After it, the only message you
    may ever type is "keep going". Delete the token after your run.
@@ -65,8 +66,9 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
 **The end.** At the deadline goalcup stops the agent, finishes the record and uploads the rest. The
 end screen says what was written and what was lost. What is judged is the last push to your
 repository's default branch that GitHub received before the deadline. Your agent must push its own
-work; goalcup never pushes. Then hand in your demo video and questionnaire on the event site
-within 24 hours ([the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
+work; goalcup never pushes. Then hand in the demo and the questionnaire on the event site.
+The setup video comes before the run ([rules](docs/RULES.md#submission),
+[the end](docs/PARTICIPANT-GUIDE.md#8-the-end)).
 
 ## Commands
 
@@ -89,7 +91,7 @@ command could not do its job.
 
 | Command | What it does |
 |---|---|
-| `goalcup-verify check <PATH> [--json] [--live] [--server] [--local <ENTRY_DIR>] [--known <FILE>]` | Prove an entry, a run or a fetched folder whole, and name every loss. `--json` prints the report ([RECORD-FORMAT](docs/RECORD-FORMAT.md)). |
+| `goalcup-verify check <PATH> [--json] [--live] [--server] [--local <ENTRY_DIR>] [--known <FILE>] [--harness-files <MANIFEST>]` | Prove an entry, a run or a fetched folder whole, and name every loss. `--json` prints the report ([RECORD-FORMAT](docs/RECORD-FORMAT.md)). `--harness-files` takes the pad's list of harness files on disk, `[{"path": "<source>:<path>", "size": n}]`. `check` checks for secrets only with `--known`; `goalcup-verify secrets` also scans for secret shapes. |
 | `goalcup-verify dump <PATH> [--sid <ID>] [--kind <KIND>] [--text]` | One JSON line per record. Payload only with `--text`. |
 | `goalcup-verify secrets [--known <FILE>] <PATHS>...` | Scan records and raw files for known secret values and secret shapes. |
 | `goalcup-verify usage <PATH> [--json] [--out <OUT>]` | Read tokens, models and subagents from a record. |
@@ -141,8 +143,12 @@ flow are [ARCHITECTURE](docs/ARCHITECTURE.md).
 |---|---|
 | macOS arm64 | Tested on the owner's Mac (macOS 26.6). |
 | Linux x86_64 | Tested in sandboxes. |
-| Linux arm64 | Built, not yet tested. |
+| macOS Intel (x86_64) | Built (release.yml, `x86_64-apple-darwin`), not tested and not supported. |
+| Linux arm64 | Built (release.yml, `aarch64-unknown-linux-gnu`), not yet tested. |
 | Windows | Use WSL2 (below). |
+
+Company proxy networks are not supported: `goalcup setup` and `goalcup start` refuse when
+`HTTPS_PROXY` or `ALL_PROXY` is set ([guide](docs/PARTICIPANT-GUIDE.md#1-what-you-need)).
 
 Known issues: [TODO](TODO.md#known-issues). On a machine with no browser, set `GOALCUP_NO_BROWSER=1`:
 the approval address is printed instead.
@@ -229,10 +235,9 @@ Every doc, grouped by who reads it.
 | An organizer | [OPERATING](docs/OPERATING.md), [UPLOAD-API](docs/UPLOAD-API.md), [server/worker](server/worker/README.md), [packaging](packaging/README.md) |
 | A contributor | [AGENTS](AGENTS.md), [VISION](VISION.md), [CONTRIBUTING](CONTRIBUTING.md), [ARCHITECTURE](docs/ARCHITECTURE.md), [RECORD-FORMAT](docs/RECORD-FORMAT.md), [DECISIONS](docs/DECISIONS.md), [TODO](TODO.md) |
 | A harness builder | [skill](skills/adding-a-capture-harness/SKILL.md), [CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md), [facts sheets](docs/harnesses/README.md), [scripts](scripts/README.md) |
-| Evidence | [the first two-hour run](docs/research/results/2026-10-30-two-hour-run.md) |
+| Evidence | [the first two-hour run](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-30-two-hour-run.md) |
 
-Plans are in `docs/plans/`. Finished work and old narratives are in `docs/archive/` and
-`docs/research/`; do not plan from them.
+Plans, finished work and old narratives are on the [`archive` branch](https://github.com/agentcommunity/goal-cup-proxy/tree/archive); do not plan from them.
 
 ## Support, security and license
 

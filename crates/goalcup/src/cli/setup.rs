@@ -19,7 +19,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Server, awake, fail, folder, isolated_home, record_hosts};
+use super::{Server, awake, fail, folder, record_hosts};
 use super::{setup_json, text};
 use crate::connector::launch::{fill, make_dir, resolve_program};
 use crate::connector::{self, Connector, Decision, Env, Form, HostList, LaunchPlan};
@@ -58,6 +58,9 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
         Err(e) => return fail(e),
     };
     let vars = super::env_vars();
+    if let Some(t) = crate::proxy::proxy_network(&vars) {
+        return fail(&t);
+    }
     let saved = super::saved_harness(&home);
     let ask = !yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let id = match harness {
@@ -76,14 +79,13 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
     if !program.is_absolute() {
         return fail(&text::not_installed(&c.name));
     }
-    let fix = if yes || ask {
-        match write_home(&c, &home, &server, vars.clone(), ask) {
-            Ok(fix) => fix,
-            Err(e) => return fail(&e),
-        }
-    } else {
+    if !(yes || ask) {
         put(&text::harness_found(&c.name, None, &program));
-        None
+        return fail(&text::setup_needs_terminal(&c.name));
+    }
+    let fix = match write_home(&c, &home, &server, vars.clone(), ask) {
+        Ok(fix) => fix,
+        Err(e) => return fail(&e),
     };
     machine(&home, &server, &vars);
     let db = c.native.iter().any(|row| row.form == Form::Final);
@@ -109,7 +111,7 @@ fn write_home(
     vars: BTreeMap<String, String>,
     ask: bool,
 ) -> Result<Option<String>, String> {
-    let iso = isolated_home(home, &c.id);
+    let iso = super::connector_home(home, c);
     let env = Env {
         vars,
         // Setup has no project folder: a `{workspace}` row then reads in the isolated home, which
@@ -124,18 +126,23 @@ fn write_home(
     if let Some(r @ Refusal::HomeLocked { .. }) = &plan.refusal {
         return Err(text::refusal(r));
     }
-    let version = plan.harness_version.as_deref().map(|v| {
-        let number = |t: &&str| t.starts_with(|c: char| c.is_ascii_digit());
-        v.split_whitespace().find(number).unwrap_or(v)
-    });
-    put(&text::harness_found(&c.name, version, &plan.program));
+    let version = plan
+        .harness_version
+        .as_deref()
+        .map(|v| connector::version::parse(v).map_or_else(|| v.to_owned(), |p| p.text));
+    put(&text::harness_found(
+        &c.name,
+        version.as_deref(),
+        &plan.program,
+    ));
     plan.version_notes.iter().for_each(|n| put(n));
     if ask {
         open(&plan, &c.name);
     }
-    let update_off = write_rows(&plan.home, &c.update_off);
+    let rows = &plan.effective;
+    let update_off = write_rows(&plan.home, &rows.update_off);
     let no_prompts = if !ask || confirm(&format!("{} [Y/n] ", text::no_prompts_question(&c.name))) {
-        write_rows(&plan.home, &c.no_prompts)
+        write_rows(&plan.home, &rows.no_prompts)
     } else {
         put(&text::no_prompts_left(&c.name));
         Vec::new()

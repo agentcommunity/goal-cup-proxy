@@ -166,7 +166,7 @@ test("the competition start window: its edges are inside, practice has none", as
   assert.equal(await kind(2, "2026-11-06T10:00:01Z"), "forbidden");
   assert.equal(await kind(3, "2026-11-06T12:00:00Z", "practice"), "created");
   const late = await db.openRun(openArgs(4, "s4", "2026-11-06T10:00:01Z", DEADLINE, c));
-  assert.deepEqual(late, { kind: "forbidden", message: "after the start window you can only `goalcup continue` your run" });
+  assert.deepEqual(late, { kind: "forbidden", message: "The start window has closed. A run you already started can still be continued: goalcup continue." });
   const early = await db.openRun(openArgs(5, "s5", "2026-11-06T07:00:00Z", DEADLINE, c));
   assert.equal(early.kind, "forbidden");
   assert.equal(await kind(6, "2026-11-06T08:00:00Z"), "created");

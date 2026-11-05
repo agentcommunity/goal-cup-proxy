@@ -116,6 +116,24 @@ fn the_deadline_is_the_servers_seconds_left_from_now() {
 }
 
 #[test]
+fn a_harness_that_is_not_installed_stops_the_start_before_anything_is_created() {
+    let fix = Fix::with_program("goalcup-no-such-harness-xyz", "{home}/skills", "");
+    let w = FakeWorker::start();
+    let stop = prepare(&fix.args(), &fix.ctx(Server::Url(w.url())), &mut Vec::new())
+        .err()
+        .unwrap();
+    assert_eq!(stop.code, 1);
+    assert!(
+        stop.text.contains("Tester is not installed"),
+        "{}",
+        stop.text
+    );
+    assert!(stop.text.contains("run the command again"), "{}", stop.text);
+    assert!(!fix.gc().exists());
+    assert_eq!(w.calls(), 0);
+}
+
+#[test]
 fn a_plan_refusal_names_file_and_key_never_the_value_and_creates_no_run() {
     let extra = "[[refuse_if_set]]\nfile = \"{home}/settings.json\"\nkeys = [\"proxy\"]\n";
     let fix = Fix::new("{home}/skills", extra);
@@ -180,6 +198,11 @@ fn a_denied_approval_creates_no_run() {
 /// Runs the real `goalcup start --practice` in `fix`'s project folder, against `server`, and
 /// kills it if it has not ended in two minutes.
 fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
+    spawn_start_to(fix, server, std::process::Stdio::piped())
+}
+
+/// `spawn_start` with the command's standard output set to `stdout`.
+fn spawn_start_to(fix: &Fix, server: &str, stdout: std::process::Stdio) -> std::process::Output {
     use std::process::{Command, Stdio};
     let child = Command::new(env!("CARGO_BIN_EXE_goalcup"))
         .args(["start", "--practice", "--connector"])
@@ -190,8 +213,9 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
         .env("GOALCUP_HOME", fix.gc())
         .env("HOME", fix.t.home())
         .env("XDG_CONFIG_HOME", fix.t.home())
+        .envs(common::home::OFF_RUN.map(|k| (k, ""))) // empty: no proxy, not inside a run
         .stdin(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(stdout)
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
@@ -210,6 +234,21 @@ fn spawn_start(fix: &Fix, server: &str) -> std::process::Output {
     let _ = done.send(());
     let _ = timer.join();
     out
+}
+
+/// A terminal closed during the run: every write to standard output fails. The harness's exit code
+/// is still the command's, and nothing panics.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_dead_stdout_does_not_panic_the_hand_over_and_the_exit_code_survives() {
+    let fix = Fix::with_program("sh", "{home}/skills", "args = [\"-c\", \"exit 7\"]\n");
+    let w = FakeWorker::start();
+    let (reader, writer) = std::io::pipe().unwrap();
+    drop(reader);
+    let out = spawn_start_to(&fix, &w.url(), writer.into());
+    let err = String::from_utf8_lossy(&out.stderr).into_owned();
+    assert_eq!(out.status.code(), Some(7), "{err}");
+    assert!(!err.contains("panicked"), "{err}");
 }
 
 /// PRD-10 section 3 steps 7 to 10: the hand-over. The harness runs, its exit code is the command's
@@ -300,7 +339,7 @@ fn scripted(body: &str, extra: &str) -> Fix {
 /// version says nothing of the kind, and neither says a version note.
 #[test]
 fn an_unread_harness_version_is_said_and_the_run_starts() {
-    let note = "[[version_notes]]\nversions = [\"1.2.3\"]\nsay = \"Tester 1.2.3 loses calls.\"\n";
+    let note = "[[versions]]\nmatch = \"1.2.3\"\nsay = \"Tester 1.2.3 loses calls.\"\n";
     let screen = |fix: &Fix| {
         let w = FakeWorker::start();
         let mut out = Vec::new();
@@ -308,10 +347,18 @@ fn an_unread_harness_version_is_said_and_the_run_starts() {
             .unwrap_or_else(|s| panic!("{}", s.text));
         String::from_utf8(out).unwrap()
     };
-    let line = text::version_unread("Tester", true);
+    let rules = Some("the newest version of Tester it knows");
+    let line = text::version_unread("Tester", true, rules);
     let unread = scripted("#!/bin/sh\nexit 1\n", note);
     let shown = screen(&unread);
     assert!(shown.contains(&line) && !shown.contains("loses calls"));
+    // Said once: the recorded note is that line, not a second one (Linux's sleep-lock line says
+    // "could not" too, so count the version line itself).
+    assert_eq!(
+        shown.matches("version could not be read").count(),
+        1,
+        "{shown}"
+    );
     // On record in goalcup.log too, for when the harness clears the terminal.
     assert!(logs(unread.t.home()).contains("version_unread"));
     let read = scripted("#!/bin/sh\necho tester 1.2.3\n", "");
@@ -319,17 +366,17 @@ fn an_unread_harness_version_is_said_and_the_run_starts() {
     assert!(!logs(read.t.home()).contains("version_unread"));
 }
 
-/// Runs a real start whose harness reports `version`, with a note for 1.2.3. Returns the start
-/// screen and every `version_note` event in the record.
-fn start_with_note(version: &str) -> (String, usize) {
-    let note = "[[version_notes]]\nversions = [\"1.2.3\"]\nsay = \"Tester 1.2.3 loses calls.\"\n";
-    let fix = scripted(&format!("#!/bin/sh\necho tester v{version}\n"), note);
+/// Runs a real start whose harness script is `body`, with a note for 1.2.3. Returns the start
+/// screen, the number of `version_note` events in the record and the `start` event.
+fn start_with_note(body: &str) -> (String, usize, Value) {
+    let note = "[[versions]]\nmatch = \"1.2.3\"\nsay = \"Tester 1.2.3 loses calls.\"\n";
+    let fix = scripted(&format!("#!/bin/sh\n{body}\n"), note);
     let w = FakeWorker::start();
     let out = spawn_start(&fix, &w.url());
     let shown = String::from_utf8_lossy(&out.stdout).into_owned();
     assert_eq!(out.status.code(), Some(0), "{shown}");
     let entries = std::fs::read_dir(fix.gc().join("runs").join(RUN_ID)).unwrap();
-    let recorded = entries
+    let events: Vec<Value> = entries
         .flatten()
         .filter(|e| e.path().join("rec").is_dir())
         .flat_map(|e| common::recorder::records(&e.path()))
@@ -339,16 +386,19 @@ fn start_with_note(version: &str) -> (String, usize) {
             }
             _ => None,
         })
-        .filter(|ev| ev["ev"] == "note" && ev["what"] == "version_note")
-        .count();
-    (shown, recorded)
+        .collect();
+    let notes = events
+        .iter()
+        .filter(|ev| ev["ev"] == "note" && ev["what"] == "version_note");
+    let start = events.iter().find(|ev| ev["ev"] == "start").cloned();
+    (shown, notes.count(), start.unwrap_or_default())
 }
 
 /// A version with a note is told to the participant and recorded as a note event, and the run
 /// still opens.
 #[test]
 fn a_version_note_is_said_and_recorded_and_the_run_still_opens() {
-    let (shown, recorded) = start_with_note("1.2.3");
+    let (shown, recorded, _) = start_with_note("echo tester v1.2.3");
     assert!(shown.contains("Tester 1.2.3 loses calls."), "{shown}");
     assert!(shown.contains(text::PART_RECORDED), "{shown}");
     assert_eq!(recorded, 1);
@@ -358,8 +408,64 @@ fn a_version_note_is_said_and_recorded_and_the_run_still_opens() {
 #[test]
 fn another_version_gets_no_note() {
     for version in ["1.2.4", "1.2.30"] {
-        let (shown, recorded) = start_with_note(version);
+        let (shown, recorded, _) = start_with_note(&format!("echo tester v{version}"));
         assert!(!shown.contains("loses calls"), "{shown}");
         assert_eq!(recorded, 0);
     }
+}
+
+/// The start event names the parsed build and the `[[versions]]` row that set the rules; null
+/// for the base rules and for a version that could not be read.
+#[test]
+fn the_start_event_names_the_build_and_the_row() {
+    // The last case prints nothing and exits 1 for `--version`, and runs as a clean harness.
+    for (body, semver, row) in [
+        ("echo tester v1.2.3", json!("1.2.3"), json!("1.2.3")),
+        ("echo tester v1.2.4", json!("1.2.4"), Value::Null),
+        ("[ \"$1\" != --version ]", Value::Null, Value::Null),
+    ] {
+        let (_, _, start) = start_with_note(body);
+        assert_eq!(
+            (&start["harness_semver"], &start["version_row"]),
+            (&semver, &row),
+            "{start}"
+        );
+    }
+}
+
+/// `goalcup start` on a proxy network stops at once with one plain line, before anything is
+/// created; inside a harness goalcup launched (`GOALCUP_TIME_LEFT_FILE`) `HTTPS_PROXY` is
+/// goalcup's own recorder, so that is no refusal.
+#[test]
+fn a_proxy_network_is_refused_before_anything_starts() {
+    use std::process::Command;
+    let fix = Fix::new("{home}/skills", "");
+    let start = |envs: &[(&str, &str)]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_goalcup"));
+        cmd.args(["start", "--practice", "--connector"])
+            .arg(&fix.connector)
+            .current_dir(&fix.project)
+            .env("GOALCUP_SERVER", "off")
+            .env("GOALCUP_HOME", fix.gc())
+            .env("HOME", fix.t.home());
+        for var in common::home::OFF_RUN {
+            cmd.env_remove(var);
+        }
+        let out = cmd.envs(envs.iter().copied()).output().unwrap();
+        let all = String::from_utf8_lossy(&out.stdout).into_owned()
+            + &String::from_utf8_lossy(&out.stderr);
+        (out.status.code(), all)
+    };
+    let (code, all) = start(&[("https_proxy", "http://u:s3cret@p:3128")]);
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("(https_proxy is set). goalcup does not support proxy networks yet."),
+        "{all}"
+    );
+    assert!(!all.contains("s3cret") && !fix.gc().exists(), "{all}");
+    let (_, inside) = start(&[
+        ("HTTPS_PROXY", "http://127.0.0.1:1"),
+        ("GOALCUP_TIME_LEFT_FILE", "/x"),
+    ]);
+    assert!(!inside.contains("proxy networks"), "{inside}");
 }

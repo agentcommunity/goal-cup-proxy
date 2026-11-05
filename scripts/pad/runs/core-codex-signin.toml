@@ -1,10 +1,10 @@
 # core-codex-signin.toml: Codex direct and dodger (case all skips gateway) on the owner's ChatGPT sign-in, no API key (gateway rows: core-codex.toml).
-# Sign in once: GOALCUP_HOME=~/gc-signin/home goalcup setup --harness codex-cli   (replace ~ below: goalcup_home is an absolute path)
+# Sign in once: GOALCUP_HOME=~/gc-signin/home goalcup setup --harness codex-cli
 harness = "codex-cli"
 key = "none"
 case = "all"
 mode = "full"
 where = "here"
-goalcup_home = "/Users/team/gc-signin/home"
+goalcup_home = "~/gc-signin/home"
 model_host = "chatgpt.com"  # a ChatGPT login calls chatgpt.com, not api.openai.com
 box_extra_minutes = 10

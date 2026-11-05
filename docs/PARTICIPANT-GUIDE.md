@@ -19,12 +19,16 @@ It has eight commands: `setup`, `start`, `continue`, `recover`, `status`, `seal`
 
 ## 1. What you need
 
-- A Mac or a Linux machine. On Windows use WSL2 (Ubuntu inside Windows) and do everything inside it.
-  WSL1 is refused, and so is a project folder on a Windows drive.
+- A Mac or a Linux machine ([platforms](../README.md#platforms)). On Windows use WSL2 (Ubuntu
+  inside Windows) and do everything inside it. WSL1 is refused, and so is a project folder on a
+  Windows drive.
+- A direct internet connection: company proxy networks are not supported, so `goalcup setup` and
+  `goalcup start` refuse when `HTTPS_PROXY` or `ALL_PROXY` is set (`goalcup continue` does not).
 - `git`, and a GitHub account for the real run.
 - A harness from [the harness list](harnesses/README.md), and the account or API key it uses.
 - An Agent Community account signed up at [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup),
-  where you hand in your demo video and questionnaire after the run.
+  where you hand in your two videos (a setup video before the run, a demo after it) and the
+  questionnaire ([RULES](RULES.md#submission)).
 
 ## 2. Install
 
@@ -37,8 +41,9 @@ It installs the latest release into `~/.local/bin`, with no `sudo`. If it says t
 your `PATH`, run the line it prints. Update later by running the same command, with no run open:
 the installer refuses while a run is recording.
 
-If a firewall such as Little Snitch asks about `goalcup`, allow it. It asks once for each program,
-and again after each update.
+If a firewall such as Little Snitch or LuLu asks about `goalcup`, allow it. It runs from
+`~/Library/Caches/goalcup/bin/<id>/goalcup` on a Mac (`$XDG_CACHE_HOME/goalcup/bin` or
+`~/.cache/goalcup/bin` on Linux), one path per goalcup version, so it asks once after each update.
 
 `goalcup` keeps its files in `~/Library/Application Support/goalcup` on a Mac, `$XDG_CONFIG_HOME/goalcup` or `~/.config/goalcup`
 on Linux and WSL2, or the folder `GOALCUP_HOME` names: runs in `runs/`, each harness's home in
@@ -93,17 +98,20 @@ reaches its models, where it keeps its sessions, and the one thing to know befor
 tier column is written from the test pad's results. A tier does not decide whether you may take
 part. The three tiers:
 
-- **Verified on a version.** The test pad ran this harness at that version with a direct key, and
+- **Verified.** The test pad ran this harness, at one version on one operating system (a build), with a direct key, and
   through a gateway where it has one and in the "cannot read" case, and every check passed on `goalcup`'s own record: no unexplained
   gap, no missed model request, every subagent recorded, no secret found, the server's copy whole,
   usage readable, and the counts on screen true.
 - **Not verified.** `goalcup` records what reaches it, the same way, but the pad has not passed on
-  this harness yet. The list says why (for example, no key). `goalcup status` tells you if model
+  this harness, or on your version or system, yet. Recording does not depend on it. The list says why (for example, no key). `goalcup status` tells you if model
   requests seem to be missing.
 - **Not supported.** The harness ignores the proxy or refuses its certificate. Its session files are
   recorded and, if it refused the certificate, the connection as a tunnel; its model requests are not.
 
-The start screen names your harness, its version and its tier. The notes below hold for every
+The start screen names your harness, its version and its tier. `goalcup` never refuses a harness
+because of its version: it reads the version (the first version-looking token of the harness's
+`--version`) at start, at continue and at seal, records it and says one plain line. Hermes works on
+several versions on macOS; `goalcup` writes the certificate trust line for the provider your Hermes uses. The notes below hold for every
 harness; a fact about one harness is in its row or sheet in `docs/harnesses/`.
 
 **Run without permission prompts.** A prompt waits for an answer, answering is typing, and you may
@@ -164,9 +172,9 @@ no model request was written, fix the setup now.
 
 ## 6. Your run
 
-Start inside the 24-hour start window (7 Nov 2026, 00:00 to 8 Nov, 00:00 UTC). Steps 1 to 4 can be
-done before it opens. A real run needs its own new repository and token. Do the steps in this order:
-a token for one repository needs the repository to exist first.
+Start inside the start window (date and length: [RULES](RULES.md#timeline)).
+Steps 1 to 4 can be done before it opens. A real run needs its own new repository and token. Do the
+steps in this order: a token for one repository needs the repository to exist first.
 
 1. **Create the repository.** On [github.com/new](https://github.com/new): public, and empty. Add no
    README, no `.gitignore`, no licence. A repository with any commit is refused, and the server
@@ -184,7 +192,7 @@ a token for one repository needs the repository to exist first.
    **Your SSH key is not covered.** The agent is you, and `ssh` reads `~/.ssh` whatever `HOME` says;
    in a test the agent used the tester's key within two minutes. Give your key a passphrase, use an
    SSH agent that asks before each use, or run in a container
-   ([results](research/results/2026-10-26-mac-retest.md)).
+   ([results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-26-mac-retest.md)).
 3. **Make the project folder.** A new folder that holds only a `.gitignore` and a `.env.local` (a
    macOS `.DS_Store` is allowed). First the folder and the `.gitignore`:
 
@@ -321,7 +329,8 @@ line.
 | `No model request was written yet. If your agent is working, it may not use the recording proxy.` (5 minutes after the launch) | Type your prompt if you have not. If the agent is answering, write to support. |
 | `No model request was written for 10 minutes, but <harness>'s session files grew. ...` | The agent may not be using the proxy, or uses a model service `goalcup` does not know. Its session files are still recorded. See `goalcup setup --record-host`. |
 | `<host> streamed data for N minutes and was not recorded. If it is a model service, run: goalcup setup --record-host <host>. ...` (also "received N MB from your agent") | Run the command, then `goalcup seal` and `goalcup continue`; the host is recorded from that part on. If it is not a model service, ignore the line. |
-| `Not recorded: <host> refused the recorder (it checks its own certificates). Its traffic passed through unread.` (or: its certificate is not one `goalcup` trusts, a company proxy) | Nothing to fix. The traffic passes unread and the end screen names it. |
+| `Not recorded: <host> refused the recorder (it checks its own certificates). Its traffic passed through unread.` | Nothing to fix. The traffic passed unread and the end screen names it. |
+| `Not recorded: <host>'s certificate is not one goalcup trusts (a company proxy?), so goalcup passed it through unread.` | goalcup did not read or record that traffic; the end screen names it. If `<host>` is your model service, its calls are not recorded: use a direct network ([section 1](#1-what-you-need)) and write to support. |
 | `goalcup has not updated this run since ... The computer may have slept or restarted. To go on, run: goalcup continue <run>` | The computer slept or restarted. Run the command. |
 | `<harness> has exited (exit code 0). The run is still open until ... To go on, run: goalcup continue <run>` | The agent ended before the deadline. Run the command. |
 | `goalcup hid N MB it could not check for secrets in time. Those bytes are stars in the record.` | Nothing to do. Hiding too much is the safe side. |
@@ -403,8 +412,9 @@ Then:
 
 - **Delete the token** on GitHub (Settings, Developer settings, Fine-grained personal access tokens,
   Delete), and delete `.env.local`. Log the harness out, or rotate its key.
-- Hand in your demo video and questionnaire on
-  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup) within 24 hours.
+- Hand in the demo and the questionnaire on
+  [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup); the setup video comes before the
+  run ([RULES](RULES.md#submission)).
 
 ## 9. What is recorded, and what is not
 
@@ -432,7 +442,9 @@ Also not recorded, or recorded less:
 - **An HTTP/2 feature goalcup cannot follow** is passed on unharmed and named as a gap. For an
   extended CONNECT stream only that stream is not read; for a push, a broken header compression, an
   oversized header block or broken HTTP/2 framing the rest of that connection is not read.
-- **HTTP/3, QUIC and ECH** never reach a proxy, and a network that re-signs TLS is not supported.
+- **HTTP/3, QUIC and ECH** never reach a proxy. A host whose certificate goalcup does not trust
+  passes through unread and is named on the end screen. Company proxy networks are not supported
+  ([section 1](#1-what-you-need)).
 - **A token used as the user name of a URL with no password** may be recorded.
 - **SQLite harnesses** keep their data in a database; it is copied once, at the seal.
 - **On Linux**, memory `goalcup` holds can reach swap that is not encrypted. It is the one place raw
@@ -458,10 +470,9 @@ Every folder problem is listed in one refusal, then "Nothing was created." Fix e
 | `It and goalcup's folder "<path>" hold each other or sit side by side.` | Use a folder elsewhere, or set `GOALCUP_HOME` to a folder away from it. |
 | `The prompt file "<path>" is inside the project folder. Move it out.` | Move the file out. |
 | `This is WSL1, which cannot run goalcup.` or `... is on a Windows drive (...)` | Convert to WSL2 (`wsl --set-version <distro> 2`), and use a folder in the Linux home. |
-| `--connector and --hosts are for practice and test runs. A competition run uses the connectors built into goalcup.` | Remove the flags. |
+| `--connector, --hosts and a connector file given to --harness are for practice and test runs. A competition run uses the connectors built into goalcup.` | Remove the flags. |
 | `goalcup cannot tell where to keep your runs: HOME is not set to a full path.` | Set `HOME`, or `GOALCUP_HOME`, to a full path outside your project. |
 | `"<file>" sets <key>, which routes around the recorder. Remove it, then run this again.` | Remove that setting from the file named. The line names the file and key, never the value. |
-| `<harness> --version does not show <version>, the version goalcup works with.` | Install that version. |
 | `a run uses "<home>" now. Run this again once it has ended.` | One run at a time can use a harness home. |
 
 These two are warnings, not refusals: the folder looks synced (a sync client may upload `.env.local`
@@ -488,6 +499,7 @@ Every loss in the record is one gap with a reason. The screens use these words.
 | `h2_unsupported` | a connection goalcup could not follow |
 | `mask_failed` | goalcup could not check it for secrets, so it dropped it |
 | `upstream_untrusted` | the model service's certificate was not one goalcup trusts |
+| `upstream_handshake_failed` | the connection to the model service failed twice |
 | `protocol_other` | a connection in a form goalcup does not read |
 | `after_stop` | sent after the agent ended |
 

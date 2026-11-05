@@ -55,21 +55,10 @@ fn broke(text: String) -> Stop {
 /// The local record (`server.json`) keeps the honest `None`.
 const UNKNOWN_VERSION: &str = "unknown";
 
-/// The Worker refuses a string field longer than this many UTF-16 code units.
-const WIRE_UNITS: usize = 64;
-
 /// The harness version as the server gets it: as read (cut to 64 UTF-16 units at a char
 /// boundary), or "unknown", never null.
 pub(super) fn wire_version(read: Option<&str>) -> &str {
-    let v = read.unwrap_or(UNKNOWN_VERSION);
-    let mut units = 0;
-    for (i, c) in v.char_indices() {
-        units += c.len_utf16();
-        if units > WIRE_UNITS {
-            return &v[..i];
-        }
-    }
-    v
+    crate::connector::launch::cut_version(read.unwrap_or(UNKNOWN_VERSION))
 }
 
 /// What `start` knows when it asks for the run.
@@ -86,7 +75,7 @@ pub struct Ask<'a> {
     pub hosts_file: Option<&'a Path>,
     /// The host lists in force; kept in `server.json` for `goalcup recover`.
     pub hosts: &'a crate::connector::HostList,
-    /// A flat object of machine facts (`os`, `cpus`, `ac_power`).
+    /// A flat object of machine facts (`os`, `cpus`).
     pub machine: Value,
 }
 
@@ -141,6 +130,7 @@ pub fn begin(home: &Path, server: &Server, ask: &Ask, out: &mut dyn Write) -> Re
         return Err(stopped(text::WHY_INTERRUPTED));
     }
     let open: Open = opened.map_err(|e| server_stop(&e, text::open_refused))?;
+    open.notes.print(out);
     let deadline = Mono::now()
         .ns()
         .saturating_add(open.seconds_left.saturating_mul(1_000_000_000));
@@ -201,6 +191,8 @@ struct Open {
     entry_id: String,
     deadline_at: String,
     seconds_left: u64,
+    #[serde(default)]
+    notes: super::notes::Notes,
 }
 
 fn server_record(
@@ -433,9 +425,11 @@ fn server_stop(e: &ServerError, refused: fn(&str) -> String) -> Stop {
     }
 }
 
-/// Opens `url` in the browser unless `GOALCUP_NO_BROWSER=1`; whether a program started.
+/// Opens `url` in the browser unless `GOALCUP_NO_BROWSER=1` or it is not an https link (the real
+/// approval page always is; a test server's `http://127.0.0.1/...` never opens a tab); whether a
+/// program started.
 pub fn browser(url: &str) -> bool {
-    if std::env::var("GOALCUP_NO_BROWSER").is_ok_and(|v| v == "1") {
+    if std::env::var("GOALCUP_NO_BROWSER").is_ok_and(|v| v == "1") || !openable(url) {
         return false;
     }
     let tool = if cfg!(target_os = "macos") {
@@ -450,6 +444,11 @@ pub fn browser(url: &str) -> bool {
         .stderr(Stdio::null())
         .spawn()
         .is_ok()
+}
+
+/// Only an `https://` link may open a browser.
+fn openable(url: &str) -> bool {
+    url.starts_with("https://")
 }
 
 /// Waits `d` in short steps, ending early on Ctrl-C.
@@ -485,5 +484,21 @@ impl Drop for Ctrl {
     fn drop(&mut self) {
         // SAFETY: puts back the handler `signal` returned.
         unsafe { libc::signal(libc::SIGINT, self.0) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::openable;
+
+    #[test]
+    fn only_https_approval_links_open_a_browser() {
+        assert!(openable(
+            "https://agentcommunity.org/goalcup/approve?code=BCDF-GHJK"
+        ));
+        assert!(!openable("http://127.0.0.1/approve?code=BCDF-GHJK"));
+        assert!(!openable("HTTPS-not-a-url"));
+        assert!(!openable("file:///etc/passwd"));
+        assert!(!openable(""));
     }
 }

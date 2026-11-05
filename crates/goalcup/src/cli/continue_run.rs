@@ -122,6 +122,17 @@ pub fn prepare(
     let (Some(sj), Some(last)) = (found.server.clone(), found.entries.last().cloned()) else {
         return Err(refuse(text::NOT_STARTED_HERE));
     };
+    // An old file has no recorded folder: then there is nothing to compare. A recorded folder
+    // that no longer exists (moved or renamed) cannot be gone back to, so it does not refuse.
+    if let Some(ws) = sj.entries.last().and_then(|e| e.workspace.as_ref())
+        && let Ok(recorded) = std::fs::canonicalize(ws)
+        && std::fs::canonicalize(project).ok() != Some(recorded)
+    {
+        return Err(refuse(text::wrong_folder(
+            &found.run,
+            &ws.to_string_lossy(),
+        )));
+    }
     let base = sj.server.clone();
     let secret = match &base {
         Some(_) => match std::fs::read_to_string(credential(&found.run_dir)) {
@@ -142,7 +153,7 @@ pub fn prepare(
         .connector
         .map_or_else(|| sj.connector.id.clone(), |_| sj.connector.source.clone());
     let connector = connector::load(&id, a.hosts).map_err(|e| refuse(e.to_string()))?;
-    if connector.id != sj.connector.id {
+    if connector.id != sj.connector.id && !connector.old_ids.contains(&sj.connector.id) {
         return Err(refuse(text::file_changed(
             "connector file",
             &sj.connector.source,
@@ -192,7 +203,8 @@ pub fn prepare(
         goalcup_home: home.to_path_buf(),
         server_host: server.host().unwrap_or_default().to_owned(),
     };
-    let mut plan = connector::plan(&connector, &env, &super::isolated_home(home, &connector.id));
+    let iso = super::run_home(home, &connector, &sj.connector.id);
+    let mut plan = connector::plan(&connector, &env, &iso);
     if let Some(r) = &plan.refusal {
         return Err(refuse(text::refusal(r)));
     }
@@ -209,7 +221,7 @@ pub fn prepare(
                 "previous_entry_id": last, "connector_id": connector.id,
                 "connector_sha256": connector.sha256, "workspace": project.to_string_lossy(),
                 "session_id": start::session_id(), "harness_version": approve::wire_version(plan.harness_version.as_deref()),
-                "proxy_version": env!("CARGO_PKG_VERSION"),
+                "proxy_version": env!("CARGO_PKG_VERSION"), "os": std::env::consts::OS,
             });
             let client = ServerClient::new(base, Some(Token::new(secret)));
             let path = format!("/v1/runs/{}/continue", found.run);
@@ -237,6 +249,7 @@ pub fn prepare(
                     code: 3,
                 });
             }
+            got.notes.print(out);
             let ns = got.seconds_left.saturating_mul(1_000_000_000);
             let left = Mono(Mono::now().ns().saturating_add(ns));
             (got.entry_id, got.segment, Some(left))
@@ -286,15 +299,35 @@ pub fn prepare(
     if let (Some(a), Some(b)) = (before, now) {
         lines.extend((a != b).then(|| text::updated(&name, a, b)));
     }
-    lines.extend(connector.first_screen.clone());
-    lines.extend(first_message(&found.run_dir, resumed, vars));
+    let parsed = |line: Option<&str>| line.and_then(connector::version::parse).map(|v| v.text);
+    let (was, is) = (parsed(before), parsed(now));
+    if let Some(line) = now
+        && is != was
+    {
+        plan.notes
+            .push(json!({"ev": "note", "what": "version_read", "line": line,
+            "version": is, "before": was}));
+    }
+    lines.extend(plan.effective.first_screen.clone());
+    lines.extend(first_message(
+        &found.run_dir,
+        resumed,
+        sj.repo.as_deref(),
+        project,
+        vars,
+    ));
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(server.host()));
-    lines.extend(plan.version_notes.clone());
+    // An unread version is said once: its note (recorded) is this line.
     if plan.harness_version.is_none() {
         log::line(&new_dir, "version_unread", &[]);
-        lines.push(text::version_unread(&name, server.host().is_some()));
+        let rules = connector.unread_rules();
+        let upload = server.host().is_some();
+        lines.push(text::version_unread(&name, upload, rules.as_deref()));
+    } else {
+        lines.extend(plan.version_notes.clone());
     }
+    lines.extend(plan.trust_notes.clone());
     for (what, file) in [
         ("Connector", first.map(PathBuf::from)),
         ("Host list", sj.hosts_file.clone()),
@@ -320,14 +353,32 @@ pub fn prepare(
     })
 }
 
-/// A new session has not seen the first message: it is on the clipboard again.
-fn first_message(run_dir: &Path, resumed: bool, vars: &BTreeMap<String, String>) -> Option<String> {
+/// A new session has not seen the first message: it is on the clipboard again. A start stopped
+/// before it wrote one (Ctrl-C after the open, or no prompt) still owes the push lines.
+fn first_message(
+    run_dir: &Path,
+    resumed: bool,
+    repo: Option<&str>,
+    project: &Path,
+    vars: &BTreeMap<String, String>,
+) -> Vec<String> {
+    if resumed {
+        return vec![];
+    }
     let file = run_dir.join("first-message.txt");
-    let message = std::fs::read_to_string(&file).ok().filter(|_| !resumed)?;
-    Some(text::first_message(
-        &file,
-        push::clipboard::copy(&message, vars),
-    ))
+    match std::fs::read_to_string(&file) {
+        Ok(message) => vec![text::first_message(
+            &file,
+            push::clipboard::copy(&message, vars),
+        )],
+        Err(_) => repo
+            .map(|r| {
+                let mut lines = start::push_only(r, project, vars);
+                lines.push(text::PROMPT_AFTER_PUSH.to_owned());
+                lines
+            })
+            .unwrap_or_default(),
+    }
 }
 
 #[derive(Deserialize)]
@@ -335,4 +386,6 @@ struct Next {
     entry_id: String,
     segment: u32,
     seconds_left: u64,
+    #[serde(default)]
+    notes: super::notes::Notes,
 }

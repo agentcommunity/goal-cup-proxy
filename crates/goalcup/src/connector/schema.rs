@@ -16,11 +16,12 @@ pub struct Connector {
     pub id: String,
     pub name: String,
     pub program: String,
-    /// A prefix `program --version` must contain.
-    pub version: Option<String>,
-    /// Said to the participant, and recorded, when the read version starts with one of `versions`
-    /// (as `version` matches). Never refuses a run.
-    pub version_notes: Vec<VersionNote>,
+    /// Built-in ids this connector had before: `load` and `continue` take them as this one.
+    pub old_ids: Vec<String>,
+    /// The build these values were checked on; `version::parse` of it is itself.
+    pub checked: Option<String>,
+    /// Per-version overrides: the first row whose `match` holds for the read version applies.
+    pub versions: Vec<VersionRow>,
     pub args: Vec<String>,
     pub resume: Vec<String>,
     /// Variables pointed into the isolated home. Template `{home}`.
@@ -45,6 +46,13 @@ pub struct Connector {
     pub no_prompts: Vec<SettingRow>,
     pub update_off: Vec<SettingRow>,
     pub skills_dir: Option<String>,
+    /// Read by goalcup-verify only (docs/CONNECTOR-SCHEMA.md#the-usage-table); the recorder never
+    /// reads it.
+    pub usage: toml::Table,
+
+    /// Trust written into the isolated home at every start and continue, never by setup: each
+    /// address the harness uses gets the run bundle.
+    pub ca_settings: Option<CaSettings>,
 
     /// Built in or a file. Set by `load`.
     #[serde(skip)]
@@ -57,12 +65,112 @@ pub struct Connector {
     pub hosts: HostList,
 }
 
-/// A plain-words note for some versions of the harness.
+/// One `[[versions]]` row: the keys a harness release may change, over the base connector. The
+/// fixed keys (id, program, home, CA, mask, refusals, usage) are not here, so serde refuses them.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VersionRow {
+    /// A `version::matches` spec.
+    #[serde(rename = "match")]
+    pub spec: String,
+    /// Said to the participant at start, and recorded as a `version_note` note.
+    pub say: Option<String>,
+    pub args: Option<Vec<String>>,
+    pub resume: Option<Vec<String>>,
+    /// Merged into the base `env` key by key.
+    pub env: Option<BTreeMap<String, String>>,
+    pub unset: Option<Vec<String>>,
+    pub host_hints: Option<Vec<HintRow>>,
+    pub secret_files: Option<Vec<String>>,
+    pub no_prompts: Option<Vec<SettingRow>>,
+    pub update_off: Option<Vec<SettingRow>>,
+    pub native: Option<Vec<NativeRow>>,
+    /// `""` clears the base line.
+    pub first_screen: Option<String>,
+    pub before: Option<Vec<Vec<String>>>,
+    pub after: Option<Vec<Vec<String>>>,
+}
+
+/// `dst` replaced by `src` when the row sets it.
+fn over<T: Clone>(dst: &mut T, src: &Option<T>) {
+    if let Some(v) = src {
+        dst.clone_from(v);
+    }
+}
+
+impl Connector {
+    /// The connector with row `i` laid over the base.
+    fn apply(&self, i: usize) -> Connector {
+        let mut c = self.clone();
+        let r = &self.versions[i];
+        over(&mut c.args, &r.args);
+        over(&mut c.resume, &r.resume);
+        // `unset` only adds: a row never lets back a variable the base removes.
+        for name in r.unset.iter().flatten() {
+            if !c.unset.contains(name) {
+                c.unset.push(name.clone());
+            }
+        }
+        over(&mut c.host_hints, &r.host_hints);
+        over(&mut c.secret_files, &r.secret_files);
+        over(&mut c.no_prompts, &r.no_prompts);
+        over(&mut c.update_off, &r.update_off);
+        over(&mut c.native, &r.native);
+        over(&mut c.before, &r.before);
+        over(&mut c.after, &r.after);
+        if let Some(env) = &r.env {
+            c.env.extend(env.clone());
+        }
+        if let Some(line) = &r.first_screen {
+            c.first_screen = (!line.is_empty()).then(|| line.clone());
+        }
+        c
+    }
+
+    /// Whose rules an unread version gets, said only on a connector with rows: `checked`, else
+    /// the newest version it knows.
+    pub fn unread_rules(&self) -> Option<String> {
+        (!self.versions.is_empty()).then(|| match &self.checked {
+            Some(v) => format!("{} {v}", self.name),
+            None => format!("the newest version of {} it knows", self.name),
+        })
+    }
+
+    /// The connector in force for version `v` and the `match` of the row applied: the first row
+    /// that holds, else the base. An unread version gets the base.
+    pub fn for_version(
+        &self,
+        v: Option<&super::version::HarnessVersion>,
+    ) -> (Connector, Option<String>) {
+        let hit = v
+            .and_then(|v| (self.versions.iter()).position(|r| super::version::matches(v, &r.spec)));
+        match hit {
+            Some(i) => (self.apply(i), Some(self.versions[i].spec.clone())),
+            None => (self.clone(), None),
+        }
+    }
+}
+
+/// Where a harness reads trust per model address: entries keyed by an address, each with a CA
+/// key (docs/CONNECTOR-SCHEMA.md). Each address the harness uses gets `value` at `key`: on the
+/// participant's entry that holds it, else on a new `goalcup-trust-*` entry made from `add`.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct VersionNote {
-    pub versions: Vec<String>,
-    pub say: String,
+pub struct CaSettings {
+    /// The config file, under `{home}`.
+    pub file: String,
+    /// The address keys of the participant's entries, dotted, one `*` for the entry.
+    pub entries: Vec<String>,
+    /// Keys holding another address the harness calls.
+    pub uses: Vec<String>,
+    /// The address key of a new entry; its `*` becomes `goalcup-trust-<address>`.
+    pub add: String,
+    /// The CA key, beside the address key.
+    pub key: String,
+    /// The CA value, never an address.
+    pub value: String,
+    /// The addresses given the run bundle when the file names none: `https`, shared-list hosts.
+    pub fallback: Vec<String>,
 }
 
 /// Before launch, a non-empty value at any of `keys` in `file` refuses the start.
@@ -216,6 +324,7 @@ impl From<MaskRule> for RawMaskRule {
 pub fn parse(bytes: &[u8], file: &str) -> Result<Connector, ConnectorError> {
     let mut connector: Connector = from_toml(bytes, file)?;
     check(&connector, file)?;
+    check_versions(&connector, file)?;
     connector.sha256 = hex::encode(Sha256::digest(bytes));
     Ok(connector)
 }
@@ -321,6 +430,24 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
         }
     }
 
+    if let Some(t) = &c.ca_settings {
+        if t.value.contains("://") {
+            return Err(address("ca_settings.value".into()));
+        }
+        // `a.*.url`: one `*` part for the entry, then the address key.
+        let shape = |k: &String| {
+            let parts: Vec<&str> = k.split('.').collect();
+            parts.iter().filter(|p| **p == "*").count() == 1 && parts.last() != Some(&"*")
+        };
+        if !t.entries.iter().chain([&t.add]).all(shape) || t.key.contains(['.', '*']) {
+            return Err(invalid(
+                "ca_settings".into(),
+                "entries and add hold one `*` part each, not the last; key is one plain part",
+            ));
+        }
+        files.push(("ca_settings.file".into(), &t.file, 1));
+    }
+
     // Variables the code sets stay the code's.
     for name in c.env.keys() {
         if code_owned(name)
@@ -413,6 +540,52 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
         if let Err(e) = crate::native::pattern::parse(&row.pattern) {
             return Err(invalid(format!("native[{i}].pattern"), e.0));
         }
+    }
+    Ok(())
+}
+
+/// `checked` is a version word as `version::parse` reads it, and every row, laid over the base,
+/// passes the base's checks; an error key starts `versions[<i>].`.
+fn check_versions(c: &Connector, file: &str) -> Result<(), ConnectorError> {
+    if let Some(checked) = &c.checked
+        && super::version::parse(checked).is_none_or(|v| &v.text != checked)
+    {
+        return Err(ConnectorError::Invalid {
+            file: file.to_string(),
+            key: "checked".into(),
+            reason: "must be a version such as 2.2.2",
+        });
+    }
+    // An unread version gets the base and is told it got `checked`'s rules: so no row may hold it.
+    let checked = c.checked.as_deref().and_then(super::version::parse);
+    if checked.is_some() && c.for_version(checked.as_ref()).1.is_some() {
+        return Err(ConnectorError::Invalid {
+            file: file.to_string(),
+            key: "checked".into(),
+            reason: "a [[versions]] row holds for it; checked names the base's build",
+        });
+    }
+    for i in 0..c.versions.len() {
+        let prefix = |key: String| format!("versions[{i}].{key}");
+        if !super::version::spec_ok(&c.versions[i].spec) {
+            return Err(ConnectorError::Invalid {
+                file: file.to_string(),
+                key: prefix("match".into()),
+                reason: "must be a version spec such as 1.x, 0.22.6 or >=1.2,<2",
+            });
+        }
+        check(&c.apply(i), file).map_err(|e| match e {
+            ConnectorError::Invalid { file, key, reason } => ConnectorError::Invalid {
+                file,
+                key: prefix(key),
+                reason,
+            },
+            ConnectorError::ModelAddress { file, key } => ConnectorError::ModelAddress {
+                file,
+                key: prefix(key),
+            },
+            other => other,
+        })?;
     }
     Ok(())
 }

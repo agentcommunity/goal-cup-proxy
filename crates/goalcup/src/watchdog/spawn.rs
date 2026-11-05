@@ -17,7 +17,7 @@ use std::net::{SocketAddr, TcpListener};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
 /// The recorder's listen socket.
@@ -27,6 +27,68 @@ pub const CONTROL_FD: RawFd = 4;
 
 /// The accept backlog; the kernel clamps it to `somaxconn`.
 const BACKLOG: i32 = 4_096;
+
+/// The folder of pinned binaries, `<cache>/goalcup/bin`: `~/Library/Caches` on macOS, else
+/// `$XDG_CACHE_HOME` or `~/.cache`. Never under `GOALCUP_HOME`, so one build keeps one path
+/// whatever home a run uses. None when HOME is not a full path.
+pub fn pin_root() -> Option<PathBuf> {
+    let var = |n| std::env::var(n).ok();
+    pick_pin_root(
+        var("HOME"),
+        var("XDG_CACHE_HOME"),
+        cfg!(target_os = "macos"),
+    )
+}
+
+fn pick_pin_root(home: Option<String>, xdg: Option<String>, macos: bool) -> Option<PathBuf> {
+    let full = |v: Option<String>| v.map(PathBuf::from).filter(|p| p.is_absolute());
+    let cache = match (macos, full(xdg)) {
+        (false, Some(x)) => x,
+        _ => full(home)?.join(if macos { "Library/Caches" } else { ".cache" }),
+    };
+    Some(cache.join("goalcup").join("bin"))
+}
+
+/// The first 16 hex of the SHA-256 of the file at `p`.
+fn content_id(p: &Path) -> io::Result<String> {
+    use sha2::Digest;
+    let mut hash = sha2::Sha256::new();
+    io::copy(&mut std::fs::File::open(p)?, &mut hash)?;
+    Ok(hex::encode(hash.finalize())[..16].to_string())
+}
+
+/// Pins `exe` at `root/<id>/goalcup`, `id` from its content ([`content_id`]): one stable path
+/// per build, so a per-app firewall keyed by path (Little Snitch, LuLu) allows it once, and every
+/// boot of a run starts the binary the run started with, whatever an install puts at `exe`
+/// meanwhile. A pin there whose content matches is reused; else a link (a copy, mode kept, where
+/// a link fails: another volume) to a tmp of this process is hashed and renamed into place. Never
+/// a copy onto a tmp that exists: it may be a link to `exe`, and the copy would empty `exe`. A
+/// symlink at `exe` is followed first. Pins of older builds are left in place.
+pub fn pin_exe(exe: &Path, root: &Path) -> io::Result<PathBuf> {
+    let exe = std::fs::canonicalize(exe)?;
+    let at = |id: &str| root.join(id).join(super::EXE_FILE);
+    let id = content_id(&exe)?;
+    if content_id(&at(&id)).is_ok_and(|have| have == id) {
+        return Ok(at(&id));
+    }
+    std::fs::create_dir_all(root)?;
+    let tmp = root.join(format!(".{}.tmp", std::process::id()));
+    let _ = std::fs::remove_file(&tmp);
+    let done = std::fs::hard_link(&exe, &tmp)
+        .or_else(|e| match e.kind() {
+            io::ErrorKind::AlreadyExists => Err(e),
+            _ => std::fs::copy(&exe, &tmp).map(drop),
+        })
+        .and_then(|()| content_id(&tmp))
+        .and_then(|id| {
+            std::fs::create_dir_all(root.join(&id))?;
+            std::fs::rename(&tmp, at(&id)).map(|()| at(&id))
+        });
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done
+}
 
 /// [`bind_exact`], and a port that is taken or refused gives way to port 0 (`goalcup continue`).
 pub fn bind(port: u16) -> io::Result<TcpListener> {
@@ -374,6 +436,27 @@ pub fn end_tree(harness: (u32, u64), spare: &dyn Fn(u32) -> bool) {
     }
 }
 
+/// Reaps the watchdog's exited children (on Linux, orphans the subreaper took in) except those
+/// `keep` names: `waitpid(WNOHANG)` on each zombie child, so none piles up while the harness
+/// runs. Elsewhere nothing (no subreaper, no orphans taken in).
+pub fn reap_orphans(keep: &dyn Fn(u32) -> bool) {
+    if !cfg!(target_os = "linux") {
+        return;
+    }
+    let me = std::process::id();
+    for p in procs() {
+        if p.ppid == me
+            && p.zombie
+            && !keep(p.pid)
+            && let Ok(pid) = libc::pid_t::try_from(p.pid)
+        {
+            let mut status = 0;
+            // SAFETY: reaps one child of ours by pid; writes one integer.
+            unsafe { libc::waitpid(pid, &mut status, libc::WNOHANG) };
+        }
+    }
+}
+
 /// The Linux children of the watchdog that started no earlier than the harness and are still
 /// alive at the seal, with their program names (`/proc/<pid>/comm`). None elsewhere or when
 /// there are none.
@@ -423,5 +506,84 @@ pub fn look(pid: u32) -> Option<Option<std::process::ExitStatus>> {
             None
         }
         _ => Some(Some(std::process::ExitStatus::from_raw(status))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sha2::Digest;
+
+    /// One path per build content, shared by every run: a firewall rule keyed by path holds.
+    #[test]
+    fn pin_exe_is_one_path_per_content() {
+        let t = tempfile::tempdir().unwrap();
+        let (exe, bin) = (t.path().join("goalcup"), t.path().join("cache").join("bin"));
+        std::fs::write(&exe, b"old").unwrap();
+        let pinned = pin_exe(&exe, &bin).unwrap();
+        let id = &hex::encode(sha2::Sha256::digest(b"old"))[..16];
+        assert_eq!(pinned, bin.join(id).join(super::super::EXE_FILE));
+        assert_eq!(
+            pin_exe(&exe, &bin).unwrap(),
+            pinned,
+            "a second run reuses it"
+        );
+        std::fs::write(t.path().join("new"), b"new").unwrap();
+        std::fs::rename(t.path().join("new"), &exe).unwrap(); // install.sh:328
+        let newer = pin_exe(&exe, &bin).unwrap();
+        assert_ne!(newer, pinned);
+        assert_eq!(
+            std::fs::read(&pinned).unwrap(),
+            b"old",
+            "a running run keeps its binary"
+        );
+        assert_eq!(std::fs::read(&newer).unwrap(), b"new");
+        std::fs::remove_file(&newer).unwrap();
+        std::fs::write(&newer, b"bad").unwrap();
+        assert_eq!(pin_exe(&exe, &bin).unwrap(), newer);
+        assert_eq!(
+            std::fs::read(&newer).unwrap(),
+            b"new",
+            "a pin that hashes wrong is redone"
+        );
+        assert_eq!(std::fs::read_dir(&bin).unwrap().count(), 2, "no tmp left");
+    }
+
+    #[test]
+    fn pin_exe_follows_a_relative_symlink() {
+        let t = tempfile::tempdir().unwrap();
+        let bin = t.path().join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::fs::write(t.path().join("real"), b"real").unwrap();
+        std::os::unix::fs::symlink("../real", bin.join("goalcup")).unwrap();
+        let pinned = pin_exe(&bin.join("goalcup"), &t.path().join("pins")).unwrap();
+        assert_eq!(std::fs::read(&pinned).unwrap(), b"real");
+    }
+
+    #[test]
+    fn pin_exe_fails_cleanly() {
+        let t = tempfile::tempdir().unwrap();
+        let exe = t.path().join("goalcup");
+        std::fs::write(&exe, b"x").unwrap();
+        assert!(
+            pin_exe(&exe, &exe.join("bin")).is_err(),
+            "a file where the folder goes"
+        );
+    }
+
+    /// The cache folder follows HOME and XDG_CACHE_HOME, never GOALCUP_HOME; relative ones are
+    /// ignored.
+    #[test]
+    fn pin_root_is_the_user_cache() {
+        let home = Some("/u".to_string());
+        let xdg = Some("/x".to_string());
+        let mac = pick_pin_root(home.clone(), xdg.clone(), true);
+        assert_eq!(mac.unwrap(), Path::new("/u/Library/Caches/goalcup/bin"));
+        let linux = pick_pin_root(home.clone(), xdg, false);
+        assert_eq!(linux.unwrap(), Path::new("/x/goalcup/bin"));
+        let linux = pick_pin_root(home, Some("rel".into()), false);
+        assert_eq!(linux.unwrap(), Path::new("/u/.cache/goalcup/bin"));
+        assert!(pick_pin_root(Some("rel".into()), None, true).is_none());
+        assert!(pick_pin_root(None, None, false).is_none());
     }
 }

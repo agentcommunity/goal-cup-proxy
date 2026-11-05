@@ -13,6 +13,7 @@ import urllib.parse
 PAD = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PAD)
 import check as pc  # noqa: E402  S6, S7 and S9 keys are read through check.py's SEAM only
+import harness_version  # noqa: E402
 NO_BUILD = "no goalcup build"
 BESIDE = ("spend", "seal-now", "watch")  # these run beside the other steps, so they never write state.json
 STEPS = ("setup", "start", "paste", "wait-calls", "look", "wait-recovery", "keep-going", "seal", "wait-upload", "verify",
@@ -273,9 +274,25 @@ class Run:
             kw["said"] = replace_known(kw["said"], self.known() or [])[0][:2000]
         append(self.path("watch", "faults.jsonl"), dict(kind=kind, **kw))
 
+    def pane_pids(self):
+        """The pids under this run's tmux pane (the launch shell, goalcup, the harness)."""
+        out = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_pid}"]).stdout.split()
+        return self.tree([int(out[0])]) if out and out[0].isdigit() else []
+
     def entry(self):
-        """The newest entry folder under GOALCUP_HOME (PRD-10: runs/<run>/<entry>/status.json)."""
-        found = sorted(glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "*", "status.json")), key=os.path.getmtime)
+        """This run's entry folder under GOALCUP_HOME (PRD-10: runs/<run>/<entry>/status.json): the one that appeared after
+        `goalcup start` was launched (st entries_before); on a shared home an older recorder's folder is never taken for it.
+        Several new ones go by the pane's processes; none of them the pane's is refused. Without the list: the newest."""
+        found = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "*", "status.json"))
+        before = self.st.get("entries_before")
+        if before is not None:
+            found = [f for f in found if os.path.dirname(f) not in before]
+            if len(found) > 1:
+                pids = set(self.pane_pids())
+                found = [f for f in found if pids & {pc.dig(loads(path=f), "s4_pid"), pc.dig(loads(path=f), "s4_harness_pid")}]
+                if not found:
+                    raise Step("INCONCLUSIVE", "several new entry folders and none belongs to this run's tmux pane")
+        found = sorted(found, key=os.path.getmtime)
         if found:
             e = os.path.dirname(found[-1])
             self.st.update(entry_dir=e, entry=os.path.basename(e), run=os.path.basename(os.path.dirname(e)))
@@ -301,20 +318,22 @@ class Run:
             raise Step("skip", "no entry")
 
     def gc_env(self, clean=False):
-        """The run's GOALCUP_* values; clean: with only HOME, PATH (BOX_BIN first) and TERM beside them (no proxy or
+        """The run's GOALCUP_* values; clean: with only HOME, PATH (here_path, then BOX_BIN, first) and TERM beside them (no proxy or
         CA variable): the participant's shell."""
         s, e = self.s, os.environ
-        path = os.pathsep.join([os.path.expanduser(d) for d in BOX_BIN] + [e.get("PATH", "")])
-        base = dict(HOME=e.get("HOME", ""), PATH=path, TERM=e.get("TERM") or "xterm") if clean else {}
+        path = os.pathsep.join(s.get("here_path", []) + [os.path.expanduser(d) for d in BOX_BIN] + [e.get("PATH", "")])  # here_path: the harness build to run
+        base = dict(HOME=e.get("HOME", ""), PATH=path, TERM=e.get("TERM") or "xterm") if clean else {"PATH": path} if s.get("here_path") else {}
         return dict(base, GOALCUP_HOME=self.env["GOALCUP_HOME"], GOALCUP_SERVER=self.env["GOALCUP_SERVER"],
                     GOALCUP_NO_BROWSER="1", **{"GOALCUP_KEEP_PARTS": "1"} if s.get("keep") else {})
 
     def setup(self, _):
         h, s, sec = self.h, self.s, self.sec
-        got = re.search(r"(\d+\.\d+\.\d+[0-9A-Za-z.+-]*)", sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]]).stdout)
-        version = got and got.group(1)  # section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
+        r = sh(["bash", "-c" if os.environ.get("PAD_BIN") else "-lc", h["version_cmd"]], env=dict(os.environ, PAD_VERSION=s["version"]))
+        version = harness_version.parse(next((l for l in (r.stdout + "\n" + r.stderr).splitlines() if l.strip()), ""))  # stdout's first line, else stderr's, as goalcup; section 3, 0:01; any installed version runs (owner, 3 Nov), the row records it
         if not version:
             raise Step("FAIL", "%s not installed" % s["harness_id"])
+        if s.get("version_required") and version != s["version"]:  # a versions list: the row must be that build
+            raise Step("FAIL", "requested %s, found %s; install it, for example under here_path" % (s["version"], version))
         self.st.update(harness_version=version, plain_planted=True)
         known, plain = self.plant()
         known += [open(os.path.join(self.keys, name)).read().strip() for name in s["key_files"]]
@@ -330,9 +349,13 @@ class Run:
         if r.returncode or not homes:  # S15 prints the isolated home's path
             raise Step("FAIL", "goalcup setup exit %d, %d home paths printed" % (r.returncode, len(homes)))
         home = self.st["home"] = homes[-1]
-        for name, src in sec.get("files", {}).items():  # provider config, as a participant writes it
-            old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""  # keep goalcup setup's no_prompts rows
-            write(os.path.join(home, name), merge_config(name, old, fill(open(os.path.join(PAD, "harnesses", src)).read(), home, self.project)), 0o644)
+        extra = sec.get("pad_only", [])  # config no participant writes: merged, and the row never counts (table)
+        extra = [e for e in extra if harness_version.matches(version, e["match"])]
+        self.st["pad_only"] = [e["why"] for e in extra]
+        for files in [sec.get("files", {})] + [e["files"] for e in extra]:  # provider config, as a participant writes it
+            for name, src in files.items():
+                old = open(os.path.join(home, name)).read() if os.path.isfile(os.path.join(home, name)) else ""  # keep goalcup setup's no_prompts rows
+                write(os.path.join(home, name), merge_config(name, old, fill(open(os.path.join(PAD, "harnesses", src)).read(), home, self.project)), 0o644)
         get = lambda k: sec.get(k, h.get(k))  # noqa: E731
         key, route = (os.path.join(self.keys, s["route_key"]), get("key_route")) if s["route_key"] else (None, None)  # section 6
         self.st.update(key_route=route, key_env=get("key_env"), key_path=key)
@@ -402,6 +425,8 @@ class Run:
             lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"]))]
             lines += ["rm -f " + shlex.quote(self.st["key_path"])] * (not self.has("kill-both"))  # goalcup continue relaunches the harness
             # from this shell's lines (kill_both), so a kill-both row keeps the 0600 copy; the seal's wipe removes keys/
+        self.st["entries_before"] = sorted(os.path.dirname(f) for f in glob.glob(os.path.join(self.env.get("GOALCUP_HOME", "/nonexistent"), "runs", "*", "*", "status.json")))
+        self.st["row_start"] = time.time()  # a shared home holds other rows' entries and files; only what appears after this is ours
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
         hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
         argv += [a for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v for a in ("--" + k, self.path(v))]
@@ -490,7 +515,7 @@ class Run:
             for k in ([keys] if isinstance(keys, str) else keys):  # one screen per item
                 sh(["tmux", "send-keys", "-t", t, "-l", k.encode().decode("unicode_escape")])
                 time.sleep(3)
-        first = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", self.st.get("run") or "*", "first-message.txt"))  # a signed-in home holds other runs
+        first = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", self.st["run"], "first-message.txt")) if self.st.get("run") else []  # a signed-in home holds other runs: never "*"
         text = open(first[-1] if first else self.path("prompt.txt")).read().strip()
         # tmux(1) FORMATS: bracket_paste_flag. Without it a multi-line paste can submit early: join lines.
         bracketed = sh(["tmux", "list-panes", "-t", t, "-F", "#{bracket_paste_flag}"]).stdout.strip() == "1"
@@ -1055,7 +1080,7 @@ class Run:
 
     def harness_files(self):
         """Files under the connector's native roots changed since the start, as [{path, size}] (PRD-08 section 1)."""
-        out, since = [], self.st.get("pasted", 0) - 120
+        out, since = [], max(self.st.get("pasted", 0) - 120, self.st.get("row_start", 0))  # never before this row began: a shared home holds the previous row's files
         for row in self.s.get("native") or []:
             root = row["root"].replace("{home}", self.st.get("home") or "/nonexistent").replace("{workspace}", self.project)
             for p in glob.glob(os.path.join(root, row.get("pattern", "**")), recursive=True):
@@ -1120,7 +1145,7 @@ class Run:
             r = sh(["git", "-C", self.project, "rev-list", "--count", self.st["head"] + "..HEAD"])
             self.st["commits_since_start"] = int(r.stdout) if r.returncode == 0 else None
         keys = ("harness_version", "run", "entry", "screen_known", "end_screen_requests", "commits_since_start", "plain_planted",
-                "known_box", "mask_values")
+                "known_box", "mask_values", "pad_only")
         write(self.path("meta-box.json"), json.dumps({k: self.st.get(k, 0 if k == "screen_known" else None) for k in keys}), 0o644)
         self.copy_log(e)
         if new:  # the entry goalcup continue started has its own log (the recovery lines)

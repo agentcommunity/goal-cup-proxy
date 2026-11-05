@@ -9,8 +9,8 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 
+use rusqlite::config::DbConfig;
 use rusqlite::types::ValueRef;
 use rusqlite::{Connection, OpenFlags, Row};
 use serde_json::Value;
@@ -266,27 +266,32 @@ fn read(
 
 /// What `f` reads from a database and WAL, opened read-only from a private copy.
 fn query<T>(db: &[u8], wal: &[u8], f: impl FnOnce(&Connection) -> Option<T>) -> Option<T> {
-    static N: AtomicU64 = AtomicU64::new(0);
-    let n = N.fetch_add(1, Ordering::Relaxed);
-    let dir = std::env::temp_dir().join(format!("goalcup-sqlite-{}-{n}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    // Mode 0700: the copy holds every session of the shared home while it is open.
-    let mut mk = std::fs::DirBuilder::new();
+    // A random name made with `create_new` semantics, so no one can plant it first. Mode 0700
+    // (tempfile's default is 0777 less the umask): the copy holds every session of the shared
+    // home while it is open.
+    let mut b = tempfile::Builder::new();
+    b.prefix("goalcup-sqlite-");
     #[cfg(unix)]
-    std::os::unix::fs::DirBuilderExt::mode(&mut mk, 0o700);
-    let got = mk.create(&dir).ok().and_then(|()| f(&open(&dir, db, wal)?));
-    let _ = std::fs::remove_dir_all(&dir);
-    got
+    b.permissions(std::os::unix::fs::PermissionsExt::from_mode(0o700));
+    let dir = b.tempdir().ok()?;
+    // Removed on return and on a panic in `f`, after the connection (dropped inside the closure).
+    open(dir.path(), db, wal).and_then(|c| f(&c))
 }
 
+/// The copy opened read-only, its schema untrusted: a view or trigger the record's author wrote
+/// may not reach a function or virtual table SQLite does not call innocuous.
 fn open(dir: &Path, db: &[u8], wal: &[u8]) -> Option<Connection> {
     let path = dir.join("state.db");
     std::fs::write(&path, db).ok()?;
     if !wal.is_empty() {
         std::fs::write(dir.join("state.db-wal"), wal).ok()?;
     }
-    let c = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_WRITE).ok()?;
-    c.execute_batch("PRAGMA query_only=1").ok()?;
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let c = Connection::open_with_flags(&path, flags).ok()?;
+    c.set_db_config(DbConfig::SQLITE_DBCONFIG_DEFENSIVE, true)
+        .ok()?;
+    c.execute_batch("PRAGMA trusted_schema=OFF; PRAGMA query_only=1")
+        .ok()?;
     Some(c)
 }
 
@@ -442,4 +447,33 @@ fn sum((mut a, mut b): (u32, u32), d: &[u8], big: bool) -> (u32, u32) {
         b = b.wrapping_add(word(&c[4..], big)).wrapping_add(a);
     }
     (a, b)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_copy_dir_is_unpredictable_private_and_removed() {
+        // An empty file is an empty database; the closure sees the copy while it is open.
+        let copy = || {
+            super::query(&[], &[], |c| {
+                let dir = std::path::Path::new(c.path()?).parent()?.to_owned();
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = std::fs::metadata(&dir).ok()?.permissions().mode();
+                    assert_eq!(mode & 0o777, 0o700);
+                }
+                Some(dir)
+            })
+            .unwrap()
+        };
+        let (a, b) = (copy(), copy());
+        assert_ne!(a, b);
+        for d in [&a, &b] {
+            let name = d.file_name().unwrap().to_str().unwrap();
+            let rand = name.strip_prefix("goalcup-sqlite-").unwrap();
+            assert!(rand.len() >= 6, "{name}");
+            assert!(!d.exists());
+        }
+    }
 }

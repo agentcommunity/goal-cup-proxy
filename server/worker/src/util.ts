@@ -76,14 +76,6 @@ export function proxyVersionField(o: Record<string, unknown>): string {
   return strField(o, "proxy_version", 64);
 }
 
-/** An optional boolean field: `fallback` when missing, 400 `malformed` for anything but true or false (null included). */
-export function boolField(o: Record<string, unknown>, name: string, fallback: boolean): boolean {
-  const v = o[name];
-  if (v === undefined) return fallback;
-  if (typeof v !== "boolean") throw malformed(`${name} must be true or false.`);
-  return v;
-}
-
 /**
  * The version rule: the first `<digits>.<digits>.<digits>` in the text; whatever follows it
  * (`-dev`, `+build`, a fourth number) is ignored. Null when there is none, i.e. the version is unknown.

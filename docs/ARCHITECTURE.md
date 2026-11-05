@@ -7,15 +7,7 @@ what the words mean. The vision is in [VISION.md](../VISION.md), the rules for c
 ## 1. What it is for
 
 goalcup sits next to a coding harness for the length of a run and keeps a complete record of what
-the harness did. Seven points decide every change:
-
-1. Record every model call the harness makes, to any provider, for the whole run.
-2. Record every subagent, however many and however long.
-3. Never block or slow the harness. If something cannot be recorded, note a gap and keep going.
-4. Never record secrets.
-5. Upload everything, so the server can rebuild the full story by ID and time.
-6. Tell the participant plainly what was recorded.
-7. Work with the harnesses people actually use, run the way they use them.
+the harness did. The seven points are in [VISION.md](../VISION.md#the-seven-points).
 
 ## 2. The crates
 
@@ -89,16 +81,24 @@ The rules of the shape:
   is never restarted or signalled, and the time recording was down is a `recorder_down` gap. The
   recovered watchdog still seals the part on `goalcup seal`, at the deadline, on any server stop and
   when the harness exits, but leaves a running harness running (`goalcup seal` says so).
-- **Null mode.** If the recorder crashes three times in ten minutes, each within a minute of its
-  start, the watchdog runs a relay-only recorder, says so in `status.json`, and retries a normal
-  boot after 30 seconds, then 1, 2 and 5 minutes, never more than 5 minutes apart. The crash count
-  resets once a recorder stays up 60 seconds. The harness keeps its connections. The span is a
-  `recorder_down` gap.
+- **Respawn.** A recorder that exits is replaced at once, on the same port, by the pinned
+  executable (`<user cache>/goalcup/bin/<sha256, 16 hex>/goalcup`, linked or copied once per
+  build and named in `rec/pin`, so an install over `goalcup` mid-run changes nothing for this run,
+  recover starts the same binary, and a per-app firewall sees one path per build).
+- **Null mode.** Apart from a respawn: if the recorder crashes three times in ten minutes, each
+  within a minute of its start, the watchdog runs a relay-only recorder, says so in
+  `status.json`, and retries a normal boot after 30 seconds, then 1, 2 and 5 minutes, never more
+  than 5 minutes apart. The crash count
+  resets once a recorder stays up 60 seconds. Each retry waits up to 8 seconds for a moment with
+  no traffic; a connection still open then is cut, and the harness reconnects to the next recorder
+  on the same port. The span is a `recorder_down` gap.
 - **Boot-time timers.** Every timer counts boot time, which keeps running while the machine
   sleeps, on a short tick: deadline, restart pauses, null-mode retries, upload backoff.
 - **The memory guard is a guard, not a cap** (D79). Held bytes stay under a stated size (512 MiB,
   or an eighth of memory if that is smaller, at least 128 MiB). Past it, a gap is written and
   recording goes on. A write error ends the recorder and the watchdog starts another (D78).
+- **Browser.** `goalcup approve` opens a browser only for an `https://` link (`open` or
+  `xdg-open`); any other link is printed, not opened.
 - **No proxy credential.** The harness gets `HTTPS_PROXY=http://127.0.0.1:<port>` and nothing else
   to present.
 
@@ -123,6 +123,11 @@ Three shapes cover every harness, and the code knows no word for them:
 - **Dodgers** ignore `HTTPS_PROXY`, pin certificates or refuse the run CA. We never work around
   it. Bytes that reach the proxy become a tunnel and a named gap (`pinned`, `tls_refused`); the
   session files are still read. A client that ignores the proxy leaves no connection at all.
+
+Connector data lives in `connectors/*.toml`; `crates/goalcup-format/build.rs` compiles every file
+into `goalcup_format::connectors`, which both binaries read. The masker's left guard and the host
+pattern match are one copy, `goalcup_format::shared`. The harness version is parsed in one place,
+`connector/version.rs`; a connector's `[[versions]]` rows change rules per build.
 
 A model server on the participant's own machine is reached past the proxy (`NO_PROXY` covers
 loopback) and is not recorded. A host missing from the list is only a tunnel. Per harness, only
@@ -150,7 +155,7 @@ reads the files raw, never parsing them.
 
 Every recorded byte and every metadata string passes the masker before it is written. A masked
 byte becomes `*`, so lengths and offsets stay those of the source. The rules are the shared literal
-shapes in `crates/goalcup/src/mask/shapes.tsv`, the connector's own rules, and the exact values of
+shapes in `connectors/shapes.tsv`, the connector's own rules, and the exact values of
 the run (the project's `GH_TOKEN` among them). The stream form keeps a small hold so a secret split
 over two chunks is still caught, and its output equals the whole-record result. When the masker
 cannot decide a piece it stars it (fail closed); if it fails outright the piece is dropped under a
@@ -200,4 +205,4 @@ The seven points, the real-run proof for each and the guard tests that hold it a
 ## 10. Lessons
 
 What earlier runs taught, and why some designs were dropped, is in
-[LESSONS.md](plans/2026-10-30-v1.0/LESSONS.md).
+[LESSONS.md](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/LESSONS.md).

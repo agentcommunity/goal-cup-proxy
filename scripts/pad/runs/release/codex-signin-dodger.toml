@@ -1,0 +1,11 @@
+# A release row template: scripts/pad/release-rows fills its @...@ placeholders (see that script).
+# Codex on the owner's ChatGPT sign-in (core-codex-signin.toml), no API key.
+harness = "codex-cli"
+key = "none"
+case = "dodger"
+mode = "full"
+goalcup_home = "@SIGNIN_HOME@"
+model_host = "chatgpt.com"  # a ChatGPT login calls chatgpt.com, not api.openai.com
+box_extra_minutes = 10
+where = "here"
+build = "@BUILD@"

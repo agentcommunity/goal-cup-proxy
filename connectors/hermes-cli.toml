@@ -1,10 +1,11 @@
-# Hermes Agent v0.22.5; facts in docs/harnesses/hermes-cli.md.
+# Hermes Agent; facts in docs/harnesses/hermes-cli.md.
 # No telemetry rows: the setup question names approvals only.
 # No state.db row: its search index can hold text out of context (facts sheet, section 4).
 id = "hermes-cli"
 name = "Hermes"
 end_note = "Subagents are shown by their task logs, not tied to individual calls."
 program = "hermes"
+checked = "0.22.5"
 args = ["chat"]
 resume = ["--continue"]
 home = { HERMES_HOME = "{home}" }
@@ -39,6 +40,30 @@ no_prompts = [
 ]
 update_off = [{ file = "{home}/config.yaml", key = "updates.check", value = "false" }]
 
-[[version_notes]]
-versions = ["0.22.6"]
-say = "Hermes 0.22.6 cannot reach its model through goalcup (NousResearch/hermes-agent#148241). Use Hermes 0.22.5 until a fixed release."
+[usage]
+# `state` is a native row of earlier builds, kept so their records still read.
+readers = [
+  { row = "state", file = "state.db*", reader = "hermes-db" },
+  { row = "delegation", file = "task-*.log", reader = "hermes-task" },
+  { row = "delegation-manifest", file = "manifest.json", reader = "hermes-manifest" },
+]
+join = "time"
+
+# Since 0.21.6 Hermes model calls trust the OS store plus the `ssl_ca_cert` of the first
+# `custom_providers` or `providers` entry whose `base_url` is the route (agent/ssl_verify.py:300-343,
+# hermes_cli/config_providers.py:446-472): on macOS SSL_CERT_FILE never reaches them. At every start
+# and continue goalcup gives each address in config.yaml the run bundle; the fallback is the built-in
+# routes (plugins/model-providers/*/__init__.py, same at v0.22.5 to v0.22.7).
+[ca_settings]
+file = "{home}/config.yaml"
+entries = ["custom_providers.*.base_url", "providers.*.base_url"]
+uses = ["model.base_url", "delegation.base_url", "auxiliary.*.base_url"]
+add = "providers.*.base_url"
+key = "ssl_ca_cert"
+value = "${env:SSL_CERT_FILE}"
+fallback = [
+  "https://api.deepseek.com/v1", "https://ai-gateway.vercel.sh/v1", "https://openrouter.ai/api/v1",
+  "https://inference-api.nousresearch.com/v1", "https://api.x.ai/v1", "https://api.z.ai/api/paas/v4",
+  "https://api.fireworks.ai/inference/v1", "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+]

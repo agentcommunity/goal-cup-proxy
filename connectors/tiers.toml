@@ -3,79 +3,105 @@
 [amp-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no key"
 
 [claude-code-cli]
-tier = "not verified"
-version = ""
-reason = "not yet run on the pad"
+tier = "verified"
+version = "2.1.312"
+os = "darwin-arm64"
+reason = ""
+
+[[claude-code-cli.builds]]
+version = "2.1.312"
+os = "darwin-arm64"
 
 [cline-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "needs sign-in (no provider config file or env route; the auth command puts the key in argv)"
 
 [codex-cli]
-tier = "not verified"
-version = ""
-reason = "not yet run on the pad"
+tier = "verified"
+version = "0.165.0"
+os = "darwin-arm64"
+reason = ""
+
+[[codex-cli.builds]]
+version = "0.165.0"
+os = "darwin-arm64"
 
 [copilot-cli]
 tier = "not verified"
 version = ""
+os = ""
 reason = "not yet run on the pad"
 
 [crush-cli]
 tier = "not verified"
 version = ""
+os = ""
 reason = "not yet run on the pad"
 
 [droid-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
+os = ""
+reason = "no key"
 
 [gemini-cli]
 tier = "not verified"
 version = ""
+os = ""
 reason = "not yet run on the pad"
 
 [goose-cli]
 tier = "not verified"
 version = ""
+os = ""
 reason = "not yet run on the pad"
 
 [hermes-cli]
-tier = "not verified"
-version = ""
-reason = "not yet run on the pad"
+tier = "verified"
+version = "0.22.6"
+os = "darwin-arm64"
+reason = "subagents shown by their task logs, not tied to individual calls"
+
+[[hermes-cli.builds]]
+version = "0.22.6"
+os = "darwin-arm64"
+
+[[hermes-cli.builds]]
+version = "0.22.5"
+os = "darwin-arm64"
 
 [kilo-cli]
 tier = "not verified"
 version = ""
+os = ""
 reason = "not yet run on the pad"
 
 [kimi-code-cli]
 tier = "not verified"
 version = ""
+os = ""
 reason = "not yet run on the pad"
 
 [openclaw-cli]
 tier = "not verified"
 version = ""
+os = ""
 reason = "not yet run on the pad"
 
 [opencode-cli]
 tier = "not verified"
 version = ""
-reason = "not yet run on the pad"
-
-[opencode2-cli]
-tier = "not verified"
-version = ""
+os = ""
 reason = "not yet run on the pad"
 
 [qwen-cli]
 tier = "not verified"
 version = ""
+os = ""
 reason = "not yet run on the pad"

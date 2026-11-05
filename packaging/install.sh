@@ -57,7 +57,8 @@ detect_target() {
 }
 
 # fetch <url> <file>: curl, else wget. Fails on an HTTP error. An https:// address is fetched
-# over TLS 1.2 or later only, and a redirect may not leave https.
+# over TLS 1.2 or later only. curl also refuses a redirect that leaves https; wget cannot (its
+# --https-only covers only recursive downloads) and follows the release host's redirect as given.
 fetch() {
     if command -v curl >/dev/null 2>&1; then
         case "$1" in
@@ -65,7 +66,10 @@ fetch() {
         *) curl -fsSL --retry 3 -o "$2" "$1" || die "could not download $1" ;;
         esac
     elif command -v wget >/dev/null 2>&1; then
-        wget -q -O "$2" "$1" || die "could not download $1"
+        case "$1" in
+        https://*) wget -q --https-only --secure-protocol=TLSv1_2 -O "$2" "$1" || die "could not download $1" ;;
+        *) wget -q -O "$2" "$1" || die "could not download $1" ;;
+        esac
     else
         die "neither curl nor wget is installed"
     fi
@@ -153,13 +157,14 @@ guard_recording_run() {
         sleep 0.1 2>/dev/null || sleep 1
     done
 
-    # A killed status leaves no exit code yet, or 137: both read as unsure.
+    # Only a sealed run or no run at all is clear. Anything else (a live mode, a mode it does not
+    # know, a hang, another exit code, output it cannot read, a goalcup from before 1.0) refuses.
     verdict=unsure
     rc=$(cat "$status_rc" 2>/dev/null || true)
     if [ "$rc" = 0 ]; then
         case $(status_mode "$status_out") in
+        sealed) verdict=clear ;;
         recording | losing | writer_slow | null) verdict=blocked ;;
-        ?*) verdict=clear ;;
         esac
     elif [ "$rc" = 1 ] && [ ! -s "$status_out" ]; then
         verdict=clear # no run on this computer yet
@@ -167,11 +172,12 @@ guard_recording_run() {
 
     case $verdict in
     blocked)
-        printf '%s\n' "INSTALL_BLOCKED: A Goal Cup run is recording on this computer. Update after it ends, or run the installer again with: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh -s -- --force" >&2
+        printf '%s\n' "INSTALL_BLOCKED: goalcup is in the middle of a run, so it was not updated. Finish the run with \`goalcup seal\`, then install again." >&2
         exit 1
         ;;
     unsure)
-        printf '%s\n' "INSTALL_UNSURE: Could not tell whether a Goal Cup run is recording. If one is, stop this update and run it after the run ends." >&2
+        printf '%s\n' "INSTALL_UNSURE: goalcup could not tell whether a run is going, so it was not updated. Finish any run with \`goalcup seal\`, then install again. If no run is going, install with: curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh -s -- --force" >&2
+        exit 1
         ;;
     esac
 }
@@ -211,8 +217,8 @@ cleanup() {
     exit "$cleanup_status"
 }
 
-# The one line that puts the bin folder on PATH now and appends the same export to the profile
-# of the participant's shell. Nothing here runs it.
+# The one line that puts the bin folder on PATH now and for new shells: an export appended to the
+# profile of the participant's shell, or for fish `fish_add_path`. Nothing here runs it.
 path_line() {
     dir="$prefix/bin"
     case $dir in
@@ -220,6 +226,7 @@ path_line() {
     "${HOME:-/nonexistent}"/*) dir="\$HOME${dir#"$HOME"}" ;;
     esac
     case ${SHELL:-} in
+    */fish) say "  fish_add_path \"$dir\""; return 0 ;; # fish 3.2+ keeps it for new shells itself
     */zsh) profile="~/.zshrc" ;;
     # Terminal on macOS starts bash as a login shell, which reads ~/.bash_profile, not ~/.bashrc.
     */bash) [ "$(uname -s)" = Darwin ] && profile="~/.bash_profile" || profile="~/.bashrc" ;;

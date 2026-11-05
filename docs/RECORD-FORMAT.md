@@ -1,7 +1,7 @@
 # The record format (GCR1)
 
 This page is for contributors and anyone who wants to read a record by hand. The design and its
-reasons are in [PRD-01](plans/2026-10-30-v1.0/PRD-01-record-format.md) and
+reasons are in [PRD-01](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-01-record-format.md) and
 [D76](DECISIONS.md#d76-the-record-format-is-gcr1-and-the-part-file-is-the-upload-unit). Where this
 page differs from PRD-01 or the code, they are right: `crates/goalcup-format/src` for framing,
 records and links, and the recorder (PRD-02, PRD-05) for counts, gaps, masks and the seal.
@@ -88,7 +88,7 @@ Optional END tail keys, by stream kind. Each is a count or masked text, never a 
 
 | n | Kind | One stream is |
 |---|---|---|
-| 1 | `conn` | One client connection through the proxy, decrypted or tunnelled. No DATA. `meta` has `host`, `port`, `mode` (`decrypt` or `tunnel`), `listed`, `kind`, `reason` |
+| 1 | `conn` | One client connection through the proxy, decrypted or tunnelled. No DATA. `meta` has `host`, `port`, `mode` (`decrypt` or `tunnel`), `listed`, `kind`, `reason`, and `io` on an `upstream_handshake_failed` tunnel |
 | 2 | `http_req` | One request body. `meta` holds the head: `method`, `path` (no query), `ver`, `h2` (the HTTP/2 stream id, absent for 1.1; the same on the response), masked `headers`, `masked`, `coding` |
 | 3 | `http_resp` | One final response body. `req` names its request. Bodies are de-chunked and decoded. `meta` has `status`, `ver`, `h2`, `headers`, `masked`, `coding`, `decoded` |
 | 4 | `ws_up` | Every message the client sent on one WebSocket, inflated, in order. `meta.deflate` is true when permessage-deflate was in use |
@@ -143,6 +143,7 @@ starts (0 for `sid` 0 and for `conn` streams).
 | 13 | `upstream_untrusted` | A listed host's server certificate failed the check; tunnelled |
 | 14 | `protocol_other` | A listed host spoken to in a protocol the proxy does not parse; tunnelled |
 | 15 | `after_stop` | Bytes relayed after the seal began. `sid` 0 |
+| 16 | `upstream_handshake_failed` | A listed host's TLS handshake failed with no TLS answer (a reset, an EOF, a timeout) twice; tunnelled. The `conn` meta `io` names the last error kind |
 
 **Off spans.** Recording is off only while the recorder is not running or runs in null mode. That
 time is a `recorder_down` GAP from the last kept LINK to the next boot (or to the recovery of a dead
@@ -201,6 +202,25 @@ A `recovered` seal (a dead entry closed later) is the `seal` event inside the re
 Recovery). The `seal` event also carries `server_reason` when the server gave one. Nothing follows
 the seal's LINK.
 
+Some `start` keys:
+
+- `harness_version` (the first line of `<harness> --version`, or null) and `harness_semver`: the
+  build parsed from it (`1.2.3`, suffix kept), or null.
+- `version_row`: the `match` of the connector's `[[versions]]` row that set the rules, or null for the base.
+- `os`, `arch`: the machine's. There is no `build`, `server_time` or `local_wall_at_server_time`
+  (the `goalcup` version string carries the commit); an old record that has them still reads.
+
+Some `note` kinds (`what`):
+
+- `version_read`: `line`, `version`, `before`: the harness build changed since the last part
+  (written at `continue`) or while the harness ran (read after it exits, written at the seal).
+  `before: null` means the earlier read failed. An update during a part can show at that part's
+  seal and again at the next `continue`; readers dedupe on `version`.
+- `harness_changed`: `program`, `before`, `after` (`size`, `mtime_ns`, `ino`, or null when gone):
+  the harness program on disk changed, looked at every 300 s, links followed; nothing else is done.
+- `native_missing`: `row`, `redirect`: a session-file row found nothing; `redirect` is the `home`
+  variable its root sits under, or null.
+
 ## Compression, chunks and crash recovery
 
 - Each part file is one zstd frame (plus recovery frames): level 3 (`LEVEL`), window 2^27
@@ -213,8 +233,13 @@ the seal's LINK.
   gives every record up to the last flush and reports the open end; use it for a live entry. The
   `zstd` command line tool may stop short of the last flush on such a file, or on an entry not yet
   recovered after a crash, so counts made through it are then a lower bound.
+- Part and index files are created mode 0600, and any folder the writer creates (`rec` and any
+  parent it makes) 0700; an existing folder keeps its mode.
 - **Recovery** after a crash: drop index lines past the part file's length (and, after a reboot,
-  past `cursors.json`); delete a part file with no index line left; cut the last part file at its
+  past `cursors.json`); set aside a part file with no index line left: it and its index are renamed
+  `rec-<n>.gcr.zst.orphan` and `rec-<n>.idx.orphan` (`.orphan.1` and up when an earlier crash left
+  that name; the index is renamed first, so a crash between the two leaves a part file without
+  an index, set aside next time), which no reader lists and nothing uploads or deletes; cut the last part file at its
   last line's `c_end`. If that line is `L`, close the frame by hand with the 3 bytes `01 00 00`
   (`ZSTD_END_BLOCK`, an empty last raw block). Then add a recovery frame: the dead boot's COUNT
   (unless an earlier recovery frame holds it), a `recorder_down` GAP, the `seal` event when the dead
@@ -243,13 +268,21 @@ the seal's LINK.
 13. In each boot, COUNT events are at most 180 s apart on the record clock, less sleep.
 14. A session file resumed in a later stream starts at or below what was written before.
 
+Three more rules hold for every record. The writer closes a frame only after a LINK, so a closed
+frame never ends inside a record, sealed or not (`torn_tail`; a live or crashed entry ends inside
+an open frame, which is no finding). Every OPEN meta, GAP tail, END tail and EVENT body is empty
+or parses as JSON, `null` included (`record_json`). A LINK's wall time is within 400 days of its
+PART's wall time plus the record-clock time between them (`wall_sane`, `named`, not `fail`: a
+clock step after boot is legal). A LINK whose record-clock time is below its PART's (a recovery
+LINK stamped by a new boot after a reboot) is not compared.
+
 ## The worked example
 
 `crates/goalcup-format/tests/data/worked-example.gcr` is one HTTP/1.1 POST with a streamed reply
 and a link: 998 raw bytes, 10 records. `crates/goalcup-format/tests/golden.rs` checks it. The file
 is raw and `goalcup-verify` reads only zstd input, so its dump (`worked-example.dump.jsonl`, below)
 is `goalcup-verify dump --text` on a zstd copy (`zstd -c worked-example.gcr > rec-0.gcr.zst`). Its
-`conn` meta predates the `kind` key; readers ignore a missing optional key.
+`conn` meta predates the `kind` key and its `start` carries the old `build` key; readers ignore a missing or extra optional key.
 
 ```json
 {"o":0,"k":"part","entry":"e0123456789abcdef","boot":0,"part":0,"raw_offset":0,"wall":"2026-11-07T00:00:00Z","mono":5000000000,"next_link":0}
@@ -339,21 +372,23 @@ On the worked example (`python3 read.py < worked-example.gcr`, already raw) it p
 
 `goalcup-verify check <path> --json` prints one JSON object on standard output (code in
 `crates/goalcup-verify/src/report.rs` and `server.rs`) and its text form on standard error (per
-entry, a header, whether it is sealed, each named or failed check's `why` and a coverage line). The
-coverage line reads `Recorded: N requests, M refused by the provider.`, the history sentence, the
-harness-log sentence (the calls its log holds and how many have no recording, or that the log is
-not read or was not compared) and `Recording off: N times, S s.`; it never claims that everything
-was recorded. `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run folder, a fetched
-outdir, or one part file. `--live` reads an entry still recording up to its last index line;
-`--server` marks a server copy (a fetched `rec.gcr.zst` is one anyway); `--live` wins over both.
-`--local ENTRY_DIR` is the local entry a server copy is compared with. `--known FILE` adds the
-`secrets` check (below). `--harness-files MANIFEST` (the pad's list of the harness's files on disk,
-`[{"path": "<source>:<path>", "size": n}]`) adds a file part to `subagents_present`, below.
+entry, a header, whether it is sealed, each warned, named or failed check's `why` and a coverage
+line). The coverage line reads `Recorded: N requests, M refused by the provider.`, the history
+sentence, the harness-log sentence (the calls its log holds and how many have no recording, or
+that the log is not read or was not compared) and `Recording off: N times, S s.`; it never claims
+that everything was recorded. `<path>` is an entry, `rec`, fetched entry (`rec.gcr.zst`) or run
+folder, a fetched outdir, or one part file. `--live` reads an entry still recording up to its last
+index line; `--server` marks a server copy (a fetched `rec.gcr.zst` is one anyway); `--live` wins
+over both.
+`--local ENTRY_DIR` is the local entry a server copy is compared with. `--known FILE` adds known
+values to the `secrets` check (below), which every entry has. `--harness-files MANIFEST` (the
+pad's list of the harness's files on disk, `[{"path": "<source>:<path>", "size": n}]`) adds a file
+part to `subagents_present`, below.
 
 Exit code and `result`: 0 `pass` (whole); 1 `named` (honest but incomplete: every loss is named, or
 the entry is unsealed, live or has pruned part files); 2 `fail` (a broken invariant, a silent loss,
-or with `--known` a `secrets` hit or big mask); 3 no usable report and no JSON (the input, `--local`
-or `--known` cannot be read, a wrong command line, an internal error). A `warn` or a `skip` leaves
+or a `secrets` hit or big mask); 3 no usable report and no JSON (the input, `--local` or `--known`
+cannot be read, a wrong command line, an internal error). A `warn` or a `skip` leaves
 the exit alone. For a run folder, the worst entry decides. Readers ignore keys they do not know.
 
 | Top-level key | Holds |
@@ -375,13 +410,14 @@ the exit alone. For a run folder, the worst entry decides. Readers ignore keys t
 | `provider_errors` | `{wire, native}`: for each leg, a count per error code the provider gave (else `http_<status>`, else `error`), one per failed call |
 | `threads` | One item per thread the legs checks compared, else an empty list: `thread` (null for the whole entry), `parent`, `harness` and `wire_ok` (calls), `wire_err`, `result`, and `history`, that thread's verdict from `history_complete` (`pass`, `warn`, `named`, `fail` or `skip`; null when the check named no such thread) |
 | `history` | The facts object of `history_complete`, below (null when the check is not in the list) |
-| `timeline` | Rows for each 10-minute bucket from the entry's first PART that holds anything: `bucket`, `start`, `harness_calls`, `wire_calls`, `wire_errors`, `native_bytes`, `gaps`, `off_ms` |
+| `timeline` | Rows for each 10-minute bucket from the entry's first PART that holds anything: `bucket`, `start`, `harness_calls`, `wire_calls`, `wire_errors`, `native_bytes`, `gaps`, `off_ms`. Off spans are clamped to the PART and LINK wall range, at most 100 000 buckets past the first PART, and share a budget of 100 000 bucket steps, past which a span's `off_ms` goes whole to the last bucket; other rows are one per bucket a call, DATA or GAP falls in, so a forged wall time cannot make the report larger than the record |
 
 **Check ids.** `inv1` to `inv9` and `inv14` check the invariant of that number; `streams_closed`,
 `seen_matches_written`, `gap_has_end` and `recorder_alive` check invariants 10 to 13. With `inv`
 null: `torn_tail`, `native_path_gen`, `counts_match_seal`, `gaps_named`, `record_decode`,
-`parts_pruned`, `record_kind_unknown`, `gap_reason_unknown`, the three honesty checks and the three
-legs checks and `history_complete` (both below). Last come the ones that depend on an option:
+`parts_pruned`, `record_kind_unknown`, `gap_reason_unknown`, `wall_sane`, `record_json` (the last
+two and `torn_tail` under Invariants), the three honesty checks and the three legs checks and
+`history_complete` (both below). Last come the ones that depend on an option:
 
 - For a server input, three that read `fetch.json`, the chunk list beside the copy (S13,
   `scripts/fetch-run.sh`), and without it fail under `--server`, else skip.
@@ -390,31 +426,50 @@ legs checks and `history_complete` (both below). Last come the ones that depend 
   `--local` part files, so a copy shorter or longer than them can pass; whether the copy is whole
   is `server_chunks_whole`; it skips without them or if pruned. `server_counts_match`: the server's
   row and heartbeat against the seal's totals; it skips if not sealed.
-- `secrets` (`inv` null), last, only with `--known`; see below.
+- `secrets` (`inv` null), last, in every entry: the shapes, plus the `--known` values when given;
+  see below.
 
-**Honesty checks** (`honesty.rs`; a listed host is on the `start` host list or has `listed` in
-its meta):
+**Honesty checks** (`honesty.rs`; a listed host is on the `start` host list, has `listed` in its
+meta, or is a `provider` or `gateway` host in the verifier's own `connectors/model-hosts.toml`,
+whatever the record calls it, when the `start` event's `hosts_sha256` equals that file's (a
+record made with another list, or naming none, keeps its own labels); a `vendor` host there is
+not listed by the file):
 
 - `listed_hosts_decrypted`: a listed host should be read, not tunnelled. A tunnel to one is `named`
   when a GAP of the tunnel's own reason is on that connection, `fail` when none is; a `sign_in`
-  tunnel is no loss. A GAP on a decrypted listed connection is `named`. A `tls_refused` connection
-  to a listed host whose host and fingerprint earlier ended a decrypted connection `complete` is
-  `warn`, unless a GAP on it says `alert: false`; a `long_tunnel` note for an unlisted host is
-  `warn`.
+  tunnel to a `never` host of that file (or goalcup's own server: a name holding `goalcup`, or
+  `agentcommunity.org` and its subdomains, which the recorder never decrypts and the verifier
+  never lists) is no loss, one to any other listed host is judged as
+  above, and any `sign_in` tunnel that moved over 1 MiB (`up` plus `down`) is `named` (fact
+  `sign_in_big`). A GAP on a decrypted listed connection is `named`. When the `start` event's
+  `hosts_sha256` differs from the verifier's file (an absent, empty or all-zero one is not
+  compared), the check is `warn` and `why` says the record's host list differs. A `tls_refused`
+  connection to a listed host whose host and fingerprint earlier ended a decrypted connection
+  `complete` is `warn`, unless a GAP on it says `alert: false`; a `long_tunnel` note for an
+  unlisted host is `warn`.
 - `conn_bytes`: per decrypted connection and direction, the plain bytes in its END tail
-  (`plain_up`, `plain_down`) against what its streams account for. Over 1 MiB unaccounted is `warn`
+  (`plain_up`, `plain_down`) against what its streams account for. Over 1 MiB unaccounted is `named`
   when over a tenth of the plain bytes, `fail` when over half and the connection has no GAP; else
-  `skip` when nothing was judged or a connection ended without both counts (a `warn` or `fail` from
-  another connection stands).
+  `skip` when nothing was judged or a connection ended without both counts (a `named` or `fail`
+  from another connection stands). Facts: `checked`, `named`, `fail`, `unaccounted_bytes`,
+  `no_plain_tail`.
 - `mask_failclosed`: `warn` for a stream with over 1 MiB of `fail_closed` MASK bytes.
+
+A finding that points at a loss is `named` (exit 1), not `warn`: `conn_bytes` above, and a
+history answer whose text was not found when a GAP or cover explains it (below). The other warns
+lose nothing the record does not show and stay `warn`: a refusal after trust, a `long_tunnel`
+note, a different host list, `mask_failclosed`, `gap_reason_unknown`, `record_kind_unknown`, and
+history from before the record or whose text is missing with nothing to explain it.
 
 **Legs checks** (`legs.rs`): the recorded wire calls against the harness's own log, read from its
 `native_form`, threads and `children`; they name no harness.
 
 - `wire_keeps_up`: a model call the harness's own log shows that never reached the wire (a lost
   model call), or a harness that kept calling over 10 minutes after the wire's last call. It
-  compares call times, so it is `skip` ("no per-call times") when `harness_log` is `totals`;
-  only `threads_match` compares then.
+  compares the running totals, and each 30-minute window from a harness call against the wire
+  calls in it widened by the 2 minutes each way, so early wire-only calls cannot hide a later
+  loss. It compares call times, so it is `skip` ("no per-call times") when `harness_log` is
+  `totals`; only `threads_match` compares then.
 - `threads_match`: a thread with more calls in the harness log than ok calls on the wire (wire
   calls above the harness count are no finding; a log that gives only a total per session is
   compared by that total).
@@ -440,10 +495,10 @@ no call carries a thread id, or (for `subagents_present`) parentage was not read
 **History** (`history.rs`, `history_complete`): an earlier assistant answer that a later model
 request resends must exist as a recorded response, or the call that made it was missed. Requests
 are found by body, never by path or harness. A missing answer is `fail`, or `named` when a GAP or a
-cover overlaps the time since the thread's previous request; `warn` when it comes from before the
-record or only its text was not found. A `skip` says why in `why` (nothing decrypted, history held
-by the provider, compaction, unreadable bodies). Its facts are the report's top-level `history`
-object.
+cover overlaps the time since the thread's previous request. One whose text alone was not found is
+`named` with such a GAP or cover, else `warn`; one from before the record is `warn`. A `skip` says
+why in `why` (nothing decrypted, history held by the provider, compaction, unreadable bodies). Its
+facts are the report's top-level `history` object.
 
 **The label** is a hint for judges, not a judgement. It says which evidence the record holds:
 `wire_and_native` when model requests were written and a `native` or `snapshot` stream holds
@@ -453,15 +508,21 @@ written bytes, `wire_only` or `native_only` when only one of the two, `none` whe
 
 Both look for what must never be on disk: a known secret value, or a string shaped like one. A hit
 is shown as `sha12` (the first 12 hex digits of its SHA-256) and where it is, never as bytes.
-`check --known FILE` scans each entry's record (not its other files) as the check `secrets`;
-`secrets` is the same scan on records and loose files. `FILE` holds one value per line, trimmed,
-blank lines skipped. A value is looked for as written (`raw`), in base64 at its three alignments
-(`base64_0` to `base64_2`), percent encoded (`percent`) and JSON escaped (`json`). The shapes are
-the masker's own list, `crates/goalcup/src/mask/shapes.tsv`.
+Every `check` scans each entry's record (not its other files) as the check `secrets`, for the
+shapes and, with `--known FILE`, the known values too (without it `why` ends "(shapes only; no
+known values given)"); `secrets` is the same scan on records and loose files. `FILE` holds one
+value per line, trimmed, blank lines skipped. A value is looked for as written (`raw`), in base64
+at its three alignments (`base64_0` to `base64_2`), percent encoded (`percent`) and JSON escaped
+(`json`). The shapes are
+the masker's own list, `connectors/shapes.tsv`, and a glued hit is judged by the masker's own
+left-guard rule (`goalcup_format::shared::glued`).
 
 The scan reads DATA joined per stream (a value split over two pieces is found), the joined text of
 server-sent events and WebSocket messages, OPEN meta, END and GAP tails, and events. A GAP or an
 offset jump cuts the join, so nothing matches across a hole. A span of only `*` is masked, no hit.
+An SSE line or WebSocket message over 1 MiB is not parsed for its joined text (its raw bytes are
+still scanned); fact `lines_not_parsed` counts them and `why` names them, with no change to the
+result.
 
 | Fact | Counts | Result |
 |---|---|---|
@@ -471,6 +532,7 @@ offset jump cuts the join, so nothing matches across a hole. A span of only `*` 
 | `masks` | `{kind: n}`: MASK spans written, by the rule's name from the `start` event's `mask_rules` (`other(n)` when unnamed). Touching MASK records of one rule are one span | none |
 | `mask_bytes` | `{fail_closed: bytes}`: bytes inside `fail_closed` spans, masked because the masker's hold overflowed, never a secret a rule found | none |
 | `big_masks` | Items `{kind, in, len}`: a span over 16 KiB of any rule but `fail_closed`, which alone may be that long | `fail` |
+| `lines_not_parsed` | SSE lines and WebSocket messages over 1 MiB whose joined text was not read | none |
 
 `result` is the worst of the rows that hold an item, else `pass`. `in` is `<entry>/<boot>.<sid>`
 for a stream (`/deltas` for its joined text, `/meta` for its OPEN meta), `<entry>/<boot>.event` for
@@ -483,7 +545,7 @@ record. A folder holding an entry has its record decoded and its other files rea
 except `rec/`, the recorder's own state (the run CA key among it), which is never read. Any other
 folder is walked; any other file, or `-` (standard input), is raw bytes. The keys are `verifier`,
 `result` (`pass`, `warn` or `fail`), `exit`, `known_values` (values read from `FILE`, 0 without it),
-`inputs` (per path: `path`, `as` `record` or `raw`, `read` `whole` or `partial`) and the six facts
+`inputs` (per path: `path`, `as` `record` or `raw`, `read` `whole` or `partial`) and the facts
 above. Exit 2 on `fail`; else 1 when an input was read only in part; else 0, also on `warn`. Exit 3
 with no JSON: a path or `FILE` cannot be read, or the command line is wrong.
 
@@ -508,11 +570,12 @@ true and a line on standard error; a torn tail is no error.
 | Summary key | Holds |
 |---|---|
 | `v`, `reader`, `run`, `entry`, `connector`, `harness_version`, `sealed` | The summary version (1); the verifier's version; from the `start` event (`harness_version` is the first line of `<harness> --version`, or null); the last PART's entry id; whether a `seal` event was read |
+| `harness_semver`, `version_row`, `native_checked_on` | From the `start` event, the parsed build (or null) and the `match` of the `[[versions]]` row applied (null for the base); from the connector, the build its native reader was last checked on (its `checked` key), or null |
 | `readable`, `reason` | True when the native leg was read; else `reason` is `no_reader`, `snapshot_unreadable` (no database copy opened, even after the WAL repair) or `no_native` (no native call found while the wire had calls, or native streams were read, or a model host was tunnelled), else null |
 | `read_error` | True when decoding stopped early |
 | `native_until`, `db_set`, `harness_exited` | For a database copy the native leg was read from (Hermes), else null: the copy's time (native calls after it are not known), its set as `<boot>.<n>`, and whether the harness had exited |
 | `not_on_wire` | Listed hosts the harness reached through a tunnel, so their calls are not on the wire: items `{host, reason, conns}` |
-| `coverage` | `wire_calls`, `native_calls`, then the calls counted once each by join: `matched` (a wire and a native record of the same call), `native_only` (no `ok` wire copy), `wire_only` (no harness entry), `unattributed` (an `ok` wire call of a harness whose wire requests name a thread, with none named); and `joined_by_time`, `repeats_skipped`, `copied_skipped` (native lines skipped as repeats or as a child file's copied parent records) |
+| `coverage` | `wire_calls`, `native_calls`, then the calls counted once each by join: `matched` (a wire and a native record of the same call), `native_only` (no `ok` wire copy), `wire_only` (no harness entry), `unattributed` (an `ok` wire call of a harness whose wire requests name a thread, with none named); and `joined_by_time`, `repeats_skipped`, `copied_skipped` (native lines skipped as repeats or as a child file's copied parent records), `lines_unread` (session-file lines that are not JSON; blank lines are not counted) |
 | `status` | Wire calls by `ok`, `rate_limited`, `error`, `cancelled`, `unknown` (all five always present), and `not_whole` (a request, reply or message that was cut or has a GAP) |
 | `models` | One item per model name (null when none was said): `model`, `requested` (names asked for, sorted), `calls`, `threads` (a count), `tokens` |
 | `threads` | One item per thread: `id`, `parent`, `depth`, `label`, `wire_calls`, `native_calls`, `native_only`, `native_total` (the harness's own call total, where it keeps one), `native_until`, `native_tokens` (its own per-session token totals, Hermes), `resumed` (the session began before this entry), `matched`, `status` (as above), `tokens`, `models` (name to calls), `effort` (sorted), `first`, `last`, `readable`, `reason` |

@@ -9,6 +9,16 @@ use std::process::Command;
 const HOME_VARS: &str = "CLAUDE_CONFIG_DIR CODEX_HOME HERMES_HOME \
     XDG_CONFIG_HOME XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME";
 
+/// A build box's proxy, or a harness goalcup launched, would change what setup and start do
+/// (`proxy::proxy_network`); a test that spawns them removes these first.
+pub const OFF_RUN: [&str; 5] = [
+    "https_proxy",
+    "HTTPS_PROXY",
+    "all_proxy",
+    "ALL_PROXY",
+    "GOALCUP_TIME_LEFT_FILE",
+];
+
 /// A temporary `HOME`, with `GOALCUP_HOME` inside it. Removed when dropped.
 pub struct TempHome {
     dir: tempfile::TempDir,
@@ -32,7 +42,12 @@ impl TempHome {
     /// Points `cmd` at the temporary homes and drops every variable that could send a harness
     /// back to a real home ([`HOME_VARS`]).
     pub fn apply<'a>(&self, cmd: &'a mut Command) -> &'a mut Command {
-        for var in HOME_VARS.split(' ') {
+        // A build box's proxy would make setup and start refuse (proxy::proxy_network).
+        for var in
+            HOME_VARS
+                .split(' ')
+                .chain(["https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"])
+        {
             cmd.env_remove(var);
         }
         cmd.env("HOME", self.home())

@@ -1,6 +1,6 @@
 //! The shared secret shapes (seam S12, PRD-05 section 2) and the rules they make.
 //!
-//! This part reads `src/mask/shapes.tsv` on its own, through `include_str!`, the way the
+//! This part reads `connectors/shapes.tsv` on its own, through `include_str!`, the way the
 //! verifier does, so it pins the data file without any `mask::` API.
 
 #[allow(dead_code)]

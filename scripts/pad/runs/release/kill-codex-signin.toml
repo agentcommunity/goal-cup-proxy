@@ -1,0 +1,11 @@
+# A release row template: scripts/pad/release-rows fills its @...@ placeholders (see that script).
+# kill-codex.toml on the ChatGPT sign-in: the release check's codex-cli kill-recorder row.
+harness = "codex-cli"
+key = "none"
+case = "direct"
+mode = "full"
+goalcup_home = "@SIGNIN_HOME@"
+model_host = "chatgpt.com"
+steps = ["kill-recorder@8", "kill-recorder@10"]
+where = "here"
+build = "@BUILD@"

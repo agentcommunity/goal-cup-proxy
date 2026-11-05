@@ -143,13 +143,14 @@ pub(crate) fn resolve_program(program: &str, vars: &BTreeMap<String, String>) ->
         .unwrap_or_else(|| PathBuf::from(program))
 }
 
-/// The first non-empty line of `program --version` run with exactly `vars`; `None` on a spawn
-/// failure, a failed exit, 5 s without an exit, or no output. Never logged.
+/// The first non-empty line of `program --version` run with exactly `vars`, from stdout, else from
+/// stderr. A stderr line, or any line on a failed exit, counts only if its first word is the
+/// program's file name (any case) and it holds a version. `None` on a spawn failure, 5 s without an exit, or no such line. Never logged.
 pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -> Option<String> {
     let mut command = Command::new(program);
     command.arg("--version").env_clear().envs(vars);
     command.process_group(0).stdin(Stdio::null());
-    command.stderr(Stdio::null()).stdout(Stdio::piped());
+    command.stderr(Stdio::piped()).stdout(Stdio::piped());
     let mut child = command.spawn().ok()?;
     let deadline = Instant::now() + Duration::from_secs(5);
     while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
@@ -161,13 +162,44 @@ pub(crate) fn harness_version(program: &Path, vars: &BTreeMap<String, String>) -
         let _ = child.wait();
         return None;
     };
-    let mut out = child.stdout.take()?;
-    // SAFETY: `fcntl` on a descriptor `out` owns. Non-blocking: a left-behind child cannot hang us.
-    unsafe { libc::fcntl(out.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
-    let mut text = String::new();
-    let _ = out.read_to_string(&mut text);
-    let line = text.lines().map(str::trim).find(|line| !line.is_empty());
-    line.filter(|_| status.success()).map(str::to_owned)
+    fn first_line(mut pipe: impl Read + AsRawFd) -> Option<String> {
+        // SAFETY: `fcntl` on a descriptor `pipe` owns. Non-blocking: a left-behind child cannot
+        // hang us.
+        unsafe { libc::fcntl(pipe.as_raw_fd(), libc::F_SETFL, libc::O_NONBLOCK) };
+        let mut text = String::new();
+        let _ = pipe.read_to_string(&mut text);
+        let line = text.lines().map(str::trim).find(|line| !line.is_empty());
+        line.map(str::to_owned)
+    }
+    let out = first_line(child.stdout.take()?);
+    // A stderr line or a failed exit counts only with a version in it: never record a stray error.
+    let checked = out.is_none() || !status.success();
+    let line = out.or_else(|| first_line(child.stderr.take()?))?;
+    // The first word must be the program's file name (any case): "hermes: needs Python 3.11.4"
+    // and "warning: node 2.0.1" name some other version.
+    let name = program.file_name().and_then(|n| n.to_str()).unwrap_or("/");
+    let named = line
+        .split_whitespace()
+        .next()
+        .is_some_and(|w| w.eq_ignore_ascii_case(name));
+    let held = named && super::version::parse(&line).is_some();
+    (!checked || held).then_some(line)
+}
+
+/// The most of a version line goalcup keeps, in UTF-16 units: the server's limit, so a long
+/// `--version` line never fills the start line.
+pub const VERSION_UNITS: usize = 64;
+
+/// `v` cut to `VERSION_UNITS` UTF-16 units at a char boundary.
+pub fn cut_version(v: &str) -> &str {
+    let mut units = 0;
+    for (i, c) in v.char_indices() {
+        units += c.len_utf16();
+        if units > VERSION_UNITS {
+            return &v[..i];
+        }
+    }
+    v
 }
 
 /// Writes `no_prompts` or `update_off` rows into the home; a row not written comes back skipped.
@@ -230,7 +262,7 @@ fn write_row(file: &Path, key: &str, value: &str) -> Result<(), &'static str> {
 }
 
 /// Writes `bytes` beside `file` (0600, never through a link) and renames it over `file`.
-fn replace(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn replace(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = file.parent().unwrap_or(Path::new("."));
     make_dir(parent);
     let tmp = parent.join(format!(".{}.goalcup-tmp", std::process::id()));
@@ -284,15 +316,41 @@ fn set(mut doc: Value, parts: &[&str], leaf: Value) -> Result<Option<Value>, &'s
     Ok((!same).then_some(doc))
 }
 
-/// Sets `parts` in block YAML: replaces the key's line, else adds the rest under its parent.
+/// Sets `parts` in block YAML: replaces the key's line, else adds the rest under its parent. A
+/// number part is an existing item of a block list (`- ` at its key's indent or deeper).
 fn yaml_set(text: &str, parts: &[&str], leaf: &str) -> Result<String, &'static str> {
     let indent = |line: &str| {
         let body = line.trim_start_matches(' ');
         (!body.is_empty() && !body.starts_with('#')).then_some(line.len() - body.len())
     };
+    let dash = |line: &str| {
+        matches!(
+            line.trim_start_matches(' ').as_bytes(),
+            [b'-'] | [b'-', b' ', ..]
+        )
+    };
     let mut lines: Vec<String> = text.lines().map(str::to_owned).collect();
+    // Each list item entered has its `-` blanked while its keys are looked up, then put back.
+    let mut dashes: Vec<(usize, usize)> = Vec::new();
     let (mut from, mut end, mut pad) = (0, lines.len(), 0);
     for (n, part) in parts.iter().enumerate() {
+        let is_item = |i: &usize| indent(&lines[*i]) == Some(pad) && dash(&lines[*i]);
+        if let Ok(k) = part.parse::<usize>() {
+            let i = (from..end)
+                .filter(is_item)
+                .nth(k)
+                .ok_or("no such list item")?;
+            let next = (i + 1..end).find(|&j| indent(&lines[j]).is_some_and(|d| d <= pad));
+            let next = next.unwrap_or(end);
+            // Blank and comment lines after the item belong to what follows it.
+            let next = (i + 1..next).rev().find(|&j| indent(&lines[j]).is_some());
+            let next = next.map_or(i + 1, |j| j + 1);
+            lines[i].replace_range(pad..=pad, " ");
+            dashes.push((i, pad));
+            let child = (i..next).find_map(|j| indent(&lines[j]));
+            (from, end, pad) = (i, next, child.unwrap_or(pad + 2));
+            continue;
+        }
         let entry = |line: &str| {
             let (_, _, rest) = yaml_key(line).filter(|(_, k, _)| k == *part)?;
             Some(rest.trim().to_owned())
@@ -305,7 +363,10 @@ fn yaml_set(text: &str, parts: &[&str], leaf: &str) -> Result<String, &'static s
             }
             break;
         };
-        let block = (i + 1..end).find(|&j| indent(&lines[j]).is_some_and(|d| d <= pad));
+        let ends = |j: &usize| {
+            indent(&lines[*j]).is_some_and(|d| d < pad || d == pad && !dash(&lines[*j]))
+        };
+        let block = (i + 1..end).find(ends);
         let block = block.unwrap_or(end);
         // Blank and comment lines after the block belong to what follows it.
         let block = (i + 1..block).rev().find(|&j| indent(&lines[j]).is_some());
@@ -318,7 +379,14 @@ fn yaml_set(text: &str, parts: &[&str], leaf: &str) -> Result<String, &'static s
             return Err("a key part is not a block mapping");
         }
         let child = (i + 1..block).find_map(|j| indent(&lines[j]));
+        let list = (i + 1..block).any(|j| indent(&lines[j]) == child && dash(&lines[j]));
+        if list && parts[n + 1].parse::<usize>().is_err() {
+            return Err("a key part is not a block mapping");
+        }
         (from, end, pad) = (i + 1, block, child.unwrap_or(pad + 2));
+    }
+    for (i, at) in dashes {
+        lines[i].replace_range(at..=at, "-");
     }
     Ok(lines.join("\n") + "\n")
 }

@@ -13,4 +13,4 @@ Read [VISION.md](VISION.md) next: what Goal Cup is, and the rules every change i
 6. **Tell the participant plainly** what was recorded.
 7. **Work with the harnesses people actually use,** run the way they use them.
 
-Less code is better. Cut before you add. Ready by Friday 6 November 2026.
+Less code is better. Cut before you add. Ready one week before the start window opens ([RULES](docs/RULES.md#timeline) has the date).

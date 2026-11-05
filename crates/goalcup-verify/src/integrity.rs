@@ -65,7 +65,13 @@ impl Check {
 /// The integrity checks, in report order. The first 14 are invariants 1 to 14.
 pub const IDS: &str = "inv1 inv2 inv3 inv4 inv5 inv6 inv7 inv8 inv9 streams_closed \
     seen_matches_written gap_has_end recorder_alive inv14 torn_tail native_path_gen \
-    counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown";
+    counts_match_seal gaps_named record_decode parts_pruned record_kind_unknown gap_reason_unknown wall_sane \
+    record_json";
+
+/// Whether a record's JSON body is empty (what the recorder writes for no value) or parses.
+fn json_ok(b: &[u8]) -> bool {
+    b.is_empty() || serde_json::from_slice::<Value>(b).is_ok()
+}
 
 /// Whether a GAP covers a stretch of time: it is not run 1's shape. A GAP in the recorder's own
 /// clock is judged on record time, one carrying `boot_id` (another clock) on wall time. Covers,
@@ -252,8 +258,13 @@ pub fn check(e: &Entry, now_ns: Option<u64>, want: &HashSet<u64>) -> Outcome {
         let why = format!("the record stops decoding: {why}");
         p.fail("record_decode", &why, at);
     } else if let Some(o) = tail.truncated {
-        if p.seal.is_some() {
-            let why = "a sealed entry ends inside a record";
+        // The recorder closes a frame only after a LINK, so only an open frame can end inside a
+        // record after a crash.
+        if p.seal.is_some() || !tail.open_frame {
+            let why = match p.seal {
+                Some(_) => "a sealed entry ends inside a record",
+                None => "a closed frame ends inside a record",
+            };
             p.fail("torn_tail", why, At(o, 0, at.2));
         } else {
             p.fact("torn_tail", "open_end", o.into());
@@ -403,6 +414,14 @@ impl Pass {
             }
         );
         let is_link = matches!(it.rec, Record::Link { .. });
+        if let Record::Open { meta: j, .. }
+        | Record::Gap { tail: j, .. }
+        | Record::End { tail: j, .. }
+        | Record::Event { json: j, .. } = &it.rec
+            && !json_ok(j)
+        {
+            self.fail("record_json", "a record's JSON does not parse", at);
+        }
         let ev = match &it.rec {
             Record::Event { json, .. } => {
                 serde_json::from_slice::<Map<String, Value>>(json).unwrap_or_default()
@@ -637,6 +656,14 @@ impl Pass {
                 self.next_seq = seq.saturating_add(1);
                 self.last_hash = *hash;
                 self.last_link = Some((*wall_ns, *mono_ns));
+                let skew = (i128::from(*wall_ns) - i128::from(self.part_wall))
+                    - (i128::from(*mono_ns) - i128::from(self.part_mono));
+                // A recovery LINK carries the new boot's clock; after a reboot its mono is below
+                // the dead boot's PART mono and the two cannot be compared.
+                if *mono_ns >= self.part_mono && skew.abs() > 400 * 86_400 * 1_000_000_000 {
+                    let why = "a LINK wall time is more than 400 days from its PART's wall plus mono delta";
+                    self.set("wall_sane", Res::Named, why, Some(at));
+                }
                 self.frame_down = 0;
                 if self.down_after.0 == 0 {
                     self.regular_link_t = Some(*mono_ns);

@@ -15,7 +15,9 @@ pub use recover::{NotRecovered, Recovered, recover, recover_with};
 
 use crate::cli::log::{Fact, line};
 use crate::cli::{self, ServerJson, proc_start_id, read_json, server_json, status_json};
-use crate::connector::{ConnectorRef, HostList, LaunchPlan, MaskRule, NativeSources};
+use crate::connector::{
+    ConnectorRef, HostList, LaunchPlan, MaskRule, NativeSources, launch, version,
+};
 use crate::mask::SecretValue;
 use crate::pipeline::clock::{self, Mono};
 use crate::pipeline::fds::{self, Target};
@@ -139,8 +141,7 @@ pub struct StartFacts {
     pub entry_dir: PathBuf,
     /// Unix ms. Null with `GOALCUP_SERVER=off`.
     pub deadline: Option<u64>,
-    /// The server's time and the local wall time it was read at, unix ms.
-    pub server_time: Option<u64>,
+    /// The local wall time the deadline was read against, unix ms.
     pub local_wall: u64,
     pub workspace: PathBuf,
     /// `LaunchPlan.connector` (S3 `connector::ConnectorRef`: id, name, sha256, source), for the
@@ -148,11 +149,11 @@ pub struct StartFacts {
     pub connector: serde_json::Value,
     /// `LaunchPlan.harness_version`; null when it could not be read.
     pub harness_version: Option<String>,
+    /// `LaunchPlan.version_row`: the `[[versions]]` row that set the rules; null for the base.
+    #[serde(default)]
+    pub version_row: Option<String>,
     /// `GOALCUP_KEEP_PARTS=1`.
     pub keep: bool,
-    /// The 40-hex commit the binary was built from, or null. The version is the binary's own
-    /// `CARGO_PKG_VERSION`.
-    pub build: Option<String>,
     pub hosts: serde_json::Value,
     /// SHA-256 of the host list file as read (the embedded list or a `--hosts` file), 64 hex.
     pub hosts_sha256: String,
@@ -211,6 +212,13 @@ pub const KEY_FILE: &str = "run-ca.key";
 /// `rec/watchdog.pid`: `<pid> <start_id>`, read by `cli::watchdog_pid`.
 pub const PID_FILE: &str = "watchdog.pid";
 
+/// The pinned binary's file name ([`spawn::pin_exe`]); also an older entry's `rec/goalcup`.
+pub const EXE_FILE: &str = "goalcup";
+
+/// `rec/pin`: the path of the binary every boot of the entry starts, so `goalcup recover`
+/// starts it too. Never a part file.
+pub const PIN_FILE: &str = "pin";
+
 /// The first boot gave no `ready`, or the watchdog could not bind, write its files or mint the
 /// CA: the harness was not started, and PRD-10 says so (its "could not do its job" code).
 pub const NOT_STARTED: u8 = 3;
@@ -248,6 +256,13 @@ const QUICK_NS: u64 = SEC;
 /// the listener is soon served again; growing, so a boot that always dies never spins.
 const SPACE_MAX_NS: u64 = NULL_WAITS[0] * SEC;
 
+/// A recorder that cannot be spawned this long after the harness exit is given up: the entry is
+/// left for `close_dead_entry`. While the harness runs the tries never stop.
+const SPAWN_GIVE_UP_NS: u64 = 30 * SEC;
+
+/// How often adopted orphans are reaped while the harness runs.
+const REAP_NS: u64 = 10 * SEC;
+
 /// A null recorder that has not exited this long after the `restart` line is killed.
 const RESTART_KILL_NS: u64 = 10 * SEC;
 
@@ -266,10 +281,41 @@ extern "C" fn ask_seal(_: libc::c_int) {
 /// recorder at once, and seals when the harness exits or `goalcup seal` asks. Returns the
 /// harness's exit code, [`NOT_STARTED`], or [`MASK_REFUSED`].
 pub fn run(plan: LaunchPlan, facts: StartFacts) -> ExitCode {
-    match std::env::current_exe() {
-        Ok(exe) => run_with(plan, facts, &exe),
-        Err(_) => ExitCode::from(NOT_STARTED),
+    let Ok(exe) = std::env::current_exe() else {
+        return ExitCode::from(NOT_STARTED);
+    };
+    let pinned = pin(&facts.entry_dir, &exe);
+    run_with(plan, facts, &pinned)
+}
+
+/// The binary the entry's boots start: the one it recorded ([`recorded_pin`]), else `exe` pinned
+/// now ([`spawn::pin_exe`]) and recorded in `rec/pin`, else `exe` itself and `exe_pin_failed`
+/// logged: a pin that fails never stops the run.
+fn pin(entry_dir: &Path, exe: &Path) -> PathBuf {
+    let rec = entry_dir.join("rec");
+    if let Some(p) = recorded_pin(&rec) {
+        return p;
     }
+    let root = spawn::pin_root().ok_or(io::Error::from(io::ErrorKind::NotFound));
+    let pinned = root.and_then(|r| spawn::pin_exe(exe, &r)).and_then(|p| {
+        make_rec(&rec)?;
+        fs::write(rec.join(PIN_FILE), p.as_os_str().as_encoded_bytes()).map(|()| p)
+    });
+    pinned.unwrap_or_else(|_| {
+        line(entry_dir, "exe_pin_failed", &[]);
+        exe.to_path_buf()
+    })
+}
+
+/// The pin `rec/pin` names, else an older entry's `rec/goalcup`, when it is a file.
+fn recorded_pin(rec: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let named =
+        fs::read(rec.join(PIN_FILE)).map(|b| PathBuf::from(std::ffi::OsString::from_vec(b)));
+    named
+        .into_iter()
+        .chain([rec.join(EXE_FILE)])
+        .find(|p| p.is_file())
 }
 
 /// [`run`] with the recorder started from `recorder_exe`. Every wait runs on boot time
@@ -302,6 +348,9 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
         return failed("ca_files");
     }
     facts.ca = ca.export();
+    if !start_line_fits(&facts, &plan.program) {
+        return failed("start_line");
+    }
     if write_key(&rec, &facts.ca.key).is_err() {
         remove_key(&rec);
         return failed("key");
@@ -398,7 +447,7 @@ fn watch(
     let spared = Arc::clone(recorder_pid);
     let spare = move |pid: u32| pid == *lock(&spared);
     let mut ending: Option<JoinHandle<()>> = None;
-    let mut after: Option<JoinHandle<()>> = None;
+    let mut after: Option<JoinHandle<Option<String>>> = None;
     let mut exit_line: Option<ToRecorder> = None;
     let mut seal: Option<ToRecorder> = None;
     let mut asked = None;
@@ -409,6 +458,9 @@ fn watch(
     let mut restarts = Restarts::default();
     // Whether the next boot runs `--null`, decided when the last one ended.
     let mut next_null = false;
+    // Since when the next recorder cannot be spawned.
+    let mut failing_since: Option<Mono> = None;
+    let mut reaped_at = Mono::now();
     // After a server `stop` the seal may come first: the harness is waited for all the same.
     while !(sealed || left) || harness_pid.is_some() {
         let next = boot.next();
@@ -441,6 +493,7 @@ fn watch(
                         let l = ToRecorder::Seal {
                             reason,
                             outlived: None,
+                            version_read: None,
                         };
                         boot.send(&l);
                         seal = Some(l);
@@ -473,6 +526,21 @@ fn watch(
                 _ => {}
             }
         }
+        // Orphans of its own harness, reaped. The `before` helpers are done and the `after` ones
+        // not started, so the only children kept are the harness, the recorder and those from
+        // before the harness (`start`'s sleep lock, whose `Child` waits for it).
+        if own.is_some()
+            && harness_pid.is_some()
+            && after.is_none()
+            && Mono::now().0.saturating_sub(reaped_at.0) >= REAP_NS
+        {
+            reaped_at = Mono::now();
+            spawn::reap_orphans(&|p| {
+                Some(p) == harness_pid
+                    || spare(p)
+                    || cli::proc_start_id(p).is_none_or(|s| s < harness_start)
+            });
+        }
         let gone = match own {
             Some(_) => harness_pid.and_then(spawn::look),
             // Recover: watched by pid and start id; its exit status is not ours to read.
@@ -501,8 +569,23 @@ fn watch(
                     plan.env.clone(),
                     dir.clone(),
                 );
+                // The read runs as the start probe did: without the proxy and CA variables that
+                // `finish_env` added (`build_env` leaves `NO_PROXY` set).
+                let mut probe_env = env.clone();
+                let added = launch::REMOVED
+                    .iter()
+                    .filter(|n| !n.eq_ignore_ascii_case("no_proxy"));
+                for name in added.copied().chain(plan.ca_env.iter().map(String::as_str)) {
+                    probe_env.remove(name);
+                }
+                let parsed = |l: &str| version::parse(l).map(|v| v.text);
+                let was = plan.harness_version.as_deref().and_then(parsed);
                 after = Some(thread::spawn(move || {
                     spawn::helpers(&program, &entries, &env, spawn::BUDGET_NS, &dir, "after");
+                    let line = launch::harness_version(&program, &probe_env)?;
+                    // Cut as the start line was, so a long line compares like with like.
+                    let line = launch::cut_version(&line).to_owned();
+                    (parsed(&line) != was).then_some(line)
                 }));
             }
         }
@@ -520,6 +603,7 @@ fn watch(
                 reason: asked.unwrap_or(SealReason::HarnessExit),
                 // Recover: the harness is not its child, so no `outlived` list.
                 outlived: own.and_then(|_| spawn::outlived(harness_start, &spare)),
+                version_read: after.take().and_then(|a| a.join().ok()).flatten(),
             };
             boot.send(&l);
             seal = Some(l);
@@ -565,26 +649,34 @@ fn watch(
             }
             // A new boot takes the seal after `ready`.
             (restarts.hold, left) = (None, false);
-            let mut failed = false;
-            boot = loop {
-                match Boot::start(recorder_exe, listener, &facts, recorder_pid, next_null) {
-                    Ok(next) => break next,
-                    Err(e) => {
-                        if !failed {
-                            line(&dir, "recorder_spawn_failed", &[("io", Fact::Io(e.kind()))]);
+            // One try a tick; the ended boot stays (its `next` sleeps the tick).
+            match Boot::start(recorder_exe, listener, &facts, recorder_pid, next_null) {
+                Ok(next) => {
+                    (boot, failing_since) = (next, None);
+                    boots += 1;
+                }
+                Err(e) => {
+                    let now = Mono::now();
+                    if failing_since.is_none() {
+                        line(&dir, "recorder_spawn_failed", &[("io", Fact::Io(e.kind()))]);
+                    }
+                    // While the harness runs the clock stays at now: the give-up counts from
+                    // its exit.
+                    match failing_since {
+                        Some(t) if harness_pid.is_none() => {
+                            if now.0.saturating_sub(t.0) >= SPAWN_GIVE_UP_NS {
+                                line(&dir, "recorder_spawn_gave_up", &[]);
+                                left = true;
+                            }
                         }
-                        failed = true;
-                        thread::sleep(spawn::TICK);
+                        _ => failing_since = Some(now),
                     }
                 }
-            };
-            boots += 1;
+            }
         }
         restarts.tick(&mut boot, seal.is_some());
     }
-    for h in [ending, after].into_iter().flatten() {
-        let _ = h.join();
-    }
+    let _ = (ending.map(JoinHandle::join), after.map(JoinHandle::join));
     exit
 }
 
@@ -890,11 +982,34 @@ fn read_lines(stream: UnixStream, tx: &mpsc::Sender<Option<ToWatchdog>>) {
 
 /// One control line, both ways: JSON and a newline. Never logged; false when the write failed.
 pub fn send_line(mut to: &UnixStream, l: &impl Serialize) -> bool {
-    let Ok(mut text) = serde_json::to_vec(l) else {
-        return false;
-    };
+    line_bytes(l).is_some_and(|text| to.write_all(&text).is_ok())
+}
+
+/// A control line as [`send_line`] writes it: JSON and a newline.
+fn line_bytes(l: &impl Serialize) -> Option<Vec<u8>> {
+    let mut text = serde_json::to_vec(l).ok()?;
     text.push(b'\n');
-    to.write_all(&text).is_ok()
+    Some(text)
+}
+
+/// The longest first line of this run, newline included, is at most [`MAX_LINE`], so
+/// [`read_line`] reads it: a later boot or a recover sends the same facts with the harness, the
+/// cause, `null_since` and the deadline filled in, here at their longest.
+fn start_line_fits(facts: &StartFacts, program: &Path) -> bool {
+    let mut worst = facts.clone();
+    worst.deadline = Some(u64::MAX);
+    worst.null_since = Some(u64::MAX);
+    worst.prev = Some(Prev::Cause(Cause::NullMode {
+        exits: u64::MAX,
+        last: Some(Exit::Signal(i32::MIN)),
+    }));
+    worst.harness = Some(HarnessFacts {
+        pid: u32::MAX,
+        program: program.display().to_string(),
+        started: goalcup_format::dump::wall(u64::MAX),
+        start_id: u64::MAX,
+    });
+    line_bytes(&ToRecorder::Recover(Box::new(worst))).is_some_and(|t| t.len() <= MAX_LINE)
 }
 
 /// The next control line, both ways: None at EOF or on a read error; `Some(None)` for a line
@@ -1023,6 +1138,10 @@ pub enum ToRecorder {
     Seal {
         reason: SealReason,
         outlived: Option<Outlived>,
+        /// The `--version` line read after the harness exited, only when its build differs
+        /// from the start's.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version_read: Option<String>,
     },
     /// Null recorder only: exit 0 without sealing.
     Restart,
@@ -1077,6 +1196,28 @@ mod tests {
         assert_eq!(moved(&w(false, None, Some(3))), Some(Mono(8 * SEC)));
     }
 
+    /// Every boot of an entry starts the binary it recorded: `rec/pin`, else an old entry's
+    /// `rec/goalcup`, else none (the caller pins).
+    #[test]
+    fn an_entry_keeps_its_pin() {
+        let t = tempfile::tempdir().unwrap();
+        let rec = t.path().join("rec");
+        fs::create_dir(&rec).unwrap();
+        assert_eq!(recorded_pin(&rec), None);
+        fs::write(rec.join(EXE_FILE), b"old pin").unwrap();
+        assert_eq!(recorded_pin(&rec), Some(rec.join(EXE_FILE)));
+        let shared = t.path().join("goalcup");
+        fs::write(&shared, b"x").unwrap();
+        fs::write(rec.join(PIN_FILE), shared.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(recorded_pin(&rec), Some(shared.clone()));
+        fs::remove_file(&shared).unwrap();
+        assert_eq!(
+            recorded_pin(&rec),
+            Some(rec.join(EXE_FILE)),
+            "a pin that is gone"
+        );
+    }
+
     /// The first line carries the whole start facts. With the largest built-in connector's
     /// plan, a minted CA and 32 shaped fake values of 120 bytes it stays under the line limit,
     /// so the recorder can read it (point 1: a start line that does not fit records nothing).
@@ -1102,13 +1243,12 @@ mod tests {
                 segment: 2,
                 entry_dir: dir.path().join("runs/r/e"),
                 deadline: Some(u64::MAX),
-                server_time: Some(u64::MAX),
                 local_wall: u64::MAX,
                 workspace: env.workspace.clone(),
                 connector: to_value(&plan.connector).unwrap(),
                 harness_version: Some("1.2.3 (fake)".into()),
+                version_row: None,
                 keep: true,
-                build: Some("f".repeat(40)),
                 hosts: to_value(&plan.hosts).unwrap(),
                 hosts_sha256: "0".repeat(64),
                 native: to_value(&plan.native).unwrap(),
@@ -1137,6 +1277,29 @@ mod tests {
             longest = longest.max(line.len() + 1);
         }
         assert!(longest <= MAX_LINE, "{longest}");
+    }
+
+    /// A first line that fits only until a later boot fills in the harness and the cause is
+    /// refused at the start: else that boot, or a recover, could not read its line.
+    #[test]
+    fn a_start_line_with_no_room_for_a_later_boot_is_refused() {
+        let ca = RunCa::mint(&["example.org".to_string()]).unwrap().export();
+        let mut facts: StartFacts = serde_json::from_value(serde_json::json!({
+            "run": "r", "entry": "e", "segment": 0, "entry_dir": "/e", "local_wall": 0,
+            "workspace": "/w", "keep": true, "connector": {"id": "fake"}, "hosts": {},
+            "hosts_sha256": "", "native": {}, "mask_rules": [], "values": [], "ca": ca,
+            "notes": []}))
+        .unwrap();
+        let first = |f: &StartFacts| line_bytes(&ToRecorder::Start(Box::new(f.clone()))).unwrap();
+        let room = MAX_LINE - first(&facts).len();
+        facts.harness_version = Some("v".repeat(room - 100));
+        assert!(first(&facts).len() <= MAX_LINE);
+        assert!(!start_line_fits(
+            &facts,
+            Path::new("/usr/local/bin/harness")
+        ));
+        facts.harness_version = Some("v".repeat(room - 1_000));
+        assert!(start_line_fits(&facts, Path::new("/usr/local/bin/harness")));
     }
 
     /// Ledger R3a: a null boot's space never puts the normal try after the wait's end; with a

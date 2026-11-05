@@ -13,11 +13,11 @@ out of date; the full rules in [docs/RULES.md](docs/RULES.md) win.
 - **One prompt, one agent, up to 168 hours.** A participant prepares harness, model and tools, writes
   one goal, and steps back. After the start, people may only send "keep going".
 - **One root agent in one harness per entry.** It may start its own subagents, as many as it likes.
-- **Start window:** 7 November 2026, 00:00 UTC, to 8 November 2026, 00:00 UTC. Every entry gets its
-  own 168 hours from its start.
+- **Start window:** date and length in [RULES](docs/RULES.md#timeline). Every entry gets its own
+  168 hours from its start.
 - **A fresh product from scratch.** The repository is public from the start and ends under the MIT
   licence.
-- **Two short videos:** one on the goal and setup by hour 24, one demo after the run.
+- **Two short videos:** a setup video before the run and a demo after it (RULES).
 - **Free, online, bring your own harness and your own key.** Solo, as a team or as a company.
 - **Judged by humans.** The judges read the prompt and setup, not only the product.
 
@@ -40,5 +40,5 @@ Goal Cup Proxy records each run. The record shows the rules held, and the runs a
   and it says so.
 - **No backward compatibility before Edition 01.** Every run so far is test data. The protocol,
   verifier, Worker and client may change together.
-- **Ready by Friday 6 November 2026,** the day before the start window opens.
+- **Ready one week before the start window opens.**
 - **Test it the way people will use it.** Ask for subagents in the prompt; never force them by config.

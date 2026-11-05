@@ -14,6 +14,7 @@ use goalcup::cli::EntryFacts;
 use goalcup::cli::approve::Stop;
 use goalcup::cli::continue_run::{Args, prepare, resume_from_files};
 use goalcup::cli::start::Ready;
+use goalcup::cli::text;
 use goalcup::pipeline::status::Mode;
 use serde_json::{Value, json};
 
@@ -106,6 +107,21 @@ impl World {
         };
         let vars = [("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())].into();
         prepare(&a, &self.gc(), &self.project, &vars, &mut Vec::new())
+    }
+
+    /// Makes the connector's program a script with `body`.
+    fn program(&self, body: &str) {
+        let script = self.t.home().join("tester-bin");
+        std::fs::write(&script, body).unwrap();
+        std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let toml = std::fs::read_to_string(&self.connector).unwrap();
+        let program = format!("program = \"{}\"", script.display());
+        std::fs::write(
+            &self.connector,
+            toml.replace("program = \"true\"", &program),
+        )
+        .unwrap();
     }
 
     fn prepare(&self) -> Result<Ready, Stop> {
@@ -215,6 +231,48 @@ fn a_changed_connector_or_host_file_is_refused_before_any_server_call() {
     assert_eq!(w.folders(), 1);
 }
 
+#[test]
+fn a_different_folder_is_refused_and_a_part_with_no_recorded_folder_is_not() {
+    let mut w = World::new(Some(DEAD_SERVER.into()));
+    w.part(1, false, Some(World::sealed(json!({"model_requests": 1}))));
+    let elsewhere = w.t.home().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    w.parts[0]["workspace"] = json!(elsewhere.to_string_lossy());
+    w.save();
+    let (before, folders) = (w.server_json(), w.folders());
+    let stop = w.prepare().err().expect("refused");
+    assert_eq!(stop.code, 1);
+    assert!(
+        stop.text.contains(&*elsewhere.to_string_lossy()),
+        "{}",
+        stop.text
+    );
+    assert_eq!((w.server_json(), w.folders()), (before, folders));
+}
+
+#[test]
+fn the_same_folder_or_no_recorded_folder_is_continued() {
+    // None: an old server.json has no workspace, so there is nothing to compare. "dot": the
+    // same folder spelled with a dot is the same folder. "gone": a moved or renamed folder
+    // cannot be gone back to, so the run goes on here.
+    for case in ["none", "dot", "gone"] {
+        let worker = FakeWorker::start();
+        next_part(&worker);
+        let mut w = World::new(Some(worker.url()));
+        w.part(1, false, Some(World::sealed(json!({"model_requests": 1}))));
+        let recorded = match case {
+            "dot" => Some(w.project.join(".")),
+            "gone" => Some(w.t.home().join("gone")),
+            _ => None,
+        };
+        if let Some(r) = recorded {
+            w.parts[0]["workspace"] = json!(r.to_string_lossy());
+            w.save();
+        }
+        w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
+    }
+}
+
 /// The fake Worker's answer to the continue call: part 2, 3600 s left.
 fn next_part(w: &FakeWorker) {
     let answer = json!({"run_id": RUN_ID, "entry_id": e(2), "segment": 1,
@@ -283,6 +341,81 @@ fn a_run_whose_time_is_up_is_not_continued() {
     assert_eq!(w.folders(), 1);
 }
 
+/// What `continue` prints for a run of `mode` naming `repo` whose start was stopped with Ctrl-C
+/// after the open (no part folder, no `first-message.txt`), or whose part recorded `written`.
+/// A built-in connector on an empty PATH: nothing real runs and no clipboard tool is found.
+fn shown(mode: &str, repo: Option<&str>, written: Option<Value>) -> String {
+    let mut w = World::new(None);
+    w.part(1, false, written.clone().map(World::sealed));
+    if written.is_none() {
+        std::fs::remove_dir_all(w.run_dir().join(e(1))).unwrap();
+    }
+    std::fs::write(w.project.join(".env.local"), "GH_TOKEN=x\n").unwrap();
+    let mut sj: Value = serde_json::from_slice(&w.server_json()).unwrap();
+    sj["mode"] = json!(mode);
+    sj["repo"] = json!(repo);
+    sj["connector"] = json!({"id": "codex-cli", "name": "Codex", "source": "builtin"});
+    put(&w.run_dir(), "server.json", &sj);
+    let bin = w.t.home().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let vars = [("PATH".to_owned(), bin.display().to_string())].into();
+    let a = Args {
+        run: None,
+        connector: None,
+        hosts: None,
+    };
+    let mut out = Vec::new();
+    prepare(&a, &w.gc(), &w.project, &vars, &mut out).unwrap_or_else(|s| panic!("{}", s.text));
+    String::from_utf8(out).unwrap()
+}
+
+#[test]
+fn the_push_lines_come_back_after_a_ctrl_c_after_the_open() {
+    let said = shown("competition", Some("a/b"), None);
+    assert!(said.contains(text::PUSH_FRAME), "{said}");
+    assert!(said.contains(text::PROMPT_AFTER_PUSH), "{said}");
+    assert!(said.contains("https://github.com/a/b"), "{said}");
+    let said = shown("practice", None, None);
+    assert!(!said.contains(text::PUSH_FRAME), "{said}");
+    // A resumed session has already seen them.
+    let said = shown(
+        "competition",
+        Some("a/b"),
+        Some(json!({"model_requests": 2})),
+    );
+    assert!(!said.contains(text::PUSH_FRAME), "{said}");
+}
+
+/// A build that changed since the last part is said and recorded as one `version_read` note.
+#[test]
+fn a_changed_version_at_continue_is_a_note() {
+    let worker = FakeWorker::start();
+    next_part(&worker);
+    let mut w = World::new(Some(worker.url()));
+    w.program("#!/bin/sh\necho tester 1.2.4\n");
+    w.part(1, false, Some(World::sealed(json!({"model_requests": 1}))));
+    w.parts[0]["harness_version"] = json!("tester 1.2.3");
+    w.save();
+    let a = Args {
+        run: None,
+        connector: Some(&w.connector),
+        hosts: None,
+    };
+    let vars = [("PATH".to_owned(), std::env::var("PATH").unwrap_or_default())].into();
+    let mut out = Vec::new();
+    let ready =
+        prepare(&a, &w.gc(), &w.project, &vars, &mut out).unwrap_or_else(|s| panic!("{}", s.text));
+    let notes: Vec<&Value> = (ready.facts.notes.iter())
+        .filter(|n| n["what"] == "version_read")
+        .collect();
+    let want = json!({"ev": "note", "what": "version_read", "line": "tester 1.2.4",
+        "version": "1.2.4", "before": "1.2.3"});
+    assert_eq!(notes, [&want]);
+    let shown = String::from_utf8(out).unwrap();
+    let updated = text::updated("Tester", "tester 1.2.3", "tester 1.2.4");
+    assert!(shown.contains(&updated), "{shown}");
+}
+
 /// An unreadable harness version goes up on the continue call as the string "unknown", never null.
 #[test]
 fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
@@ -319,22 +452,73 @@ fn an_unread_harness_version_is_sent_as_unknown_on_the_continue_call() {
     });
     let mut w = World::new(Some(format!("http://{addr}")));
     // A program whose version probe fails: the version is unread.
-    let script = w.t.home().join("tester-none");
-    std::fs::write(&script, "#!/bin/sh\nexit 1\n").unwrap();
-    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let body = std::fs::read_to_string(&w.connector).unwrap();
-    std::fs::write(
-        &w.connector,
-        body.replace(
-            "program = \"true\"",
-            &format!("program = \"{}\"", script.display()),
-        ),
-    )
-    .unwrap();
+    w.program("#!/bin/sh\nexit 1\n");
     w.part(1, false, Some(World::sealed(json!({"model_requests": 2}))));
     w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
     assert_eq!(seen.join().unwrap()["harness_version"], json!("unknown"));
     let log = w.run_dir().join(e(2)).join("goalcup.log");
     let log = std::fs::read_to_string(&log).unwrap_or_default();
     assert!(log.contains("version_unread"), "{log}");
+}
+
+/// Continues a run started on 1.0 as `opencode2-cli`, whose last part wrote `written`, with a
+/// fake `opencode` that prints `line`.
+fn continue_opencode2(line: &str, written: Value) -> Result<Ready, Stop> {
+    let worker = FakeWorker::start();
+    next_part(&worker);
+    let mut w = World::new(Some(worker.url()));
+    let bin = w.t.home().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = bin.join("opencode");
+    std::fs::write(&fake, format!("#!/bin/sh\necho {line}\n")).unwrap();
+    std::fs::set_permissions(&fake, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    w.part(1, false, Some(World::sealed(written)));
+    // The 1.0 run's home, which holds its sign-in and sessions.
+    std::fs::create_dir_all(w.gc().join("homes/opencode2-cli")).unwrap();
+    let mut sj: Value = serde_json::from_slice(&w.server_json()).unwrap();
+    sj["connector"] = json!({"id": "opencode2-cli", "name": "OpenCode", "source": "builtin"});
+    put(&w.run_dir(), "server.json", &sj);
+    let a = Args {
+        run: None,
+        connector: None,
+        hosts: None,
+    };
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let vars = [("PATH".to_owned(), path)].into();
+    prepare(&a, &w.gc(), &w.project, &vars, &mut Vec::new())
+}
+
+/// A run started on 1.0 as `opencode2-cli` continues as `opencode-cli`, the one OpenCode connector.
+#[test]
+fn an_opencode2_run_continues_as_opencode() {
+    let ready = continue_opencode2("opencode v2.2.2", json!({"model_requests": 1}))
+        .unwrap_or_else(|s| panic!("{}", s.text));
+    assert_eq!(ready.plan.connector.id, "opencode-cli");
+    // It goes on in the 1.0 home, which holds its sign-in and sessions.
+    assert!(
+        ready.plan.home.ends_with("homes/opencode2-cli"),
+        "{:?}",
+        ready.plan.home
+    );
+    assert_eq!(
+        ready.plan.harness_version.as_deref(),
+        Some("opencode v2.2.2")
+    );
+}
+
+/// No version refuses a continue, also when it opens a new session (resume off): a 1.x build on a
+/// run started as the 2.x id gets the 1.x rules.
+#[test]
+fn a_continue_without_resume_is_never_refused_on_version() {
+    let ready =
+        continue_opencode2("opencode 1.19.5", json!({})).unwrap_or_else(|s| panic!("{}", s.text));
+    assert!(!ready.plan.argv.contains(&"--continue".to_owned()));
+    assert_eq!(
+        (&ready.plan.refusal, ready.plan.version_row.as_deref()),
+        (&None, Some("1.x"))
+    );
 }

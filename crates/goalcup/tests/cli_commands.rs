@@ -37,6 +37,10 @@ impl Homes {
             .env("GOALCUP_HOME", self.goalcup.path())
             .env("HOME", self.user.path())
             .env("XDG_CONFIG_HOME", self.user.path())
+            .env_remove("https_proxy") // a build box's proxy refuses every start
+            .env_remove("HTTPS_PROXY")
+            .env_remove("all_proxy")
+            .env_remove("ALL_PROXY")
             .output()
             .unwrap()
     }
@@ -67,6 +71,38 @@ fn help_lists_exactly_the_eight_commands() {
         .filter_map(|l| l.split_whitespace().next())
         .collect();
     assert_eq!(names, COMMANDS);
+}
+
+#[test]
+fn harness_help_names_the_built_in_ids() {
+    let homes = Homes::new();
+    for cmd in ["setup", "start"] {
+        let out = homes.run(&[cmd, "--help"]);
+        let help = String::from_utf8(out.stdout).unwrap();
+        for (id, _) in goalcup::connector::builtin::CONNECTORS {
+            assert!(help.contains(id), "{cmd} --help lacks {id}: {help}");
+        }
+    }
+}
+
+#[test]
+fn internal_flags_are_accepted_but_not_in_the_help() {
+    let homes = Homes::new();
+    for cmd in ["start", "continue"] {
+        let help = String::from_utf8(homes.run(&[cmd, "--help"]).stdout).unwrap();
+        for flag in ["--test", "--connector", "--hosts"] {
+            assert!(!help.contains(flag), "{cmd} --help shows {flag}: {help}");
+        }
+    }
+}
+
+#[test]
+fn a_typo_d_flag_is_one_line_with_the_did_you_mean() {
+    let out = Homes::new().run(&["start", "--hrness", "x"]);
+    assert_eq!(out.status.code(), Some(1));
+    one_error_line(&out);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("--harness"), "stderr: {err}");
 }
 
 #[test]
@@ -120,6 +156,25 @@ fn file_flags_in_a_competition_run_are_refused_before_anything_is_written() {
 }
 
 #[test]
+fn a_connector_file_given_to_harness_is_refused_in_a_competition_run() {
+    let homes = Homes::new();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("mine.toml");
+    std::fs::write(&file, "").unwrap();
+    let args = [
+        "start",
+        "--harness",
+        file.to_str().unwrap(),
+        "--repo",
+        "someone/somewhere",
+    ];
+    let out = homes.run(&args);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&out.stderr).contains("--harness"));
+    assert!(is_empty(homes.goalcup.path()));
+}
+
+#[test]
 fn no_command_prints_the_help_and_exits_1() {
     let out = Homes::new().run(&[]);
     assert_eq!(out.status.code(), Some(1));
@@ -153,6 +208,11 @@ fn second_start_on_one_home_refuses() {
         .env("GOALCUP_HOME", homes.goalcup.path())
         .env("HOME", homes.user.path())
         .env("XDG_CONFIG_HOME", homes.user.path())
+        .env_remove("https_proxy") // a build box's proxy refuses every start
+        .env_remove("HTTPS_PROXY")
+        .env_remove("all_proxy")
+        .env_remove("ALL_PROXY")
+        .env_remove("GOALCUP_TIME_LEFT_FILE")
         .output()
         .unwrap();
     assert_eq!(out.status.code(), Some(1));

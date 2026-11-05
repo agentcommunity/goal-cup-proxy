@@ -1,8 +1,9 @@
 //! `conn_bytes` (PRD-08 section 3, "Honesty"): per decrypted connection and direction, the
 //! plaintext the END tail claims against what its streams account for. A request lost on a
 //! reused connection with no `conn` GAP is a `fail` (exit 2), even beside a small GAP on another
-//! stream; a `conn` GAP covers it (`named`, exit 1); 10% and 1 MiB unaccounted is a `warn` that
-//! never moves the exit; no plain tails is a `skip`; a sized WebSocket stream GAP names its bytes.
+//! stream; a `conn` GAP covers it (`named`, exit 1); 10% and 1 MiB unaccounted is `named` (exit
+//! 1): bytes are missing even when no GAP says so; no plain tails is a `skip`; a sized WebSocket
+//! stream GAP names its bytes.
 
 mod common;
 
@@ -89,10 +90,10 @@ fn the_same_loss_under_a_conn_gap_is_named() {
 }
 
 #[test]
-fn fifteen_percent_over_1_mib_warns_and_the_exit_stays_0() {
-    let (code, v) = conn_with((MIB, 10 * MIB), &[(MIB, 17 * MIB / 2)], None);
-    assert_eq!(result(&v, "conn_bytes"), "warn");
-    assert_eq!(code, 0);
+fn conn_bytes_between_10_and_50_percent_unaccounted_is_named() {
+    let (code, v) = conn_with((MIB, 10 * MIB), &[(MIB, 8 * MIB)], None);
+    assert_eq!(result(&v, "conn_bytes"), "named");
+    assert_eq!(code, 1);
 }
 
 /// PRD-01 section 3 makes the tails required: without them nothing was judged, so no `pass`.

@@ -183,6 +183,7 @@ fn a_seal_copy_says_whether_the_harness_still_ran_and_is_counted() {
             form: Form::Final,
             since: SystemTime::now() - Duration::from_secs(60),
             warn_missing: true,
+            redirect: None,
         }]);
         let (rec, calls) = Recorder::for_tests(1 << 30);
         let done = native::start(rec, rows).finish(exited, None);

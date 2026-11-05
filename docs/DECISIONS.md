@@ -15,7 +15,7 @@ first; they replace the clauses the status table names.
 
 The owner's decisions for goalcup 1.0. Each points to the entry that carries it.
 
-**29 Oct 2026**, after phase 2 ([progress notes](plans/2026-10-29-record-everything-progress.md#owner-decisions-after-phase-2-29-oct)):
+**29 Oct 2026**, after phase 2 ([progress notes](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-29-record-everything-progress.md#owner-decisions-after-phase-2-29-oct)):
 
 - Less code is better. Cut first ([VISION](../VISION.md)).
 - Record everything, and never block the harness (D78).
@@ -24,7 +24,7 @@ The owner's decisions for goalcup 1.0. Each points to the entry that carries it.
 - A session file's path is its ID, and session files are not compared byte for byte with the disk (D76).
 - Masking option b (D80).
 
-**29 Oct 2026, night** ([the ledger](plans/2026-10-30-v1.0/OWNER-DECISIONS.md)):
+**29 Oct 2026, night** ([the ledger](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md)):
 
 - goalcup 1.0: a fresh core, the old crates deleted, no backward compatibility (D84).
 - One process (D75).
@@ -34,7 +34,7 @@ The owner's decisions for goalcup 1.0. Each points to the entry that carries it.
 - Tiers come from the test pad (D82).
 - Usage stats are worked out after upload (D83).
 
-**PRD-00 owner questions** ([the list](plans/2026-10-30-v1.0/PRD-00-index.md#owner-questions)).
+**PRD-00 owner questions** ([the list](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md#owner-questions)).
 
 - goalcup ends the harness only at the deadline, on `goalcup seal` and on the server's `stop`,
   with no termination proof (D85) (default, PRD-00 question 2).
@@ -203,7 +203,7 @@ chained record is the start.
 
 A connector declares how its harness is ended: `process_group` or `native_pid` (the npm wrapper of
 Codex hides the native binary), plus a grace. Seal-time termination follows it. See D30 and
-[TERMINATION](archive/TERMINATION.md).
+[TERMINATION](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/archive/TERMINATION.md).
 
 ## D23. Harness tiers.
 
@@ -232,7 +232,7 @@ must be stripped before anything is published (open: [TODO](../TODO.md#known-iss
 `Confirmed` means: a process-table sweep after signalling found no member of the owned set alive,
 confirmed by a second sweep. The owned set is the root and what the daemon could reach by walking
 its descendants. A process that left the walk before the first snapshot is outside it. The limit is
-stated, not hidden. Full contract and per-platform windows: [TERMINATION](archive/TERMINATION.md).
+stated, not hidden. Full contract and per-platform windows: [TERMINATION](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/archive/TERMINATION.md).
 
 ## D36. Two-tier redaction on the wire leg, and a harness-agnostic recorder.
 
@@ -450,7 +450,7 @@ choice the participant can make through the connector.
 A tool command therefore runs with the participant's full access. It can reach Goal Cup Proxy's control
 file, its own session file, the shared config homes and the real `~/.codex` and `~/.claude`, and
 use a tool that ignores `HTTPS_PROXY`. Traffic to an unlisted host is tunnelled and noted
-([CHEAT-CHECKLIST](archive/CHEAT-CHECKLIST.md)). D57 adds that connectors run chat mode and set no
+([CHEAT-CHECKLIST](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/archive/CHEAT-CHECKLIST.md)). D57 adds that connectors run chat mode and set no
 approval or permission option. The v5 `Launch` fields `allowed_tool_rule` and
 `process_handoff_digest` stay readable and are written empty. The verifier names no harness for
 them: both present and well-formed, or both absent.
@@ -817,7 +817,7 @@ the agent pulls, and nothing is sent to it.
   missing file, or one written more than 5 minutes ago, is "unknown right now" and exit 1. The goal-cup skill tells the agent the command
   exists. The skill reaches only harnesses with a `skills_dir` (Codex, Claude Code); Hermes and Amp
   need a skills folder measured locally before their connectors get one.
-- **The same answer as a tool** ([fix plan v9](research/results/2026-10-22-fix-plan-v9.md)).
+- **The same answer as a tool** ([fix plan v9](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-22-fix-plan-v9.md)).
   `goalcup mcp` is a read-only MCP server on stdin and stdout whose one tool, `time_left`, returns
   what `goalcup time-left` prints, so the agent can ask whatever its `PATH`. The participant adds
   it to the harness's MCP servers (D67: `goalcup prep` prints the lines from the connector's
@@ -833,8 +833,8 @@ the agent pulls, and nothing is sent to it.
 recommend how to achieve it but they do it, we dont change harness settings". Answering a
 permission prompt is typing, and the participant may type only "keep going" (RULES), so a harness
 that stops to ask for approval stalls until its deadline (lx-codex and lx-claude, 22 Oct:
-[results](research/results/2026-10-22-local-test-day.md),
-[plan v4](research/results/2026-10-22-fix-plan-v4.md)).
+[results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-22-local-test-day.md),
+[plan v4](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-22-fix-plan-v4.md)).
 
 - **Goal Cup recommends, the participant configures.** Each harness doc
   (`docs/harnesses/<id>.md`, "Run without permission prompts") names the exact setting and where it
@@ -888,7 +888,7 @@ gone: the agent pushes with the participant's one-repo token from the project fo
 still holds no key, setup still has four steps and no GitHub, and a real run still names its
 own repository at start. Read D71 for those clauses.*
 
-23 Oct 2026, owner ruling ([plan](archive/2026-10-23-simple-setup.md), archived): "goalcup observes, it
+23 Oct 2026, owner ruling ([plan](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/archive/2026-10-23-simple-setup.md), archived): "goalcup observes, it
 should not store any key and should not pass keys anywhere. The agent can push to any repo, that's
 ok." Goal Cup Proxy reads, stores, logs and passes no key, GitHub token included.
 
@@ -937,7 +937,7 @@ ok." Goal Cup Proxy reads, stores, logs and passes no key, GitHub token included
 ## D70. The release is the list; the server refuses old versions in the competition; `--dev` never competes.
 
 *Owner, 23 Oct 2026; cut down 25 Oct 2026.* Settles D68's open pin question
-([design](research/RELEASE-IS-THE-LIST.md)). A connector is accepted by being merged and shipped in
+([design](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/RELEASE-IS-THE-LIST.md)). A connector is accepted by being merged and shipped in
 a release, as before. Releases may continue through the cup, and the 6 Nov release is not a
 cutoff; a merged connector ships in the next point release.
 
@@ -1014,7 +1014,7 @@ approval (R1).
   SSH key, the agent overrode `GIT_SSH_COMMAND` unprompted within about two minutes and used
   the participant's own key; a dry-run push to any of the participant's repositories, a private
   one the token cannot reach included, would have succeeded. Nothing was pushed
-  ([results](research/results/2026-10-26-mac-retest.md)). So no document may say the agent can
+  ([results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-26-mac-retest.md)). So no document may say the agent can
   reach only the run's repository. Mitigations today: a passphrase or per-use confirmation on
   the SSH key (for example the 1Password SSH agent with approval), or the Docker cell. Planned:
   a start-time warning (0.7.x) and a macOS sandbox for the agent (later). Setup no longer makes a keys file.
@@ -1175,9 +1175,9 @@ chat --continue` resumes the last session in a `HERMES_HOME` and exits 1 when th
 ## D74. The model host is the connector's default, or the one address the harness's own config names.
 
 *28 Oct 2026, owner ruling in the Vercel Gateway session
-([results](research/results/2026-10-vercel-gateway.md)); the
-[spec](plans/2026-10-28-one-capture-system-spec.md), [plan](plans/2026-10-28-one-capture-system.md)
-and [decision ledger](plans/2026-10-28-one-capture-system-ledger.md) hold the detail.* Measured on 28 Oct: Claude Code pointed at Vercel AI Gateway sent its model calls
+([results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-vercel-gateway.md)); the
+[spec](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-28-one-capture-system-spec.md), [plan](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-28-one-capture-system.md)
+and [decision ledger](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-28-one-capture-system-ledger.md) hold the detail.* Measured on 28 Oct: Claude Code pointed at Vercel AI Gateway sent its model calls
 through an opaque tunnel, 0 wire requests. Goal Cup Proxy picked its hosts three ways
 (`providers.toml`, `[[capture.hosts]]`, D62's `model_host_from`), so every gateway was a special
 case. One rule set now holds for every harness, with no vendor list. D1, D36 and D61 stand: Goal
@@ -1233,8 +1233,8 @@ This supersedes D62's refusal of a missing value (it now holds only with `absent
 
 ## D75. One goalcup process records everything, and the process that starts the harness is its watchdog.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L5, R3, R3a and R3b); asked by
-[PRD-02](plans/2026-10-30-v1.0/PRD-02-recorder-core.md) and [PRD-00](plans/2026-10-30-v1.0/PRD-00-index.md) done item 6.*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L5, R3, R3a and R3b); asked by
+[PRD-02](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-02-recorder-core.md) and [PRD-00](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md) done item 6.*
 
 - One goalcup process holds the proxy, the session-file reader, the masker, the writer and the
   uploader. No producers, no shared queue, no failure budget.
@@ -1256,16 +1256,16 @@ This supersedes D4 and D58.
 
 ## D76. The record format is GCR1, and the part file is the upload unit.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L7, F1, F2, H8 and U1) and the
-owner decisions of 29 Oct; asked by [PRD-01](plans/2026-10-30-v1.0/PRD-01-record-format.md) and
-[PRD-00](plans/2026-10-30-v1.0/PRD-00-index.md) done item 6.*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L7, F1, F2, H8 and U1) and the
+owner decisions of 29 Oct; asked by [PRD-01](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-01-record-format.md) and
+[PRD-00](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md) done item 6.*
 
 - GCR1: binary framing, raw bytes, one stream per WebSocket direction, one link per flush, zstd
   with a 2^27 window written at record time. No reader for older formats.
 - A session file's path is its ID. Session files are not compared byte for byte with the disk.
 - The part file is the upload unit. A chunk goes every 5 minutes or when 16 MiB waits. Retry
   backoff resets when the server's offset moves and is capped short
-  ([PRD-06](plans/2026-10-30-v1.0/PRD-06-uploader-compression.md)). A local part file is pruned once the server
+  ([PRD-06](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-06-uploader-compression.md)). A local part file is pruned once the server
   confirms it.
 
 This supersedes D53, D54 and D55, D2 where it asks for a byte-for-byte match with the disk, and
@@ -1273,8 +1273,8 @@ D64's backoff clause.
 
 ## D77. Counts are written counts.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) R6 and R7); asked by
-[PRD-01](plans/2026-10-30-v1.0/PRD-01-record-format.md) section 9 and [PRD-10](plans/2026-10-30-v1.0/PRD-10-cli-participant.md).*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) R6 and R7); asked by
+[PRD-01](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-01-record-format.md) section 9 and [PRD-10](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md).*
 
 The participant, status, heartbeat and server see only counts of bytes already written, and how
 long recording was off. A model request counts once its bytes are in the record. No screen claims
@@ -1285,9 +1285,9 @@ This supersedes no entry.
 
 ## D78. Every loss is a gap, and a full disk gets no special handling.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) R2, R4 and section 7) and the
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) R2, R4 and section 7) and the
 owner decisions of 29 Oct; asked by the run 1 handover, items 1 to 4, and
-[PRD-02](plans/2026-10-30-v1.0/PRD-02-recorder-core.md) section 5.*
+[PRD-02](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-02-recorder-core.md) section 5.*
 
 - Every loss is a gap with a start, an end, a reason and the lost bytes when known. No loss is
   silent.
@@ -1301,7 +1301,7 @@ also carries its end and the lost bytes.
 
 ## D79. No caps of our own.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) R5) and the owner decisions of
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) R5) and the owner decisions of
 29 Oct; [VISION](../VISION.md), owner answers 2 and 3.*
 
 No cap on streams, files, subagents, connections or a run's size. A kept limit guards a real cost
@@ -1313,8 +1313,8 @@ go with D75.
 
 ## D80. Masking happens before any byte reaches disk: option b, with a left word boundary.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) M1) and the owner decisions of
-29 Oct (option b); asked by [PRD-05](plans/2026-10-30-v1.0/PRD-05-masking.md).*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) M1) and the owner decisions of
+29 Oct (option b); asked by [PRD-05](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-05-masking.md).*
 
 - Every secret rule stays. The URL password rule is added. The email rule and the Codex
   rate-limit rules go.
@@ -1333,8 +1333,8 @@ This supersedes, in part, D14 (the evidence is a MASK record), D36 (the rule lis
 
 ## D81. One host list for every harness.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) H1 to H5); asked by
-[PRD-03](plans/2026-10-30-v1.0/PRD-03-proxy.md) and [PRD-11](plans/2026-10-30-v1.0/PRD-11-connectors-harnesses.md).*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) H1 to H5); asked by
+[PRD-03](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-03-proxy.md) and [PRD-11](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-11-connectors-harnesses.md).*
 
 - Shared model hosts (providers, gateways, cloud model services, vendor backends), hosts the
   participant registers and hosts the harness config names are decrypted and recorded. A gateway
@@ -1351,8 +1351,8 @@ per-connector host rules). D1's no-base-URL rule stands.
 
 ## D82. Harness tiers come from the test pad.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) T3 and T4); asked by
-[PRD-12](plans/2026-10-30-v1.0/PRD-12-test-pad.md).*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) T3 and T4); asked by
+[PRD-12](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-12-test-pad.md).*
 
 A harness is "verified on `<version>`", "not verified" with a reason, or "not supported".
 `connectors/tiers.toml` is the one source. A tier says how well goalcup records a harness, not
@@ -1362,8 +1362,8 @@ This supersedes no entry; D23 stays retired.
 
 ## D83. Usage stats are read after upload.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) S2 and R8); asked by
-[PRD-09](plans/2026-10-30-v1.0/PRD-09-usage-research-stats.md).*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) S2 and R8); asked by
+[PRD-09](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-09-usage-research-stats.md).*
 
 `goalcup-verify usage` reads the record and the harness's own session files and writes tokens,
 models and calls per call, per subagent and per run. An organizer job stores them as JSON in R2.
@@ -1374,9 +1374,9 @@ worked out is this entry.
 
 ## D84. What goalcup 1.0 removes.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L3, L6 and L7); asked by
-[PRD-00](plans/2026-10-30-v1.0/PRD-00-index.md) "Not in this build", [PRD-07](plans/2026-10-30-v1.0/PRD-07-worker-server.md),
-[PRD-10](plans/2026-10-30-v1.0/PRD-10-cli-participant.md) and [PRD-13](plans/2026-10-30-v1.0/PRD-13-cuts.md).*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L3, L6 and L7); asked by
+[PRD-00](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md) "Not in this build", [PRD-07](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-07-worker-server.md),
+[PRD-10](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md) and [PRD-13](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-13-cuts.md).*
 
 - Removed: signing and receipts, pins, deny lists, the connector contract freeze, the termination
   proof, the control API, `goalcup login`, `doctor`, `mcp` and `--dev`. Also the research
@@ -1394,8 +1394,8 @@ and `doctor`) and D70 (pins and `--dev`).
 
 ## D85. goalcup ends the harness only at the deadline, on `goalcup seal` and on the server's `stop`.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L6); asked by
-[PRD-02](plans/2026-10-30-v1.0/PRD-02-recorder-core.md) section 8 and [PRD-10](plans/2026-10-30-v1.0/PRD-10-cli-participant.md).*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) L6); asked by
+[PRD-02](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-02-recorder-core.md) section 8 and [PRD-10](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md).*
 
 SIGTERM goes to the harness tree, then SIGKILL after 10 s. `goalcup seal` refuses inside the
 harness. There is no termination proof (default, PRD-00 question 2).
@@ -1405,8 +1405,8 @@ D66.
 
 ## D86. `goalcup setup` writes the auto-update switch, and the no-prompt values after one question.
 
-*30 Oct 2026, owner ledger ([OWNER-DECISIONS](plans/2026-10-30-v1.0/OWNER-DECISIONS.md) H7 and H9); asked by
-[PRD-10](plans/2026-10-30-v1.0/PRD-10-cli-participant.md) and [PRD-11](plans/2026-10-30-v1.0/PRD-11-connectors-harnesses.md).*
+*30 Oct 2026, owner ledger ([OWNER-DECISIONS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md) H7 and H9); asked by
+[PRD-10](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-10-cli-participant.md) and [PRD-11](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-11-connectors-harnesses.md).*
 
 `goalcup setup` always writes the connector's auto-update switch (`update_off`) into goalcup's
 own isolated harness home. After one question it writes the no-prompt values there too, never into

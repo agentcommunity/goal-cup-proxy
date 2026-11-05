@@ -872,6 +872,31 @@ lifecycle("a step that fails does not stop the others", async (r) => {
   assert.deepEqual(kinds(r), ["ended"]);
 }, HOUR);
 
+lifecycle("a failing purge step does not stop the other cron steps", async (r) => {
+  const run = await r.start(await r.cred("alice"), "s1");
+  // A Worker deployed before the purge migration: the database has no such function.
+  const purge = mock.method(LocalDb.prototype, "purgeDevices", async () => {
+    throw new Error("no function upload_purge_device_requests");
+  });
+  const closeRun = mock.method(LocalDb.prototype, "closeRun");
+  const logged: string[] = [];
+  const log = mock.method(console, "error", (...args: unknown[]) => void logged.push(args.map(String).join(" ")));
+  try {
+    await r.tick();
+    r.at(settled(run.deadline_at));
+    r.after(24 * HOURS + 1); // now the closeRuns step has a run to close
+    await r.tick();
+  } finally {
+    purge.mock.restore();
+    closeRun.mock.restore();
+    log.mock.restore();
+  }
+  assert.equal(purge.mock.callCount(), 2, "the purge step runs on every tick");
+  assert.equal(closeRun.mock.callCount(), 1, "closeRuns did not run");
+  assert.equal(r.storedRun(run.run_id).status, "incomplete");
+  assert.equal(logged.filter((l) => l.startsWith("tick purgeDevices:")).length, 2, logged.join("\n"));
+}, HOUR);
+
 lifecycle("while the maintenance switch is on the cron does nothing", async (r) => {
   await r.start(await r.cred("alice"), "s1");
   await runTick({ ...r.env, MAINTENANCE: "on" });

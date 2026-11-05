@@ -5,6 +5,7 @@
 //! code lives (P14): the only timers are `approve`'s. No token or credential is printed.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -77,6 +78,9 @@ pub fn run(a: &Args) -> ExitCode {
         vars: super::env_vars(),
         server,
     };
+    if let Some(t) = crate::proxy::proxy_network(&ctx.vars) {
+        return fail(&t);
+    }
     match prepare(a, &ctx, &mut std::io::stdout()) {
         Err(stop) => {
             say(&stop.text);
@@ -121,7 +125,7 @@ pub(super) fn hand_over(ready: Ready) -> ExitCode {
         let handler = on_signal as *const () as libc::sighandler_t;
         // SAFETY: `signal` with a handler that does nothing.
         unsafe { libc::signal(libc::SIGINT, handler) };
-        println!("{line}");
+        tell(&line);
     });
     let code = watchdog::run(plan, facts);
     // Joined before the reset, so the thread cannot install the handler after it.
@@ -135,14 +139,21 @@ pub(super) fn hand_over(ready: Ready) -> ExitCode {
     let refused =
         code == ExitCode::from(watchdog::MASK_REFUSED) && !super::status_json(&dir).exists();
     let not_started = code == ExitCode::from(watchdog::NOT_STARTED);
-    print!(
+    let _ = write!(
+        std::io::stdout(),
         "{}",
         finish::closing(&dir, &name, &run, refused, not_started)
     );
     if !refused {
-        finish::wrap_up(&dir, &mut |l| println!("{l}"));
+        finish::wrap_up(&dir, &mut tell);
     }
     if refused { ExitCode::from(1) } else { code }
+}
+
+/// One line to the terminal. A closed terminal is not an error: the run goes on, so a failed
+/// write is dropped (`println!` would panic on it).
+fn tell(line: &str) {
+    let _ = writeln!(std::io::stdout(), "{line}");
 }
 
 fn stop(text: String) -> Stop {
@@ -167,6 +178,13 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
         (_, _, Some(_)) => RunMode::Competition,
         _ => return Err(stop(text::NEEDS_REPO.to_owned())),
     };
+    // `load` reads a file for a `/` or `.toml`: in a competition run only built-ins count.
+    if mode == RunMode::Competition
+        && a.harness
+            .is_some_and(|h| h.contains('/') || h.ends_with(".toml"))
+    {
+        return Err(stop(text::FILE_FLAGS_COMPETE.to_owned()));
+    }
     // Step 1: load the connector. `load` only reads, so a refused start has still created nothing.
     let saved = super::saved_harness(&c.home);
     let id = match (a.connector, a.harness.map(str::to_owned).or(saved)) {
@@ -205,6 +223,9 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
     let Some(connector) = loaded else {
         return Err(stop(text::NO_HARNESS_SAVED.to_owned()));
     };
+    if !connector::launch::resolve_program(&connector.program, &c.vars).is_absolute() {
+        return Err(stop(text::not_installed(&connector.name)));
+    }
     let env = Env {
         vars: c.vars.clone(),
         workspace: c.project.clone(),
@@ -216,7 +237,7 @@ fn check(a: &Args, c: &Ctx) -> Result<Checked, Stop> {
     let plan = connector::plan(
         &connector,
         &env,
-        &super::isolated_home(&c.home, &connector.id),
+        &super::connector_home(&c.home, &connector),
     );
     if let Some(r) = &plan.refusal {
         return Err(stop(text::refusal(r)));
@@ -286,15 +307,20 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     // Step 9: the launch block.
     let (local_wall, deadline) = deadline_ms(opened.deadline);
     let mut lines = vec![text::run_kind(mode).to_owned()];
-    lines.extend(connector.first_screen.clone());
+    lines.extend(plan.effective.first_screen.clone());
     lines.extend(first_message(a, c, prompt.as_deref(), &opened.run)?);
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(c.server.host()));
-    lines.extend(plan.version_notes.clone());
+    // An unread version is said once: its note (recorded) is this line.
     if plan.harness_version.is_none() {
         log::line(&entry_dir, "version_unread", &[]);
-        lines.push(text::version_unread(&name, c.server.host().is_some()));
+        let rules = connector.unread_rules();
+        let upload = c.server.host().is_some();
+        lines.push(text::version_unread(&name, upload, rules.as_deref()));
+    } else {
+        lines.extend(plan.version_notes.clone());
     }
+    lines.extend(plan.trust_notes.clone());
     lines.push(tier_line(
         &name,
         plan.harness_version.as_deref(),
@@ -372,14 +398,13 @@ pub(super) fn start_facts(
         segment: part.segment,
         entry_dir: part.entry_dir,
         deadline: part.deadline,
-        server_time: None,
         local_wall: part.local_wall,
         workspace: project.to_path_buf(),
         // Each of these five becomes the typed field of the same name (S17) with one edit.
         connector: to_value(&plan.connector).unwrap_or_default(),
         harness_version: plan.harness_version.clone(),
+        version_row: plan.version_row.clone(),
         keep: vars.get("GOALCUP_KEEP_PARTS").is_some_and(|v| v == "1"),
-        build: None,
         hosts: to_value(&plan.hosts).unwrap_or_default(),
         hosts_sha256: plan.hosts.sha256().to_owned(),
         native: to_value(&plan.native).unwrap_or_default(),
@@ -400,26 +425,13 @@ pub(super) fn start_facts(
 /// Section 8: the push block and the prompt, written to `first-message.txt` and put on the
 /// clipboard; the lines the launch block shows for them.
 fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<Vec<String>, Stop> {
-    let block = a.repo.map(|repo| {
-        let token = c.project.join(".env.local");
-        let url = format!("https://github.com/{repo}");
-        push::block(
-            &url,
-            "Goal Cup",
-            text::SUPPORT_ADDRESS,
-            ".env.local",
-            &token,
-        )
-    });
     let Some(prompt) = prompt else {
-        let Some(block) = block else {
-            return Ok(vec![]);
-        };
-        push::clipboard::copy(&block.join("\n"), &c.vars);
-        let mut lines = vec![text::PUSH_FRAME.to_owned()];
-        lines.extend(block.iter().map(|l| format!("  {l}")));
-        return Ok(lines);
+        return Ok(a
+            .repo
+            .map(|repo| push_only(repo, &c.project, &c.vars))
+            .unwrap_or_default());
     };
+    let block = a.repo.map(|repo| push_block(repo, &c.project));
     let dir = super::run_dir(&c.home, run);
     let file = dir.join("first-message.txt");
     let message = push::write_first_message(&dir, block.as_deref(), prompt)
@@ -428,20 +440,68 @@ fn first_message(a: &Args, c: &Ctx, prompt: Option<&str>, run: &str) -> Result<V
     Ok(vec![text::first_message(&file, copied)])
 }
 
+fn push_block(repo: &str, project: &Path) -> Vec<String> {
+    let token = project.join(".env.local");
+    let url = format!("https://github.com/{repo}");
+    push::block(
+        &url,
+        "Goal Cup",
+        text::SUPPORT_ADDRESS,
+        ".env.local",
+        &token,
+    )
+}
+
+/// The push lines alone, with no prompt: put on the clipboard, and the lines the launch block
+/// shows for them.
+pub(super) fn push_only(
+    repo: &str,
+    project: &Path,
+    vars: &BTreeMap<String, String>,
+) -> Vec<String> {
+    let block = push_block(repo, project);
+    push::clipboard::copy(&block.join("\n"), vars);
+    let mut lines = vec![text::PUSH_FRAME.to_owned()];
+    lines.extend(block.iter().map(|l| format!("  {l}")));
+    lines
+}
+
 /// One row of `tiers.toml`; the file also holds a reason, which is not shown.
 #[derive(serde::Deserialize, Default)]
 struct Row {
     tier: String,
     version: String,
+    /// Where it was verified, as the pad's `os_id` (`darwin-arm64`); absent or `""` is unknown.
+    #[serde(default)]
+    os: String,
+    /// The verified builds, newest first; with none, a non-empty `(version, os)` is the one build.
+    #[serde(default)]
+    builds: Vec<Build>,
+}
+
+/// One verified `[[<id>.builds]]` entry.
+#[derive(serde::Deserialize)]
+struct Build {
+    version: String,
+    #[serde(default)]
+    os: String,
 }
 
 /// Section 6: the tier line of the connector, from `tiers.toml`.
 fn tier_line(name: &str, probed: Option<&str>, id: &str) -> String {
     let mut rows: BTreeMap<String, Row> = toml::from_str(TIERS).unwrap_or_default();
     let row = rows.remove(id).unwrap_or_default();
-    let number = |t: &&str| t.starts_with(|c: char| c.is_ascii_digit());
-    let version = probed.and_then(|v| v.split_whitespace().find(number));
-    text::tier_line(name, version, &row.tier, &row.version)
+    let text = |v: &str| connector::version::parse(v).map_or(v.to_owned(), |p| p.text);
+    let mut builds: Vec<(String, String)> = (row.builds.iter())
+        .filter(|b| !b.version.is_empty())
+        .map(|b| (text(&b.version), b.os.clone()))
+        .collect();
+    if builds.is_empty() && !row.version.is_empty() {
+        builds.push((text(&row.version), row.os));
+    }
+    let version = probed.and_then(connector::version::parse).map(|v| v.text);
+    let os = std::env::consts::OS;
+    text::tier_line(name, version.as_deref(), &row.tier, &builds, os)
 }
 
 pub(super) fn wall_ms() -> u64 {
@@ -463,7 +523,78 @@ mod tests {
     /// A tiers file that stops parsing would turn every agent into "not verified" without a word.
     #[test]
     fn tiers_file_parses() {
-        let rows = toml::from_str::<std::collections::BTreeMap<String, super::Row>>(super::TIERS);
+        type Rows = std::collections::BTreeMap<String, super::Row>;
+        let rows = toml::from_str::<Rows>(super::TIERS);
         assert!(rows.is_ok_and(|r| !r.is_empty()));
+        let with = "[x]\ntier = \"verified\"\nversion = \"\"\n[[x.builds]]\nversion = \"1.0.0\"\nos = \"linux-x86_64\"\n";
+        let rows = toml::from_str::<Rows>(with).unwrap();
+        assert_eq!(rows["x"].builds[0].version, "1.0.0");
+    }
+
+    // Harness names are stand-ins: rule_code bans real ones in core code.
+    #[test]
+    fn tier_line_reads_v_prefix_and_trailing_dot() {
+        let line = super::tier_line(
+            "Fakev",
+            Some("Fakev Agent v0.22.6 (2026.9.24)"),
+            "fakev-cli",
+        );
+        assert!(line.starts_with("Fakev 0.22.6: "), "{line}");
+        let line = super::tier_line("Fakec", Some("Fakec CLI 1.0.105."), "fakec-cli");
+        assert!(line.starts_with("Fakec 1.0.105: "), "{line}");
+    }
+
+    #[test]
+    fn tier_line_says_build_and_os() {
+        use crate::cli::text::tier_line;
+        let b: Vec<(String, String)> = [
+            ("0.22.6", "darwin-arm64"),
+            ("0.22.5", "darwin-arm64"),
+            ("0.22.5", "linux-x86_64"),
+        ]
+        .map(|(v, os)| (v.to_owned(), os.to_owned()))
+        .into();
+        let row = |v, b: &[_], host| tier_line("Fakev", v, "verified", b, host);
+        assert_eq!(
+            row(Some("0.22.5"), &b, "macos"),
+            "Fakev 0.22.5: verified with goalcup on 0.22.5 (macOS)."
+        );
+        assert_eq!(
+            row(Some("0.22.7"), &b, "macos"),
+            "Fakev 0.22.7: not verified on 0.22.7; verified with goalcup on 0.22.6, 0.22.5 (macOS). goalcup records it the same way; goalcup status says if model requests are missing."
+        );
+        assert_eq!(
+            row(Some("0.22.6"), &b, "linux"),
+            "Fakev 0.22.6: not verified on 0.22.6; verified with goalcup on 0.22.5 (Linux). goalcup records it the same way; goalcup status says if model requests are missing."
+        );
+        assert_eq!(
+            row(Some("0.22.6"), &b[..2], "linux"),
+            "Fakev 0.22.6: verified with goalcup on 0.22.6 (macOS), not on Linux. goalcup records it the same way; goalcup status says if model requests are missing."
+        );
+        assert_eq!(
+            row(None, &b, "macos"),
+            "Fakev: verified with goalcup on 0.22.6, 0.22.5 (macOS); goalcup cannot say the build here is one of those."
+        );
+        let mac = [
+            ("0.22.6".to_owned(), "darwin-arm64".to_owned()),
+            ("0.22.6".to_owned(), "darwin-x86_64".to_owned()),
+        ];
+        assert_eq!(
+            row(None, &mac, "linux"),
+            "Fakev: verified with goalcup on 0.22.6 (macOS), not on Linux; goalcup cannot say the build here is one of those."
+        );
+        let one = [("2.1.312".to_owned(), String::new())];
+        assert_eq!(
+            tier_line("Fake Code", Some("2.1.312"), "verified", &one, "linux"),
+            "Fake Code 2.1.312: verified with goalcup on 2.1.312."
+        );
+        assert_eq!(
+            tier_line("Fakev", Some("0.22.6"), "not verified", &[], "linux"),
+            "Fakev 0.22.6: not verified. goalcup records what reaches it; goalcup status says if model requests are missing."
+        );
+        assert_eq!(
+            tier_line("Fakev", None, "not supported", &[], "linux"),
+            "Fakev: not supported. goalcup records its session files and the connections it can see, not its model calls."
+        );
     }
 }

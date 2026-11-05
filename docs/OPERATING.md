@@ -13,7 +13,7 @@ names secrets only.
 
 | | Production | Staging | Local |
 |---|---|---|---|
-| Worker | `goalcup-ingest` at `https://ingest.agentcommunity.org` (custom domain, no workers.dev) | `goalcup-ingest-staging` at `https://goalcup-ingest-staging.b-9a5.workers.dev` | `npm run dev` at `http://localhost:8787` |
+| Worker | `goalcup-ingest` at `https://ingest.agentcommunity.org` (custom domain, no workers.dev) | `goalcup-ingest-staging` at `https://<staging host>` | `npm run dev` at `http://localhost:8787` |
 | Trace bucket | `goalcup-traces` (lock on `traces/goalcup-cup-2026/` only) | `goalcup-traces-staging` (no lock) | simulated on disk |
 | Usage bucket | `goalcup-usage` (the owner creates it with the production deploy) | `goalcup-usage-staging` | none |
 | Competition event | `EVENT_ID` in `wrangler.toml`: now `goalcup-dryrun-2026`, then `goalcup-cup-2026` | `goalcup-dryrun-staging` | any |
@@ -45,16 +45,15 @@ All times UTC.
 
 | Date | What |
 |---|---|
-| 23 Oct to 6 Nov 00:00 | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
-| 6 Nov | Release 1.0.0 ([Releasing](#releasing)), then the owner deploys production ([Deploy](#deploy)), then the `EVENT_ID` switch, any time from 00:00 on 6 Nov to 00:00 on 7 Nov ([EVENT_ID switch](../server/worker/README.md#event_id-switch-6-nov-2026)). Releases may continue during the cup. |
-| 7 Nov 00:00 | Start window opens. It lasts 24 hours. |
-| 8 Nov 00:00 | Start window closes |
+| From 23 Oct until the day before the start window opens | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
+| The day before the start window opens | Release 1.0.0 ([Releasing](#releasing)), then the owner deploys production ([Deploy](#deploy)), then the `EVENT_ID` switch, any time on that day ([EVENT_ID switch](../server/worker/README.md#event_id-switch)). The start window itself: [RULES](RULES.md#timeline). Releases may continue during the cup. |
+| Start window | Date and length: [RULES](RULES.md#timeline). |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
 
 Before the window opens:
 
 1. The `goalcup-cup-2026` row in the website's `events` table has `start_window_opens` =
-   `2026-11-07T00:00:00Z` and `start_window_closes` = `2026-11-08T00:00:00Z`.
+   the start window's opening and closing times from [RULES](RULES.md#timeline) (UTC).
 2. Production carries the 1.0 Worker ([Deploy](#deploy)) with `MIN_COMPETITION_VERSION` at `1.0.0`.
 3. The `EVENT_ID` switch is done. Staging keeps its own event ids.
 4. The pad's release rows hold ([Releasing](#releasing)).
@@ -109,10 +108,10 @@ The pad answers whether a connector, on this build, against staging, records and
 server holds whole. `python3.11 scripts/pad/pad scripts/pad/runs/<mode>.toml` runs it in a build sandbox
 and prints one table; the ladder is `micro`, `cycle` and `full`, and the other files in
 `scripts/pad/runs/` are acceptance (`a1` to `a5`), release-check (`core-*`), a template (`mini`) and a fallback (`kill-codex`) rows. Exit 0 means every row passed, 1 a
-failure, 3 inconclusive, 2 a usage error. Model keys are named in `scripts/pad/pad.toml` and read by name
+failure, 3 inconclusive, 2 a usage error. The staging Worker's address is not in the repo: set `PAD_STAGING_URL` (an `https` address whose first host label contains `staging`) or `staging_url` in an untracked settings file. Model keys are named in `scripts/pad/pad.toml` and read by name
 from the conductor's environment; they and the staging approval and database credentials never enter the
 sandbox. `scripts/pad/table` writes the rows and `PAD-RESULTS.md`, and
-`scripts/pad/table --release-check <commit>` is the release gate ([Releasing](#releasing)). Design and
+`scripts/pad/table --release-check <commit>` is the release gate ([Releasing](#releasing)). For the core harnesses it needs a passing `full` row for every build in the harness file's `release_versions` on macOS arm64 (`darwin-arm64`): for Hermes, **0.22.5 and 0.22.6 both verified**. Design and
 settings: `scripts/pad/pad.toml` and the mode files in `scripts/pad/runs/`.
 
 Delete every test run, database rows and R2 objects, in one go (from `server/worker`):
@@ -129,8 +128,21 @@ and on each usage bucket that exists. It touches only the four bucket and prefix
 before the database changes, so a failed listing changes nothing. A usage bucket that is missing or not open
 to the token (`404` or `403`) is skipped with one line; a usage bucket skipped under `--older-than` keeps its
 test objects until a run without `--older-than` with a token that reaches it. If the script reports objects
-not deleted, run it again without `--older-than`. Details:
+not deleted, it lists them in `delete-test-runs.failed`; retry only those with
+`sh scripts/delete-test-runs.sh --objects delete-test-runs.failed --yes`. Details:
 [Clean up test runs](../server/worker/README.md#clean-up-test-runs).
+
+### Release rows on the Mac
+
+Prerequisites: a clean checkout at the commit to release, `tmux`, the pad's usual environment (model keys,
+staging approval and fetch credentials) with `PAD_STAGING_URL` set, the Claude and ChatGPT sign-ins in
+`GOALCUP_SIGNIN_HOME` (default `~/gc-signin/home`), and Hermes 0.22.5 and 0.22.6 under `HARNESS_INSTALLS`
+(default `~/dev/harness-installs/hermes-cli-<version>/bin`). Then run `python3 scripts/pad/release-rows`: it builds
+HEAD into `~/gc-release-build/<sha8>`, checks the new build reaches staging, runs the 14 rows of
+`scripts/pad/runs/release/` in four chains at once, and ends with `scripts/pad/table` and the release check.
+If it stops at the reach check, allow that `goalcup` build in Little Snitch (or another network filter) and run it again.
+The two exec verdicts stay your judgement: it prints the `goalcup-verify dump` commands and where the verdict files go.
+To rerun one chain: `python3 scripts/pad/release-rows --only signin` (also `gateway`, `hermes-0.22.5`, `hermes-0.22.6`; `--dry-run` lists them).
 
 ## Fetch and check a run
 
@@ -214,6 +226,33 @@ The guard is a person: the Worker logs `large-run <run_id> stored=<bytes>` at ev
 row in `goal_cup_tracer.run_credentials`: its client then gets `401` and keeps its data, and the server stores nothing more for that run.
 That is a hand write to the shared database by the owner, not code. Bytes already under the lock cannot be
 deleted for 180 days.
+
+## New harness builds during the event
+
+goalcup never refuses a harness build. The canary only tells the maintainer that a build exists that no pad
+row has verified. It covers Claude Code, Codex, Amp and Hermes, needs `npm` and `curl` on PATH, and no keys.
+
+Run `python3.11 scripts/pad/canary` on the maintainer Mac every 2 hours for Claude Code, Codex and Hermes, and
+hourly for Amp (about 7 npm builds a day, [Amp section 2](harnesses/amp-cli.md#2-install-and-record-a-version)):
+`python3.11 scripts/pad/canary --only amp-cli`. Exit 0 means nothing new; 1 a new build, named in its line
+(read every line: a lookup can have failed too); 2 a lookup failed or the canary could not start: read the
+line, fix it or run again, before assuming nothing is new.
+
+Classify a new build within 2 hours, on the pad (serial, one Mac). Install that exact build on the Mac with the
+`install` line of `scripts/pad/harnesses/<id>.toml`, the version changed (for Hermes, the tag and the `--commit`
+hash). Copy `scripts/pad/runs/micro.toml`, set its `harness` and `key` lines for that harness (`key` names one
+in `scripts/pad/pad.toml`), add `where = "here"`, and run `python3.11 scripts/pad/pad <your copy>`. Without
+`where = "here"` the row runs in the sandbox image, on the build pinned there, not the new one. On the Mac, a row for one installed build sets `versions = ["<v>"]` and `here_path = ["<dir of that install's bin>"]` (absolute, put first on PATH for that run only; example: `scripts/pad/runs/here-hermes-0.22.6.toml`). Amp has no pad key (`key_kind = "none"`): install the build by hand
+and run it as in [Amp section 1](harnesses/amp-cli.md#1-run-one-prompt-in-chat-mode-first).
+
+| Outcome | Do |
+|---|---|
+| It records fine | Nothing to announce. |
+| The wire records fine but the native reader drifts | Note it and verify again after the event. The raw wire record is the evidence. |
+| The model is unreachable or a prompt blocks | Publish the downgrade line on the event page: the `install` line of the last verified build. |
+
+Never disqualify or refuse an entry on a version. Find the affected entries by `connector` and `harness_version`
+in the `start` event, then flag them; a start whose version could not be read has `harness_version` null.
 
 ## Bad days
 

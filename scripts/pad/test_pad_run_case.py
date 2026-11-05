@@ -358,6 +358,12 @@ class SignedInHome(unittest.TestCase):
                 pad.load_settings(row, self.PADCFG)
         self.assertEqual(pad.load_settings(dict(self.ROW, goalcup_home="/x/home"), self.PADCFG)["goalcup_home"], "/x/home")
 
+    def test_goalcup_home_tilde_is_expanded(self):
+        with mock.patch.dict(os.environ, {"HOME": "/u"}):
+            self.assertEqual(pad.load_settings(dict(self.ROW, goalcup_home="~/gc/home"), self.PADCFG)["goalcup_home"], "/u/gc/home")
+            with self.assertRaises(pad.Usage):
+                pad.load_settings(dict(self.ROW, goalcup_home="gc/home"), self.PADCFG)
+
     def test_goalcup_home_is_used_and_never_removed(self):
         run, home = (self.enterContext(tempfile.TemporaryDirectory()) for _ in range(2))
         harness_home = os.path.join(home, "harness")
@@ -372,7 +378,7 @@ class SignedInHome(unittest.TestCase):
 
     def test_key_none_has_no_key_route_and_no_gateway(self):
         s = pad.load_settings(dict(self.ROW, case="all"), self.PADCFG)
-        self.assertEqual(pad.case_list(s, {"gateway": {}})[0], ["direct", "dodger"])
+        self.assertEqual([c for c, _ in pad.case_list(s, {"gateway": {}})[0]], ["direct", "dodger"])
         self.assertEqual(pad.Run(s, "direct", self.PADCFG, {}, self.enterContext(tempfile.TemporaryDirectory())).key_names(), [])
         with self.assertRaises(pad.Usage):
             pad.load_settings(dict(self.ROW, case="gateway"), self.PADCFG)
@@ -388,3 +394,60 @@ class SignedInHome(unittest.TestCase):
         self.assertEqual(seen[0]["model_host"], "chatgpt.com")
         run = pad.Run(pad.load_settings(dict(self.ROW), self.PADCFG), "dodger", self.PADCFG, seen[0], d)
         self.assertEqual(run.harness["model_host"], "chatgpt.com")  # meta.json: harness.get("model_host")
+
+
+class PadOnly(unittest.TestCase):
+    """A harness section's pad_only entry is merged only for a matching version and recorded for the row."""
+
+    def setup_for(self, version):
+        # Stands in for lane F's scripts/pad/harness_version.py (parse, matches); setup imports it lazily.
+        stub = mock.Mock(matches=lambda text, spec: text == spec)
+        pad_dir, run, home = (self.enterContext(tempfile.TemporaryDirectory()) for _ in range(3))
+        os.mkdir(os.path.join(pad_dir, "harnesses"))
+        for name, text in (("base.yaml", "model: m\n"), ("ca.yaml", "providers:\n  goalcup-ca:\n    ssl_ca_cert: x\n")):
+            with open(os.path.join(pad_dir, "harnesses", name), "w") as f:
+                f.write(text)
+        with open(os.path.join(run, "prompt-source.txt"), "w") as f:
+            f.write("go")
+        r = bare()
+        r.run, r.keys, r.project, r.env = run, os.path.join(run, "keys"), os.path.join(run, "project"), {}
+        r.s = {"harness_id": "hermes-cli", "version": version, "key_files": [], "route_key": None}
+        r.h = {"version_cmd": "hermes --version"}
+        r.sec = {"files": {"config.yaml": "base.yaml"},
+                 "pad_only": [{"match": "0.22.6", "why": "needs the CA block", "files": {"config.yaml": "ca.yaml"}}]}
+
+        def fake_sh(argv, **kw):
+            out = "Hermes Agent v%s (2026.9.1)" % version if argv[-1] == "hermes --version" else '"%s"' % home
+            return mock.Mock(stdout=out, stderr="", returncode=0)
+        with mock.patch.dict("sys.modules", harness_version=stub), mock.patch.object(padrun, "PAD", pad_dir), \
+                mock.patch.object(padrun, "sh", fake_sh), mock.patch.object(padrun, "tool", lambda n: "/bin/" + n):
+            r.setup(None)
+        return r, open(os.path.join(home, "config.yaml")).read()
+
+    def test_ca_block_only_on_0_22_6(self):
+        r, text = self.setup_for("0.22.5")
+        self.assertNotIn("goalcup-ca", text)
+        self.assertEqual(r.st["pad_only"], [])
+        r, text = self.setup_for("0.22.6")
+        self.assertIn("goalcup-ca", text)
+        self.assertEqual(r.st["pad_only"], ["needs the CA block"])
+
+
+class VersionCmdEnv(unittest.TestCase):
+    def test_version_cmd_sees_pad_version(self):
+        seen = []
+        r = bare()
+        r.s, r.h = {"harness_id": "opencode-cli", "version": "1.18.0"}, {"version_cmd": "opencode --version"}
+        with mock.patch.object(padrun, "sh", lambda argv, **kw: seen.append(kw) or mock.Mock(stdout="", stderr="", returncode=0)):
+            with self.assertRaises(padrun.Step):  # no version printed: setup stops after the first call
+                r.setup(None)
+        self.assertEqual(seen[0]["env"]["PAD_VERSION"], "1.18.0")
+
+    def test_required_version_mismatch_fails_on_mac(self):
+        r = bare()
+        r.s, r.h = {"harness_id": "hermes-cli", "version": "0.22.6", "version_required": True}, {"version_cmd": "hermes --version"}
+        with mock.patch.object(padrun, "sh", lambda argv, **kw: mock.Mock(stdout="Hermes Agent v0.22.5\n", stderr="", returncode=0)):
+            with self.assertRaises(padrun.Step) as e:
+                r.setup(None)
+        self.assertEqual(e.exception.args[0], "FAIL")
+        self.assertIn("requested 0.22.6, found 0.22.5", e.exception.args[1])

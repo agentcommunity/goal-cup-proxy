@@ -150,6 +150,12 @@ class InstallTests(unittest.TestCase):
             self.assertFalse((self.home / profile).exists(), profile)
         self.assertEqual([p.name for p in self.home.iterdir()], [".local"])
 
+    def test_fish_gets_fish_add_path(self) -> None:
+        result = self.install(make_release(self.scratch()), SHELL="/opt/homebrew/bin/fish")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('fish_add_path "$HOME/.local/bin"', result.stdout)
+        self.assertNotIn("export PATH", result.stdout)
+
     def test_wrong_checksum_installs_nothing(self) -> None:
         release = make_release(self.root)
         sums = release / "SHA256SUMS"
@@ -166,6 +172,28 @@ class InstallTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(this_target(), result.stderr)
         self.assertEqual(list(self.home.iterdir()), [])
+
+    def test_wget_keeps_https_and_tls12(self) -> None:
+        # A PATH with no curl: only what install.sh runs before its first download, and a wget
+        # that logs its arguments and fails.
+        bin_dir = self.scratch()
+        for tool in ("sh", "uname", "mktemp", "rm", "grep", "sysctl", "ldd"):
+            found = shutil.which(tool)
+            if found:
+                (bin_dir / tool).symlink_to(found)
+        log = self.scratch() / "wget.log"
+        (bin_dir / "wget").write_text(f'#!/bin/sh\necho "$@" > "{log}"\nexit 1\n')
+        (bin_dir / "wget").chmod(0o755)
+        result = subprocess.run(
+            ["sh", str(INSTALL)],
+            env={"PATH": str(bin_dir), "HOME": str(self.home),
+                 "GOALCUP_RELEASE_BASE": "https://example.invalid/r"},
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("--https-only", log.read_text())
+        self.assertIn("--secure-protocol=TLSv1_2", log.read_text())
 
     # --- rollback -----------------------------------------------------------------------------
 
@@ -262,13 +290,11 @@ class InstallTests(unittest.TestCase):
                 self.assertEqual(log.read_text().strip(), "status --json")
                 self.assertEqual(self.tree(prefix), before)
 
-    def test_a_mode_that_is_not_recording_goes_on(self) -> None:
-        for mode in ("sealed", "practice"):
-            with self.subTest(mode=mode):
-                prefix, _, _ = self.guarded(stdout=status_line(mode))
-                result = self.install(self.newer(), "--prefix", str(prefix))
-                self.assert_upgraded(result, prefix)
-                self.assertNotIn(UNSURE, result.stderr)
+    def test_a_mode_that_is_not_recording_goes_on_only_when_sealed(self) -> None:
+        prefix, _, _ = self.guarded(stdout=status_line("sealed"))
+        result = self.install(self.newer(), "--prefix", str(prefix))
+        self.assert_upgraded(result, prefix)
+        self.assertNotIn(UNSURE, result.stderr)
 
     def test_force_skips_the_guard(self) -> None:
         for label, args, env in (("flag", ("--force",), {}), ("env", (), {"GOALCUP_FORCE": "1"})):
@@ -284,28 +310,33 @@ class InstallTests(unittest.TestCase):
         self.assert_upgraded(result, prefix)
         self.assertEqual(result.stderr, "")
 
-    def test_an_answer_that_cannot_be_read_gives_the_unsure_line_and_goes_on(self) -> None:
+    def test_an_answer_that_cannot_be_read_gives_the_unsure_line_and_refuses(self) -> None:
         signed = json.dumps({"payload": {"health": "online", "capture": {"run": "running"}},
                              "public_key": "ab" * 32, "signature": "cd" * 64}, indent=2) + "\n"
         cases = {"not json": {"stdout": "goalcup 9.8.7\n"},
                  "empty": {"stdout": ""},
                  "exit 3": {"stderr": "goalcup: could not read status.json", "rc": 3},
                  "a goalcup from before 1.0": {"stdout": signed},
-                 "an object for a mode": {"stdout": status_line({"mode": "recording"})}}
+                 "an object for a mode": {"stdout": status_line({"mode": "recording"})},
+                 "a mode it does not know": {"stdout": status_line("practice")},
+                 "exit 1 with output": {"stdout": status_line("sealed"), "rc": 1}}
         for label, answer in cases.items():
             with self.subTest(label):
-                prefix, _, _ = self.guarded(**answer)
+                prefix, _, before = self.guarded(**answer)
                 result = self.install(self.newer(), "--prefix", str(prefix))
-                self.assert_upgraded(result, prefix)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
                 self.assertIn(UNSURE, result.stderr)
+                self.assertEqual(self.tree(prefix), before)
 
-    def test_a_hanging_status_is_stopped_after_10_seconds_and_gives_the_unsure_line(self) -> None:
-        prefix, _, _ = self.guarded(hang=True)
+    def test_a_hanging_status_is_stopped_after_10_seconds_and_refuses(self) -> None:
+        prefix, _, before = self.guarded(hang=True)
         started = time.monotonic()
         result = self.install(self.newer(), "--prefix", str(prefix))
         took = time.monotonic() - started
-        self.assert_upgraded(result, prefix)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(UNSURE, result.stderr)
+        self.assertIn("--force", result.stderr)
+        self.assertEqual(self.tree(prefix), before)
         self.assertGreaterEqual(took, 9.5)
         self.assertLess(took, 25)
 

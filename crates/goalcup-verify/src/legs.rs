@@ -11,9 +11,14 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 const MIN: u64 = 60_000_000_000;
-/// A harness call may reach the wire this long after the harness logged it.
+/// A call's wire leg may land this long before or after the harness logged it: the call pairing
+/// (usage/mod.rs) assumes wire before harness, the cumulative rule after; both are tolerated.
 const LAG: u64 = 2 * MIN;
 const WIRE_ENDED: u64 = 10 * MIN;
+/// `wire_keeps_up` also compares the legs in each window of this length. 30 min, not the plan's
+/// 10: the wire side is widened by the lag both ways, and over 10 min that slack hid a steady
+/// loss of up to about a quarter of the calls.
+const WINDOW: u64 = 30 * MIN;
 const NOT_READ: &str = "the harness's own log is not read";
 const UNREAD: &str = "could not read the harness's own log";
 
@@ -224,21 +229,40 @@ struct Sweep {
 }
 
 impl Sweep {
-    /// Harness calls up to each harness time T against wire calls up to T plus the lag.
+    /// Harness calls up to each harness time T against wire calls up to T plus the lag; and,
+    /// so early wire-only calls cannot hide a later loss, the harness calls in the window from T
+    /// against the wire calls in it widened by the lag on both sides (a wire leg may land up to
+    /// the lag either side of the harness's time, so no window edge splits a pair).
     fn new(h: &[u64], w: &[u64]) -> Self {
         let mut s = Sweep::default();
+        let upto = |t: u64| w.partition_point(|&x| x <= t) as u64;
         for (j, &t) in h.iter().enumerate() {
             let n = j as u64 + 1;
-            let ex = n.saturating_sub(w.partition_point(|&x| x <= t.saturating_add(LAG)) as u64);
+            let ex = n.saturating_sub(upto(t.saturating_add(LAG)));
             s.top = s.top.max(ex);
-            if ex > tol(n) {
-                s.first.get_or_insert(t);
-                if ex >= s.worst {
-                    (s.worst, s.at) = (ex, t);
-                }
-            }
+            s.mark(t, n, ex);
+            let end = t.saturating_add(WINDOW);
+            // From `t` itself: `end` saturates at the end of time, where `x < end` would drop
+            // the calls at `t`.
+            let hw = h[j..].partition_point(|&x| x - t < WINDOW) as u64;
+            let before = w.partition_point(|&x| x < t.saturating_sub(LAG)) as u64;
+            let ww = upto(end.saturating_add(LAG)) - before;
+            // Not into `top` below the tolerance: a window's small shortfall is edge noise, not
+            // a count of harness calls with no recording.
+            s.mark(t, hw, hw.saturating_sub(ww));
         }
         s
+    }
+
+    /// Notes an excess of `ex` over `n` harness calls from `t` when it is above the tolerance.
+    fn mark(&mut self, t: u64, n: u64, ex: u64) {
+        if ex > tol(n) {
+            self.top = self.top.max(ex);
+            self.first.get_or_insert(t);
+            if ex >= self.worst {
+                (self.worst, self.at) = (ex, t);
+            }
+        }
     }
 
     fn span(&self) -> String {

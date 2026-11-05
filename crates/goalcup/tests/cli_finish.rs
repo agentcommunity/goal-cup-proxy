@@ -247,11 +247,11 @@ fn refused_and_unsent_end_at_the_end() {
 fn every_gap_reason_has_words() {
     let other = |n: u8| format!("other ({n})");
     let words = |n: u8| text::gap_words(&GapReason::from_u8(n).name());
-    for n in 1..=15u8 {
+    for n in 1..=16u8 {
         assert!(!words(n).is_empty());
         assert_eq!(words(n) == other(n), n == 8 || n == 9, "{n}: {}", words(n));
     }
-    for n in [0u8, 16, 200] {
+    for n in [0u8, 17, 200] {
         assert_eq!(words(n), other(n));
     }
     // A pinned host was passed through unread; nobody refused anything.
@@ -306,6 +306,31 @@ fn closing_prints_the_sealed_counts_and_never_invents_any() {
     put(&entry, "status.json", &sealed());
     let done = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, false);
     assert!(done.contains(text::PART_RECORDED) && done.contains("905"));
+}
+
+/// A sealed part with no harness says why, when the log has the reason; else the bare sentence.
+#[test]
+fn closing_names_why_the_harness_did_not_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let entry = part(dir.path());
+    std::fs::create_dir_all(&entry).unwrap();
+    put(
+        &entry,
+        "status.json",
+        &patch(&sealed(), json!({"harness": null})),
+    );
+    let log = entry.join("goalcup.log");
+    std::fs::write(&log, "2026-11-04T09:59:59Z boot port=8080\n").unwrap();
+    let bare = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, false);
+    assert!(bare.contains("Agent did not start.") && !bare.contains("io="));
+    std::fs::write(
+        &log,
+        "2026-11-04T10:00:00Z harness_failed io=PermissionDenied\n",
+    )
+    .unwrap();
+    let shown = goalcup::cli::finish::closing(&entry, "Agent", RUN, false, false);
+    assert!(shown.contains("permission denied") && shown.contains(text::PART_RECORDED));
+    assert!(shown.contains(&format!("goalcup continue {RUN}")));
 }
 
 /// A recorder that dies after writing `status.json` and before `ready` (exit 3, unsealed, no

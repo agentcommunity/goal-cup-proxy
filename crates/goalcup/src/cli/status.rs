@@ -167,7 +167,11 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
         let host = note_str(n, "host");
         let line = match note_str(n, "what") {
             Some("native_missing") => {
-                text::native_missing(note_str(n, "row").unwrap_or("session"), cx.name)
+                let row = note_str(n, "row").unwrap_or("session");
+                match note_str(n, "redirect") {
+                    Some(var) => text::native_missing_redirect(row, cx.name, var),
+                    None => text::native_missing(row, cx.name),
+                }
             }
             Some("native_other_device") => {
                 text::native_other_device(note_str(n, "path").unwrap_or("a folder"), cx.name)
@@ -189,6 +193,7 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
             },
             Some("local_model") => text::local_model(host.unwrap_or("a local address")),
             Some("fd_limit") => text::fd_limit(n.get("limit").and_then(Value::as_u64)),
+            Some("harness_changed") => text::harness_changed(cx.name),
             Some(what) if !goalcup_format::NOTES.contains(&what) => text::unknown_note(what),
             _ => continue,
         };
@@ -316,6 +321,13 @@ pub fn run(part: Option<String>, json: bool) -> ExitCode {
     };
     let dir = found.entry_dir();
     let path = super::status_json(&dir);
+    if !dir.exists() {
+        let name = found
+            .server
+            .as_ref()
+            .map_or("your agent", |s| s.connector.name.as_str());
+        return fail(&text::not_launched(&found.run, name));
+    }
     if json {
         let Some(status) = read_json::<Value>(&path) else {
             say(&text::status_unreadable(&path));
@@ -374,6 +386,10 @@ fn show(found: &Found, st: &Status, now: u64) -> String {
         && let Some(line) = text::not_masked(super::not_masked_count(&found.entry_dir()))
     {
         shown += &format!("  {line}\n");
+    }
+    let first = found.run_dir.join("first-message.txt");
+    if found.entries.first() == Some(&found.entry) && first.exists() {
+        shown += &format!("  {}\n", text::first_message_line(&first));
     }
     // A sealed part's final counts are always reachable: a recovered part had no watchdog to print
     // them. The screen is a pure function of the sealed files, so it adds no counter.

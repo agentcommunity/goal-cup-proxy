@@ -113,7 +113,7 @@ export interface LocalOptions {
 }
 
 const BEFORE_WINDOW = "The start window has not opened yet.";
-const AFTER_WINDOW = "after the start window you can only `goalcup continue` your run";
+const AFTER_WINDOW = "The start window has closed. A run you already started can still be continued: goalcup continue.";
 
 const entryOf = (run: StoredRun, entryId: string): StoredEntry | undefined => run.entries.find((e) => e.entry_id === entryId);
 const currentOf = (run: StoredRun): StoredEntry => run.entries[run.entries.length - 1]!;
@@ -436,6 +436,11 @@ export class LocalDb implements Db {
     return queued;
   }
 
+  /** Local state is thrown away, so nothing is purged. */
+  async purgeDevices(_now: string): Promise<number> {
+    return 0;
+  }
+
   /** Local only: no accounts here, so `to` is always null (the mailer uses its test address or skips). */
   async claimNotices(limit: number, now: string): Promise<ClaimedNotice[]> {
     const claimed: ClaimedNotice[] = [];
@@ -639,7 +644,6 @@ function toTick(r: StoredRun): TickRun {
     flagged_at: r.flagged_at ?? null,
     flag_reason: r.flag_reason ?? null,
     final_commit: r.final_commit ?? null,
-    disk_notice_at: null,
   };
 }
 
