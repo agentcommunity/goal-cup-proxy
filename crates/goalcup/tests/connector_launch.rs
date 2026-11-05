@@ -499,3 +499,32 @@ fn an_entry_with_its_own_ca_gets_both_in_one_file() {
         "MINE CERT\nRUN BUNDLE\n"
     );
 }
+
+/// Each address goalcup could not give its certificate is one plain start line (point 6): an own
+/// CA that cannot be read, and `providers: null`.
+#[test]
+fn an_address_left_without_the_certificate_is_told() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, e) = (dir.path(), env(dir.path(), &[]));
+    let home = d.join("goalcup/homes/hermes-cli");
+    std::fs::create_dir_all(&home).unwrap();
+    let say = |url: &str| {
+        format!(
+            "goalcup could not add its certificate for {url} in Hermes's config.yaml; calls to it \
+            may fail on macOS."
+        )
+    };
+    let config = "custom_providers:\n- name: mine\n  base_url: https://llm.example.net/v1\n  \
+        ssl_ca_cert: /nowhere/mine.pem\n";
+    std::fs::write(home.join("config.yaml"), config).unwrap();
+    let plan = finished("hermes-cli", &e, d);
+    assert_eq!(plan.trust_notes, vec![say("https://llm.example.net/v1")]);
+    drop(plan);
+    let config = "providers: null\nmodel:\n  base_url: https://openrouter.ai/api/v1\n";
+    std::fs::write(home.join("config.yaml"), config).unwrap();
+    let plan = finished("hermes-cli", &e, d);
+    assert_eq!(plan.trust_notes, vec![say("https://openrouter.ai/api/v1")]);
+    drop(plan);
+    std::fs::write(home.join("config.yaml"), "").unwrap();
+    assert!(finished("hermes-cli", &e, d).trust_notes.is_empty());
+}
