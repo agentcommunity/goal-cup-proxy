@@ -161,15 +161,36 @@ def run_row(run_dir, row, lock, results):
         print("%-24s exit %d  %dm  %s" % (row, rc, (time.time() - t0) // 60, say), flush=True)
 
 
-def run_chains(run_dir, chains):
+def ps_text():
+    """Every process as `pid command environment` lines (ps e shows the environment after the command)."""
+    return subprocess.run(["ps", "-axeww", "-o", "pid=,command="], capture_output=True, text=True).stdout
+
+
+def live_recorders(home, text=None):
+    """[(pid, line)] of the running `goalcup recorder` processes whose command or GOALCUP_HOME is under `home`."""
+    under = re.compile(re.escape(home.rstrip("/")) + r"(?![\w.-])")
+    out = []
+    for ln in (ps_text() if text is None else text).splitlines():
+        pid, _, rest = ln.strip().partition(" ")
+        if pid.isdigit() and int(pid) != os.getpid() and re.search(r"goalcup recorder\b", rest) and under.search(rest):
+            out.append((pid, rest))
+    return out
+
+
+def run_chains(run_dir, chains, signin_home=None):
     lock, results = threading.Lock(), {}
 
-    def chain(rows):
+    def chain(name, rows):
         for i, row in enumerate(rows):
             if i:
                 time.sleep(PAUSE)
+            live = live_recorders(signin_home) if name == "signin" and signin_home else []
+            if live:  # earlier recorders on the shared home: named, never killed
+                with lock:
+                    print("warning: before %s, %d goalcup recorder(s) still run under %s: pid %s" % (
+                        row, len(live), signin_home, ", ".join(p for p, _ in live)), flush=True)
             run_row(run_dir, row, lock, results)
-    threads = [threading.Thread(target=chain, args=(rows,)) for rows in chains.values()]
+    threads = [threading.Thread(target=chain, args=(name, rows)) for name, rows in chains.items()]
     awake = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())]) if shutil.which("caffeinate") else None
     for t in threads:
         t.start()
@@ -248,7 +269,7 @@ def main(argv, env=os.environ):
     except Refused as e:
         print("release-rows: %s" % e, file=sys.stderr)
         return 2
-    results = run_chains(run_dir, chains)
+    results = run_chains(run_dir, chains, cfg["SIGNIN_HOME"])
     table = [sys.executable, os.path.join(ROOT, "scripts", "pad", "table")]
     subprocess.run(table, cwd=ROOT)
     check = subprocess.run(table + ["--release-check", "HEAD"], cwd=ROOT, capture_output=True, text=True)
