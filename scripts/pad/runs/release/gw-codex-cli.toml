@@ -1,0 +1,7 @@
+# A release row template: scripts/pad/release-rows fills its @...@ placeholders (see that script).
+harness = "codex-cli"
+key = "openai"
+case = "gateway"
+mode = "full"
+where = "here"
+build = "@BUILD@"

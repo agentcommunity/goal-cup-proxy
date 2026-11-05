@@ -1,0 +1,13 @@
+# A release row template: scripts/pad/release-rows fills its @...@ placeholders (see that script).
+# Claude Code on the owner's Claude sign-in (core-claude-code-signin.toml), no API key. The home is the signed-in one:
+# Claude Code on macOS keys its Keychain login by the config dir path, so it must not change.
+harness = "claude-code-cli"
+key = "none"
+case = "dodger"
+mode = "full"
+goalcup_home = "@SIGNIN_HOME@"
+box_extra_minutes = 10
+# Signed in already: only the folder trust screen shows (default "No, exit"): Down, Enter.
+pre_keys = ['\033[B\r']
+where = "here"
+build = "@BUILD@"

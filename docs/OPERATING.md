@@ -132,6 +132,18 @@ not deleted, it lists them in `delete-test-runs.failed`; retry only those with
 `sh scripts/delete-test-runs.sh --objects delete-test-runs.failed --yes`. Details:
 [Clean up test runs](../server/worker/README.md#clean-up-test-runs).
 
+### Release rows on the Mac
+
+Prerequisites: a clean checkout at the commit to release, `tmux`, the pad's usual environment (model keys,
+staging approval and fetch credentials) with `PAD_STAGING_URL` set, the Claude and ChatGPT sign-ins in
+`GOALCUP_SIGNIN_HOME` (default `~/gc-signin/home`), and Hermes 0.22.5 and 0.22.6 under `HARNESS_INSTALLS`
+(default `~/dev/harness-installs/hermes-cli-<version>/bin`). Then run `python3 scripts/pad/release-rows`: it builds
+HEAD into `~/gc-release-build/<sha8>`, checks the new build reaches staging, runs the 14 rows of
+`scripts/pad/runs/release/` in four chains at once, and ends with `scripts/pad/table` and the release check.
+If it stops at the reach check, allow that `goalcup` build in Little Snitch (or another network filter) and run it again.
+The two exec verdicts stay your judgement: it prints the `goalcup-verify dump` commands and where the verdict files go.
+To rerun one chain: `python3 scripts/pad/release-rows --only signin` (also `gateway`, `hermes-0.22.5`, `hermes-0.22.6`; `--dry-run` lists them).
+
 ## Fetch and check a run
 
 The Worker keeps bytes and judges nothing; the check runs on a fetched copy, on an organizer machine. The

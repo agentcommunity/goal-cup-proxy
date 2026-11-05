@@ -1,0 +1,263 @@
+#!/usr/bin/env python3
+"""The pad's release rows on the owner's Mac, in one command.
+
+    scripts/pad/release-rows [--only chain,...] [--dry-run]
+
+Refuses a dirty tree; builds goalcup and goalcup-verify at HEAD into ~/gc-release-build/<sha8> (kept when its
+`commit` file names HEAD); fills scripts/pad/runs/release/*.toml into pad-out/release-rows/<sha8>-<time>/; checks
+that the new build reaches staging (goalcup start --test in tmux, 25 s for the approval address); then runs the
+chains at once, one row after another within a chain, and ends with scripts/pad/table and --release-check HEAD.
+The exec verdicts stay the owner's judgement: it prints how. Settings from the environment: PAD_STAGING_URL
+(required), GOALCUP_SIGNIN_HOME (~/gc-signin/home), GOALCUP_EXEC_HOME (~/gc-exec/home), HARNESS_INSTALLS
+(~/dev/harness-installs); model keys and the staging credentials as for any pad run. Python 3.9: no tomllib.
+Exit: 0 the release check passes, 1 it does not, 2 a usage error or a refusal before any row.
+"""
+import datetime, os, re, shlex, shutil, subprocess, sys, tempfile, threading, time  # noqa: E401
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+TEMPLATES = os.path.join(ROOT, "scripts", "pad", "runs", "release")
+# Sign-in rows share one signed-in home, so they run one after another; each chain is one line of rows.
+CHAINS = {
+    "signin": ["claude-signin-direct", "claude-signin-dodger", "codex-signin-direct", "codex-signin-dodger", "kill-codex-signin"],
+    "gateway": ["gw-claude-code-cli", "gw-codex-cli"],
+    "hermes-0.22.5": ["hermes-direct-0.22.5", "hermes-gateway-0.22.5", "hermes-dodger-0.22.5"],
+    "hermes-0.22.6": ["hermes-direct-0.22.6", "hermes-gateway-0.22.6", "hermes-dodger-0.22.6", "exec-keep"],
+}
+PAUSE = 30  # seconds between two rows of a chain
+PREFLIGHT_WAIT = 25
+NO_REACH = ("The new goalcup build could not reach the staging server within 25 s. If Little Snitch (or another network "
+            "filter) is installed, allow `goalcup` (any build under ~/gc-release-build/) to connect to the staging host, "
+            "then run this again.")
+PLACEHOLDER = re.compile(r"@[A-Z_]+@")
+
+
+class Refused(Exception):
+    pass
+
+
+def git(*a):
+    return subprocess.run(["git", "-C", ROOT] + list(a), capture_output=True, text=True)
+
+
+def settings(env):
+    """The settings from `env`; Refused names what is missing."""
+    url = env.get("PAD_STAGING_URL", "")
+    if not re.fullmatch(r"https://[^/]*staging[^/]*/?", url):
+        raise Refused("set PAD_STAGING_URL to the staging Worker's https address (it is not in the repo)")
+    home = os.path.expanduser
+    return {"url": url.rstrip("/"),
+            "SIGNIN_HOME": home(env.get("GOALCUP_SIGNIN_HOME") or "~/gc-signin/home"),
+            "EXEC_HOME": home(env.get("GOALCUP_EXEC_HOME") or "~/gc-exec/home"),
+            "HARNESS_INSTALLS": home(env.get("HARNESS_INSTALLS") or "~/dev/harness-installs")}
+
+
+def fill(text, values):
+    """`text` with every @NAME@ replaced from `values`; an unknown placeholder is refused."""
+    out = PLACEHOLDER.sub(lambda m: values.get(m.group(0)[1:-1], m.group(0)), text)
+    left = PLACEHOLDER.findall(out)
+    if left:
+        raise Refused("no value for %s" % ", ".join(sorted(set(left))))
+    return out
+
+
+def needed_dirs(text):
+    """The folders a filled run file needs to exist: its here_path and a signed-in goalcup_home."""
+    got = []
+    for line in text.splitlines():
+        if line.startswith("here_path"):
+            got += re.findall(r'"([^"]+)"', line)
+    return got
+
+
+def pick(only):
+    if not only:
+        return dict(CHAINS)
+    names = [n for n in only.split(",") if n]
+    bad = [n for n in names if n not in CHAINS]
+    if bad or not names:
+        raise Refused("--only takes chain names from: %s" % ", ".join(CHAINS))
+    return {n: CHAINS[n] for n in names}
+
+
+def build(sha):
+    """~/gc-release-build/<sha8> with goalcup, goalcup-verify and `commit` at `sha`, built only when missing."""
+    out = os.path.expanduser(os.path.join("~", "gc-release-build", sha[:8]))
+    bins = [os.path.join(out, b) for b in ("goalcup", "goalcup-verify")]
+    try:
+        with open(os.path.join(out, "commit")) as f:
+            if f.readline().strip() == sha and all(map(os.path.isfile, bins)):
+                print("build: %s (already there)" % out)
+                return out
+    except OSError:
+        pass
+    print("build: cargo build --release at %s into %s" % (sha[:8], out), flush=True)
+    env = dict(os.environ, PATH=os.path.expanduser("~/.cargo/bin") + os.pathsep + os.environ.get("PATH", ""))
+    r = subprocess.run(["cargo", "build", "--release", "--locked", "-p", "goalcup", "-p", "goalcup-verify"], cwd=ROOT, env=env)
+    if r.returncode:
+        raise Refused("cargo build --release failed (exit %d)" % r.returncode)
+    os.makedirs(out, exist_ok=True)
+    for b in bins:
+        shutil.copy2(os.path.join(ROOT, "target", "release", os.path.basename(b)), b)
+    with open(os.path.join(out, "commit"), "w") as f:
+        f.write(sha + "\n")
+    return out
+
+
+def tmux(*a):
+    return subprocess.run(["tmux"] + list(a), capture_output=True, text=True)
+
+
+def preflight(build_dir, url, wait=PREFLIGHT_WAIT, every=0.5):
+    """goalcup start --test once in an empty folder with a fresh home, in tmux as pad-run runs it: the approval
+    address shows within `wait` seconds, else Refused. Ctrl-C then cancels the approval; nothing is approved."""
+    tmp = tempfile.mkdtemp(prefix="gc-preflight-")
+    name = "gc-preflight-%d" % os.getpid()
+    try:
+        project, home, prompt = (os.path.join(tmp, p) for p in ("project", "gc/home", "prompt.txt"))
+        os.makedirs(project)
+        os.makedirs(home)
+        with open(prompt, "w") as f:
+            f.write("Say hello.\n")
+        env = {"GOALCUP_HOME": home, "GOALCUP_SERVER": url, "GOALCUP_NO_BROWSER": "1", "PATH": os.environ.get("PATH", "")}
+        launch = os.path.join(tmp, "launch.sh")
+        with open(launch, "w") as f:
+            f.write("cd %s\nexport %s\nexec %s start --test --harness claude-code-cli --prompt %s\n" % (
+                shlex.quote(project), " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in env.items()),
+                shlex.quote(os.path.join(build_dir, "goalcup")), shlex.quote(prompt)))
+        tmux("new-session", "-d", "-s", name, "-x", "200", "-y", "50")
+        tmux("set-option", "-w", "-t", name, "remain-on-exit", "on")
+        tmux("respawn-pane", "-k", "-t", name, "sh " + shlex.quote(launch))
+        end = time.time() + wait
+        while True:
+            screen = tmux("capture-pane", "-p", "-J", "-S", "-", "-t", name).stdout
+            if "Open this address" in screen:
+                return
+            if tmux("display-message", "-p", "-t", name, "#{pane_dead}").stdout.strip() == "1":
+                last = [ln.strip() for ln in screen.splitlines() if ln.strip() and not ln.startswith("Pane is dead")]
+                raise Refused("goalcup start --test stopped before it reached the staging server: %s"
+                              % (last[-1][:200] if last else "no output"))
+            if time.time() >= end:
+                raise Refused(NO_REACH)
+            time.sleep(every)
+    finally:
+        tmux("send-keys", "-t", name, "C-c")
+        time.sleep(1)
+        tmux("kill-session", "-t", name)
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def run_row(run_dir, row, lock, results):
+    toml, log = os.path.join(run_dir, row + ".toml"), os.path.join(run_dir, row + ".log")
+    t0 = time.time()
+    with open(log, "w") as f:
+        rc = subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "pad", "pad"), toml], cwd=ROOT,
+                            stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT).returncode
+    with open(log, errors="replace") as f:
+        text = f.read()
+    got = [ln.split()[1:3] for ln in text.splitlines() if ln.startswith("result ")]
+    say = "; ".join(" ".join(g) for g in got) or (text.strip().splitlines() or ["no output"])[-1][:160]
+    with lock:
+        results[row] = (rc, text)
+        print("%-24s exit %d  %dm  %s" % (row, rc, (time.time() - t0) // 60, say), flush=True)
+
+
+def run_chains(run_dir, chains):
+    lock, results = threading.Lock(), {}
+
+    def chain(rows):
+        for i, row in enumerate(rows):
+            if i:
+                time.sleep(PAUSE)
+            run_row(run_dir, row, lock, results)
+    threads = [threading.Thread(target=chain, args=(rows,)) for rows in chains.values()]
+    awake = subprocess.Popen(["caffeinate", "-i", "-w", str(os.getpid())]) if shutil.which("caffeinate") else None
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    if awake:
+        awake.terminate()
+    return results
+
+
+def exec_help(cfg, text):
+    """How to judge the two exec verdicts by hand, with the exec row's own run, entry and folder when its log names them."""
+    m = re.search(r"\brun (\S+)\s+entry (\S+)", text or "")
+    folder = re.search(r"^result\s+\S+\s+(\S+)", text or "", re.M)
+    entry = os.path.join(cfg["EXEC_HOME"], "runs", m.group(1), m.group(2)) if m else os.path.join(cfg["EXEC_HOME"], "runs", "<run>", "<entry>")
+    folder = folder.group(1).rstrip("/") if folder else "pad-out/hermes-cli/direct/<stamp>-<box>"
+    v = shlex.quote(os.path.join(cfg["build"], "goalcup-verify"))
+    e = shlex.quote(entry)
+    return "\n".join([
+        "Exec verdicts (your judgement; the release check needs both PASS):",
+        "  h2-parallel:  %s dump --kind open %s" % (v, e),
+        "                %s dump --kind gap %s | grep -c h2_unsupported" % (v, e),
+        "     PASS when: one api connection with alpn h2, several streams on it, 0 h2_unsupported.",
+        "  long-tunnel:  %s dump --kind event %s | grep long_tunnel" % (v, e),
+        "                %s dump --kind gap %s" % (v, e),
+        "     PASS when: one long_tunnel event, 0 gaps.",
+        "  Write PASS (or FAIL and why) into %s/exec/h2-parallel.sh.verdict and %s/exec/long-tunnel.sh.verdict," % (folder, folder),
+        "  then: python3 scripts/pad/check.py %s && python3 scripts/pad/table" % folder,
+        "  Commit scripts/pad/rows/ and connectors/tiers.toml, then: python3 scripts/pad/table --release-check HEAD"])
+
+
+def main(argv, env=os.environ):
+    args, only, dry = list(argv), None, False
+    while args:
+        a = args.pop(0)
+        if a == "--dry-run":
+            dry = True
+        elif a == "--only" and args:
+            only = args.pop(0)
+        else:
+            print("usage: scripts/pad/release-rows [--only chain,...] [--dry-run]\nchains: %s" % ", ".join(CHAINS), file=sys.stderr)
+            return 2
+    try:
+        cfg, chains = settings(env), pick(only)
+        sha = git("rev-parse", "HEAD").stdout.strip()
+        cfg["build"] = os.path.expanduser(os.path.join("~", "gc-release-build", sha[:8]))
+        values = dict(cfg, BUILD=cfg["build"])
+        files = {}
+        for row in (r for rows in chains.values() for r in rows):
+            with open(os.path.join(TEMPLATES, row + ".toml")) as f:
+                files[row] = fill(f.read(), values)
+        missing = sorted({d for t in files.values() for d in needed_dirs(t) if not os.path.isdir(d)}
+                         | ({cfg["SIGNIN_HOME"]} if "signin" in chains and not os.path.isdir(cfg["SIGNIN_HOME"]) else set()))
+        if dry:
+            print("release-rows (dry run) at %s, build %s" % (sha[:8], cfg["build"]))
+            for name, rows in chains.items():
+                print("%s: %s" % (name, " ".join(rows)))
+            print("%d rows in %d chains" % (len(files), len(chains)))
+            print("".join("missing folder: %s\n" % d for d in missing), end="")
+            return 0
+        if git("status", "--porcelain").stdout.strip():
+            raise Refused("the tree has changes; commit or stash them, so the rows name the commit they ran")
+        if missing:
+            raise Refused("missing folder: %s (GOALCUP_SIGNIN_HOME, HARNESS_INSTALLS)" % ", ".join(missing))
+        build(sha)
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        run_dir = os.path.join(ROOT, "pad-out", "release-rows", "%s-%s" % (sha[:8], stamp))
+        os.makedirs(run_dir)
+        for row, text in files.items():
+            with open(os.path.join(run_dir, row + ".toml"), "w") as f:
+                f.write(text)
+        print("run files: %s" % os.path.relpath(run_dir, ROOT))
+        print("preflight: goalcup start --test against staging (up to %d s)" % PREFLIGHT_WAIT, flush=True)
+        preflight(cfg["build"], cfg["url"])
+        print("preflight: staging reached")
+    except Refused as e:
+        print("release-rows: %s" % e, file=sys.stderr)
+        return 2
+    results = run_chains(run_dir, chains)
+    table = [sys.executable, os.path.join(ROOT, "scripts", "pad", "table")]
+    subprocess.run(table, cwd=ROOT)
+    check = subprocess.run(table + ["--release-check", "HEAD"], cwd=ROOT, capture_output=True, text=True)
+    print("release check at HEAD (reads the committed rows: commit the new ones and run it again):")
+    print(check.stdout.strip() or check.stderr.strip())
+    if "exec-keep" in results:
+        print(exec_help(cfg, results["exec-keep"][1]))
+    return 0 if check.returncode == 0 else 1  # a row's pad exit 3 (C3 not exercised) can still count
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

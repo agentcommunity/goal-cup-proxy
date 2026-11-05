@@ -53,28 +53,37 @@ The build uses each default below until the owner answers.
   then delete HARNESS-SETUP. Until then it is a temporary duplicate and still
   describes the removed MCP command (D84).
 
-## Release 1.0 (one freeze, one release-row run, before the event)
+## Release 1.0
 
-Coverage: [TEST-COVERAGE](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/TEST-COVERAGE.md). Findings:
-[MAC-LEARNINGS](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/MAC-LEARNINGS.md).
+In order:
 
-Before release:
-- 🔴 Freeze; release rows on the frozen head (Claude Code, Codex, Hermes), then `scripts/pad/table --release-check`. Hermes needs 0.22.5 and 0.22.6 both verified on macOS arm64 (only 0.22.6 has rows today).
-- 🔴 Release path end to end: GitHub release, `install.sh` from it, production Worker smoke run.
-- 🟡 A one-hour PASS. Best so far INC on both systems; misses were harness subagent counts, not loss.
-  Option: set the subagent target to what harnesses really start (about 10).
-- 🟡 Amp pin: bump when Amp's server refuses it.
+1. (owner) Answer the OWNER-Q markers: `README.md:146` (macOS Intel level), `docs/RULES.md:40` (start date), `docs/RULES.md:41` (24 or 48 hours), `docs/RULES.md:412` (setup video due), `docs/RULES.md:414` (where the setup video goes).
+2. (owner) Allow goalcup in Little Snitch on the Mac.
+3. Run the release rows on the frozen head: `scripts/pad/release-rows`.
+4. (owner) Judge the exec verdicts.
+5. Commit the rows.
+6. `scripts/pad/table --release-check <sha>` passes.
+7. Merge v1.1/integration to main.
+8. `scripts/release.sh tag 1.0.0`.
+9. (owner) Production Worker deploy ([OPERATING](docs/OPERATING.md#deploy)).
+10. (owner) Website purge migration.
+11. (owner) Turn on the canary for the event.
 
 After 1.0:
-- Watchdog-only kill: nothing warns that the recorder has no restarter (MAC-LEARNINGS 7h).
-- Restated passwords stay raw (OpenClaw, stated loss): server-side scrub, or `.git/config` remote
-  passwords as exact values at launch (MAC-LEARNINGS 7a).
-- Copilot and Droid subagent readers.
-- `hermes gateway stop` helper times out on every run (MAC-LEARNINGS 3).
-- Codex in its private home reads `~/.agents/skills` (MAC-LEARNINGS 7d).
-- Cline and Factory Droid rows; Windows (WSL2).
-- A competition run from scratch with a public repo; a newcomer reads the docs.
-- RULES lists banned Cursor flags; there is no Cursor connector.
+
+- A one-hour run that passes (best so far misses on harness subagent counts, not loss).
+- macOS CI job for the lifecycle tests (owner decision).
+- A test run cut off on macOS can leave `goalcup recorder` orphans that keep respawning (found 4 Nov: 6 from a 3 Nov run, still alive); tests should end their process group, and check that the respawn cap (C.3) stops an orphan with no watchdog.
+- Recorder failure domain: keep the relay alive across recorder restarts.
+- Full proxy drain before the recorder exits.
+- `run` and `ctl` leaf modules (arch-4).
+- One include point for connector data (5 `include_str!` sites: both `model-hosts.toml`, both `shapes.tsv`, `tiers.toml`).
+- Signed releases.
+- Windows (WSL2) tested.
+- Multi-version matrix for Claude Code and Codex.
+- A newcomer reads the docs through.
+- Restated passwords stay raw (OpenClaw): server-side scrub.
+- Copilot and Droid subagent readers; Cline and Factory Droid rows.
 
 ## After the merge to main
 
