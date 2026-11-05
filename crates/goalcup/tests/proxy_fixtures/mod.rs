@@ -178,20 +178,8 @@ pub async fn status(s: &mut TcpStream) -> u16 {
 }
 
 /// Sends `head` and reads the answer's head; gives the stream and the status.
-/// A refused connect to the proxy is tried again: macOS holds 128 waiting connects per port
-/// (`kern.ipc.somaxconn`), so a burst of thousands drops some before the proxy accepts them.
 pub async fn ask(proxy: SocketAddr, head: &str) -> (TcpStream, u16) {
-    let mut tries = 0;
-    let mut s = loop {
-        match TcpStream::connect(proxy).await {
-            Ok(s) => break s,
-            Err(_) if tries < 100 => {
-                tries += 1;
-                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            }
-            Err(e) => panic!("connect to the proxy: {e}"),
-        }
-    };
+    let mut s = TcpStream::connect(proxy).await.unwrap();
     s.write_all(head.as_bytes()).await.unwrap();
     let code = status(&mut s).await;
     (s, code)
