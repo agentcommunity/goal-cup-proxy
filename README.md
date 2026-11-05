@@ -143,7 +143,7 @@ flow are [ARCHITECTURE](docs/ARCHITECTURE.md).
 |---|---|
 | macOS arm64 | Tested on the owner's Mac (macOS 26.6). |
 | Linux x86_64 | Tested in sandboxes. |
-| macOS Intel (x86_64) | OWNER-Q platforms: supported, tested or untested? Built: yes (release.yml, `x86_64-apple-darwin`). |
+| macOS Intel (x86_64) | Built (release.yml, `x86_64-apple-darwin`), not tested and not supported. |
 | Linux arm64 | Built (release.yml, `aarch64-unknown-linux-gnu`), not yet tested. |
 | Windows | Use WSL2 (below). |
 

@@ -55,19 +55,16 @@ The build uses each default below until the owner answers.
 
 ## Release 1.0
 
+Done 5 Nov: release rows on 91a12d70 and `--release-check` pass at c3e7820b (Hermes 0.22.5 and 0.22.6 verified on macOS).
+
 In order:
 
-1. (owner) Answer the OWNER-Q markers: `README.md:146` (macOS Intel level), `docs/RULES.md:40` (start date), `docs/RULES.md:41` (24 or 48 hours), `docs/RULES.md:412` (setup video due), `docs/RULES.md:414` (where the setup video goes).
-2. (owner) Allow goalcup in Little Snitch on the Mac.
-3. Run the release rows on the frozen head: `scripts/pad/release-rows`.
-4. (owner) Judge the exec verdicts.
-5. Commit the rows.
-6. `scripts/pad/table --release-check <sha>` passes.
-7. Merge v1.1/integration to main.
-8. `scripts/release.sh tag 1.0.0`.
-9. (owner) Production Worker deploy ([OPERATING](docs/OPERATING.md#deploy)).
-10. (owner) Website purge migration.
-11. (owner) Turn on the canary for the event.
+1. Merge v1.1/integration to main.
+2. `scripts/release.sh tag 1.0.0`.
+3. (owner) Production Worker deploy ([OPERATING](docs/OPERATING.md#deploy)).
+4. (owner) Website purge migration.
+5. (owner) Turn on the canary for the event.
+6. (owner) Little Snitch on the owner's Mac: one rule for `goalcup` to any server (the recorder runs from `~/Library/Caches/goalcup/bin/<id>/goalcup`).
 
 After 1.0:
 
