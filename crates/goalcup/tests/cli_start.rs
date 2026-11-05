@@ -352,8 +352,13 @@ fn an_unread_harness_version_is_said_and_the_run_starts() {
     let unread = scripted("#!/bin/sh\nexit 1\n", note);
     let shown = screen(&unread);
     assert!(shown.contains(&line) && !shown.contains("loses calls"));
-    // Said once: the recorded note is that line, not a second one.
-    assert_eq!(shown.matches("could not").count(), 1, "{shown}");
+    // Said once: the recorded note is that line, not a second one (Linux's sleep-lock line says
+    // "could not" too, so count the version line itself).
+    assert_eq!(
+        shown.matches("version could not be read").count(),
+        1,
+        "{shown}"
+    );
     // On record in goalcup.log too, for when the harness clears the terminal.
     assert!(logs(unread.t.home()).contains("version_unread"));
     let read = scripted("#!/bin/sh\necho tester 1.2.3\n", "");
