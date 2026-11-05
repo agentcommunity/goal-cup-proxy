@@ -152,8 +152,9 @@ if command -v initdb >/dev/null 2>&1 || ls /usr/lib/postgresql/*/bin/initdb >/de
 step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py scripts/test_gate.py
 step "$py311" -m unittest discover -s scripts/pad -p 'test_*.py'
 step python3 scripts/check-links.py
-# No personal path in tracked files: only the stand-in user names listed below are allowed.
-step sh -c "! git grep -n -E '/(Users|home)/[A-Za-z0-9_.-]+' | grep -v -E '/(Users|home)/(Shared|placeholder|user|p|you|h|u|x|runs|participant|secret-root|hermes|opencode|openclaw|claude|codex)([^A-Za-z0-9_.-]|\$)'"
+# No personal path in tracked files: only the stand-in user names listed below are allowed. Each match
+# alone (-o), so a stand-in cannot hide another path on its line; git grep's own error (above 1) fails.
+step sh -c "p=\$(git grep -h -o -E '/(Users|home)/[A-Za-z0-9_.-]+'); s=\$?; [ \$s -le 1 ] || exit \$s; ! echo \"\$p\" | grep -v -E '^(/(Users|home)/(Shared|placeholder|user|p|you|h|u|x|runs|participant|secret-root|hermes|opencode|openclaw|claude|codex))?\$'"
 fi
 
 if [ "$tier" = full ]; then

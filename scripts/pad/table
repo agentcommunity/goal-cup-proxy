@@ -14,8 +14,8 @@ ROWS_REL = "scripts/pad/rows/pad-rows.jsonl"
 RESULTS = ROOT / "scripts/pad/rows/PAD-RESULTS.md"
 CASES, CHECKS = ("direct", "gateway", "dodger"), ("C1", "C2", "C3", "C4", "C5", "C6")
 CORE = ("claude-code-cli", "codex-cli", "hermes-cli")
-GUARDED = ["crates/", "server/worker/src/", "connectors/", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
-           ":(exclude)connectors/tiers.toml", ":(glob,exclude)crates/*/tests/**"]  # tests are not in the binary
+GUARDED = ["crates/", "server/worker/src/", "connectors/", "skills/", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
+           ":(exclude)connectors/tiers.toml", ":(glob,exclude)crates/*/tests/**"]  # tests are not in the binary; skills/ is include_str!ed
 # The 15 connector ids, PRD-11 section 5.
 CONNECTOR_IDS = ["amp-cli", "claude-code-cli", "cline-cli", "codex-cli", "copilot-cli", "crush-cli", "droid-cli",
                  "gemini-cli", "goose-cli", "hermes-cli", "kilo-cli", "kimi-code-cli", "openclaw-cli",
@@ -189,10 +189,6 @@ def render_all(rows, lines=None):
     tiers = {c: tier_for(c, rows, lines) for c in CONNECTOR_IDS}
     return tiers, render_tiers(tiers, {c: builds(c, rows, lines) for c in CONNECTOR_IDS})
 
-def lock_packages(text):
-    """Cargo.lock's [[package]] blocks as {key: raw value} dicts, in order."""
-    return [dict(re.findall(r"^(\w+) = (.*)$", b, re.M)) for b in text.split("[[package]]")[1:]]
-
 def version_only(git, c, sha, files):
     """True when c..sha changes only goalcup's own version: the [workspace.package] version line of Cargo.toml
     and the version of the workspace crates (no `source`) in Cargo.lock. A release bump then keeps the rows,
@@ -207,8 +203,9 @@ def version_only(git, c, sha, files):
             blank = lambda t: re.sub(r'(?m)^version = "\d+\.\d+\.\d+"$', 'version = ""', t, count=1)
             same = blank(a.stdout) == blank(b.stdout)
         else:
-            own = lambda ps: [dict(p, version='""') if "source" not in p else p for p in ps]
-            same = own(lock_packages(a.stdout)) == own(lock_packages(b.stdout))
+            own = lambda t: [b if re.search(r"(?m)^source = ", b) else re.sub(r'(?m)^version = "[^"]*"$', "", b, count=1)
+                             for b in t.split("[[package]]")]  # whole blocks: dependency arrays count too
+            same = own(a.stdout) == own(b.stdout)
         if not same:
             return False
     return True

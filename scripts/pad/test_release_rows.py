@@ -88,6 +88,38 @@ class Main(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("--only takes chain names", err)
 
+    def test_template_error_is_one_line_exit_2(self):
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(rr, "TEMPLATES", t):
+            code, out, err = run(["--dry-run"], {"PAD_STAGING_URL": URL})
+        self.assertEqual(code, 2)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(len(err.strip().splitlines()), 1, err)
+        self.assertTrue(err.startswith("release-rows: "), err)
+
+
+class Finish(unittest.TestCase):
+    """The exit code covers the new batch, not only the committed rows' release check."""
+
+    def finish(self, results, check_rc=0):
+        done = lambda a, **kw: subprocess.CompletedProcess(a, check_rc if "--release-check" in a else 0, "check\n", "")
+        out = io.StringIO()
+        with redirect_stdout(out), mock.patch.object(rr.subprocess, "run", done):
+            return rr.finish(results, {"EXEC_HOME": "/x", "build": "/b"}), out.getvalue()
+
+    def test_green_batch_and_check_pass(self):
+        self.assertEqual(self.finish({"a": (0, "result PASS f/\n"), "b": (3, "result INCONCLUSIVE f/\n")})[0], 0)
+
+    def test_a_new_fail_row_fails_even_when_the_check_passes(self):
+        code, out = self.finish({"a": (0, "result PASS f/\n"), "b": (1, "result FAIL f/\n")})
+        self.assertEqual(code, 1)
+        self.assertIn("b", out.splitlines()[-1])
+
+    def test_a_pad_exit_outside_0_3_fails(self):
+        self.assertEqual(self.finish({"a": (2, "pad: bad settings\n")})[0], 1)
+
+    def test_a_failing_check_still_fails(self):
+        self.assertEqual(self.finish({"a": (0, "result PASS f/\n")}, check_rc=1)[0], 1)
+
 
 class LiveRecorders(unittest.TestCase):
     PS = ("101 /bin/zsh -l\n"
@@ -132,6 +164,29 @@ class Preflight(unittest.TestCase):
         self.assertEqual(str(got.exception), rr.NO_REACH)
         self.assertIn("Little Snitch", rr.NO_REACH)
         self.assertEqual(calls[-1][0], "kill-session")
+
+    def test_tmux_that_cannot_start_is_named(self):
+        calls, tmux = self.stub("")
+        fail = lambda *a: subprocess.CompletedProcess(a, 1, "", "no server") if a[0] == "new-session" else tmux(*a)
+        with mock.patch.object(rr, "tmux", fail), mock.patch.object(rr.time, "sleep", lambda s: None), \
+                self.assertRaises(rr.Refused) as got:
+            rr.preflight("/b", URL, wait=5)
+        self.assertIn("tmux could not start", str(got.exception))
+        self.assertNotIn("Little Snitch", str(got.exception))
+
+    def test_launch_sets_home(self):
+        calls, tmux = self.stub("Open this address: x\n")
+        seen = []
+
+        def spy(*a):
+            if a[0] == "respawn-pane":
+                with open(a[-1].split(" ", 1)[1].strip("'")) as f:
+                    seen.append(f.read())
+            return tmux(*a)
+        with mock.patch.object(rr, "tmux", spy), mock.patch.object(rr.time, "sleep", lambda s: None), \
+                mock.patch.dict(os.environ, {"HOME": "/home/u"}):
+            rr.preflight("/b", URL, wait=5)
+        self.assertIn("HOME=/home/u ", seen[0])
 
     def test_address_seen_passes(self):
         calls, tmux = self.stub("Open this address: https://agentcommunity.org/goalcup/approve?code=X\n")

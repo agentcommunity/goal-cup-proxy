@@ -187,7 +187,8 @@ class InstallTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertEqual(
             result.stderr,
-            "goalcup runs on Apple silicon Macs and Linux; macOS on Intel is not supported.\n")
+            "goalcup install: goalcup runs on Apple silicon Macs and Linux, not Intel Macs; a goalcup already "
+            "installed here keeps working but cannot be upgraded\n")
         self.assertFalse(calls.exists())
         self.assertEqual(list(self.home.iterdir()), [])
 

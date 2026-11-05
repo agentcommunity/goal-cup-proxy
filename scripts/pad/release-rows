@@ -10,7 +10,8 @@ chains at once, one row after another within a chain, and ends with scripts/pad/
 The exec verdicts stay the owner's judgement: it prints how. Settings from the environment: PAD_STAGING_URL
 (required), GOALCUP_SIGNIN_HOME (~/gc-signin/home), GOALCUP_EXEC_HOME (~/gc-exec/home), HARNESS_INSTALLS
 (~/dev/harness-installs); model keys and the staging credentials as for any pad run. Python 3.9: no tomllib.
-Exit: 0 the release check passes, 1 it does not, 2 a usage error or a refusal before any row.
+Exit: 0 every new row ran (pad exit 0 or 3, no FAIL) and the release check passes, 1 otherwise, 2 a usage
+error or a refusal before any row.
 """
 import datetime, os, re, shlex, shutil, subprocess, sys, tempfile, threading, time  # noqa: E401
 
@@ -118,15 +119,19 @@ def preflight(build_dir, url, wait=PREFLIGHT_WAIT, every=0.5):
         os.makedirs(home)
         with open(prompt, "w") as f:
             f.write("Say hello.\n")
-        env = {"GOALCUP_HOME": home, "GOALCUP_SERVER": url, "GOALCUP_NO_BROWSER": "1", "PATH": os.environ.get("PATH", "")}
+        env = {"HOME": os.environ.get("HOME", ""), "GOALCUP_HOME": home, "GOALCUP_SERVER": url, "GOALCUP_NO_BROWSER": "1",
+               "PATH": os.environ.get("PATH", "")}
         launch = os.path.join(tmp, "launch.sh")
         with open(launch, "w") as f:
             f.write("cd %s\nexport %s\nexec %s start --test --harness claude-code-cli --prompt %s\n" % (
                 shlex.quote(project), " ".join("%s=%s" % (k, shlex.quote(v)) for k, v in env.items()),
                 shlex.quote(os.path.join(build_dir, "goalcup")), shlex.quote(prompt)))
-        tmux("new-session", "-d", "-s", name, "-x", "200", "-y", "50")
-        tmux("set-option", "-w", "-t", name, "remain-on-exit", "on")
-        tmux("respawn-pane", "-k", "-t", name, "sh " + shlex.quote(launch))
+        for a in (("new-session", "-d", "-s", name, "-x", "200", "-y", "50"),
+                  ("set-option", "-w", "-t", name, "remain-on-exit", "on"),
+                  ("respawn-pane", "-k", "-t", name, "sh " + shlex.quote(launch))):
+            r = tmux(*a)
+            if r.returncode:
+                raise Refused("tmux could not start: %s" % (r.stderr.strip() or "exit %d" % r.returncode))
         end = time.time() + wait
         while True:
             screen = tmux("capture-pane", "-p", "-J", "-S", "-", "-t", name).stdout
@@ -266,10 +271,15 @@ def main(argv, env=os.environ):
         print("preflight: goalcup start --test against staging (up to %d s)" % PREFLIGHT_WAIT, flush=True)
         preflight(cfg["build"], cfg["url"])
         print("preflight: staging reached")
-    except Refused as e:
+    except (Refused, OSError, UnicodeError) as e:  # a template or file that cannot be read or written: one line
         print("release-rows: %s" % e, file=sys.stderr)
         return 2
-    results = run_chains(run_dir, chains, cfg["SIGNIN_HOME"])
+    return finish(run_chains(run_dir, chains, cfg["SIGNIN_HOME"]), cfg)
+
+
+def finish(results, cfg):
+    """The table, the release check on the committed rows and the exec help; 1 when a new row failed (a FAIL result
+    or a pad exit other than 0 and 3, C3 not exercised) or the check does not pass."""
     table = [sys.executable, os.path.join(ROOT, "scripts", "pad", "table")]
     subprocess.run(table, cwd=ROOT)
     check = subprocess.run(table + ["--release-check", "HEAD"], cwd=ROOT, capture_output=True, text=True)
@@ -277,7 +287,11 @@ def main(argv, env=os.environ):
     print(check.stdout.strip() or check.stderr.strip())
     if "exec-keep" in results:
         print(exec_help(cfg, results["exec-keep"][1]))
-    return 0 if check.returncode == 0 else 1  # a row's pad exit 3 (C3 not exercised) can still count
+    bad = [row for row, (rc, text) in sorted(results.items())
+           if rc not in (0, 3) or re.search(r"(?m)^result\s+FAIL\b", text)]
+    if bad:
+        print("new rows that did not pass: %s" % ", ".join(bad))
+    return 1 if bad or check.returncode else 0
 
 
 if __name__ == "__main__":
