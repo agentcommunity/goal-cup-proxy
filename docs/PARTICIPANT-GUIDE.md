@@ -499,6 +499,7 @@ Every loss in the record is one gap with a reason. The screens use these words.
 | `h2_unsupported` | a connection goalcup could not follow |
 | `mask_failed` | goalcup could not check it for secrets, so it dropped it |
 | `upstream_untrusted` | the model service's certificate was not one goalcup trusts |
+| `upstream_handshake_failed` | the connection to the model service failed twice |
 | `protocol_other` | a connection in a form goalcup does not read |
 | `after_stop` | sent after the agent ended |
 

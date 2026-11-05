@@ -252,7 +252,11 @@ fn listed_tunnels_with_a_named_reason_are_named_and_without_a_gap_fail() {
         ("pinned", Pinned, Value::Null),
         ("tls_refused", TlsRefused, Value::Null),
         ("upstream_untrusted", UpstreamUntrusted, Value::Null),
-        ("upstream_handshake_failed", UpstreamHandshakeFailed, Value::Null),
+        (
+            "upstream_handshake_failed",
+            UpstreamHandshakeFailed,
+            Value::Null,
+        ),
         ("alpn_other", ProtocolOther, Value::Null),
         ("hello_too_big", MemoryGuard, guard),
     ] {

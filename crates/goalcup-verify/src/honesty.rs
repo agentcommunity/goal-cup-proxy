@@ -128,18 +128,24 @@ fn head_size(m: &Map<String, Value>) -> u64 {
 }
 
 /// Whether a GAP of `gap` names a listed tunnel of `reason` (PRD-01 section 4). A reason this
-/// build does not know takes any of the five.
+/// build does not know takes any of the six.
 fn names_tunnel(reason: &str, gap: GapReason) -> bool {
     use GapReason::*;
     match reason {
         "tls_refused" => gap == TlsRefused,
         "pinned" => gap == Pinned,
         "upstream_untrusted" => gap == UpstreamUntrusted,
+        "upstream_handshake_failed" => gap == UpstreamHandshakeFailed,
         "alpn_other" | "not_tls" => gap == ProtocolOther,
         "hello_too_big" => gap == MemoryGuard,
         _ => matches!(
             gap,
-            MemoryGuard | TlsRefused | Pinned | UpstreamUntrusted | ProtocolOther
+            MemoryGuard
+                | TlsRefused
+                | Pinned
+                | UpstreamUntrusted
+                | UpstreamHandshakeFailed
+                | ProtocolOther
         ),
     }
 }

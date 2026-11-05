@@ -128,6 +128,7 @@ fn conn(host: &str, reason: &'static str, listed: Option<(Source, Kind)>, cp: &[
         client_prefix: Bytes::copy_from_slice(cp),
         upstream_prefix: Bytes::from_static(b"srv"),
         expected: false,
+        io: None,
     }
 }
 

@@ -313,7 +313,10 @@ fn only_a_certificate_error_is_untrusted() {
     use rustls::{CertificateError, Error};
     let cert = Error::InvalidCertificate(CertificateError::UnknownIssuer);
     let wrapped = std::io::Error::new(std::io::ErrorKind::InvalidData, cert);
-    assert_eq!(classify_upstream_handshake(&wrapped), UpstreamFail::Untrusted);
+    assert_eq!(
+        classify_upstream_handshake(&wrapped),
+        UpstreamFail::Untrusted
+    );
     for kind in [
         std::io::ErrorKind::ConnectionReset,
         std::io::ErrorKind::UnexpectedEof,
@@ -337,7 +340,7 @@ async fn resetting_front(to: SocketAddr, n: usize) -> SocketAddr {
             tokio::spawn(async move {
                 if i < n {
                     let _ = s.read(&mut [0u8; 4096]).await;
-                    let _ = s.set_linger(Some(std::time::Duration::ZERO));
+                    let _ = socket2::SockRef::from(&s).set_linger(Some(std::time::Duration::ZERO));
                 } else if let Ok(mut up) = tokio::net::TcpStream::connect(to).await {
                     let _ = tokio::io::copy_bidirectional(&mut s, &mut up).await;
                 }

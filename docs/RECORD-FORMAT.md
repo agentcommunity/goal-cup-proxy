@@ -88,7 +88,7 @@ Optional END tail keys, by stream kind. Each is a count or masked text, never a 
 
 | n | Kind | One stream is |
 |---|---|---|
-| 1 | `conn` | One client connection through the proxy, decrypted or tunnelled. No DATA. `meta` has `host`, `port`, `mode` (`decrypt` or `tunnel`), `listed`, `kind`, `reason` |
+| 1 | `conn` | One client connection through the proxy, decrypted or tunnelled. No DATA. `meta` has `host`, `port`, `mode` (`decrypt` or `tunnel`), `listed`, `kind`, `reason`, and `io` on an `upstream_handshake_failed` tunnel |
 | 2 | `http_req` | One request body. `meta` holds the head: `method`, `path` (no query), `ver`, `h2` (the HTTP/2 stream id, absent for 1.1; the same on the response), masked `headers`, `masked`, `coding` |
 | 3 | `http_resp` | One final response body. `req` names its request. Bodies are de-chunked and decoded. `meta` has `status`, `ver`, `h2`, `headers`, `masked`, `coding`, `decoded` |
 | 4 | `ws_up` | Every message the client sent on one WebSocket, inflated, in order. `meta.deflate` is true when permessage-deflate was in use |
@@ -143,6 +143,7 @@ starts (0 for `sid` 0 and for `conn` streams).
 | 13 | `upstream_untrusted` | A listed host's server certificate failed the check; tunnelled |
 | 14 | `protocol_other` | A listed host spoken to in a protocol the proxy does not parse; tunnelled |
 | 15 | `after_stop` | Bytes relayed after the seal began. `sid` 0 |
+| 16 | `upstream_handshake_failed` | A listed host's TLS handshake failed with no TLS answer (a reset, an EOF, a timeout) twice; tunnelled. The `conn` meta `io` names the last error kind |
 
 **Off spans.** Recording is off only while the recorder is not running or runs in null mode. That
 time is a `recorder_down` GAP from the last kept LINK to the next boot (or to the recovery of a dead

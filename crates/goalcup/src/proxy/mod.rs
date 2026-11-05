@@ -293,6 +293,7 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
         client_prefix,
         upstream_prefix,
         expected: b.hosts.is_expected(host),
+        io: None,
     };
     let is_listed = connect_listed.is_some();
     let Ok(mut up) = connect::connect_upstream(rec, host, port, is_listed, target).await else {
@@ -360,27 +361,40 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
         return run_tunnel(&b, hold, c, client, up).await;
     }
     // Upstream first, checked against the deciding name (C10). Any failure: a fresh TCP leg and a
-    // tunnel, so the harness meets the real server itself. A stalled handshake is untrusted too.
-    let connector = b.tls.client(offer).map(tokio_rustls::TlsConnector::from);
-    let upstream_tls = match (connector, ServerName::try_from(name.clone())) {
-        (Some(c), Ok(server_name)) => {
-            let connect = c.connect(server_name, up);
-            (tokio::time::timeout(b.handshake, connect).await)
-                .unwrap_or_else(|_| Err(io::ErrorKind::TimedOut.into()))
-        }
-        _ => Err(io::Error::other("no upstream TLS for this name")),
-    };
+    // tunnel, so the harness meets the real server itself. A failure with no TLS answer (a reset,
+    // an EOF) is tried once more on a fresh leg first, both tries within the one deadline.
     let fresh = (target, is_listed);
+    let connector = b.tls.client(offer).map(tokio_rustls::TlsConnector::from);
+    let (Some(c), Ok(server_name)) = (connector, ServerName::try_from(name.clone())) else {
+        let c = tc("upstream_untrusted", dl, fp16, hello.bytes, Bytes::new());
+        return fresh_tunnel(&b, hold, c, client, fresh).await;
+    };
+    let end = tokio::time::Instant::now() + b.handshake;
+    let timed_out = |_| Err(io::ErrorKind::TimedOut.into());
+    let shake = |up| tokio::time::timeout_at(end, c.connect(server_name.clone(), up));
+    let mut upstream_tls = shake(up).await.unwrap_or_else(timed_out);
+    let failed = |r: &io::Result<_>| {
+        let fail = r.as_ref().err().map(tls::classify_upstream_handshake);
+        matches!(fail, Some(UpstreamFail::Failed(_)))
+    };
+    if failed(&upstream_tls) {
+        let again = connect::connect_upstream(rec, host, port, is_listed, target);
+        if let Ok(Ok(up)) = tokio::time::timeout_at(end, again).await {
+            upstream_tls = shake(up).await.unwrap_or_else(timed_out);
+        }
+    }
     // An `h2`-only client whose upstream picked no ALPN is `alpn_other`: the legs would differ.
     let up_tls = match upstream_tls {
         Ok(t) if offer != Offer::H2 || t.get_ref().1.alpn_protocol().is_some() => t,
         other => {
             let fail = other.err().map(|e| tls::classify_upstream_handshake(&e));
-            let reason = match fail {
-                Some(UpstreamFail::Untrusted) => "upstream_untrusted",
-                _ => "alpn_other",
+            let (reason, io) = match fail {
+                Some(UpstreamFail::Untrusted) => ("upstream_untrusted", None),
+                Some(UpstreamFail::Failed(kind)) => ("upstream_handshake_failed", Some(kind)),
+                _ => ("alpn_other", None),
             };
-            let c = tc(reason, dl, fp16, hello.bytes, Bytes::new());
+            let mut c = tc(reason, dl, fp16, hello.bytes, Bytes::new());
+            c.io = io.map(|k| format!("{k:?}"));
             return fresh_tunnel(&b, hold, c, client, fresh).await;
         }
     };

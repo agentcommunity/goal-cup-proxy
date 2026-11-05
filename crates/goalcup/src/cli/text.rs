@@ -485,6 +485,7 @@ pub fn gap_words(name: &str) -> String {
         "cut_at_seal" => "still arriving when the part ended",
         "mask_failed" => "goalcup could not check it for secrets, so it dropped it",
         "upstream_untrusted" => "the model service's certificate was not one goalcup trusts",
+        "upstream_handshake_failed" => "the connection to the model service failed twice",
         "after_stop" => "sent after the agent ended",
         _ => {
             let n = name

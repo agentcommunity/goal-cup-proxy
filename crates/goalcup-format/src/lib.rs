@@ -116,6 +116,7 @@ named!(
         UpstreamUntrusted = 13 => "upstream_untrusted",
         ProtocolOther = 14 => "protocol_other",
         AfterStop = 15 => "after_stop",
+        UpstreamHandshakeFailed = 16 => "upstream_handshake_failed",
     }
 );
 
@@ -148,6 +149,7 @@ pub fn tunnel_gap(reason: &str) -> Option<GapReason> {
         "tls_refused" => Some(GapReason::TlsRefused),
         "pinned" => Some(GapReason::Pinned),
         "upstream_untrusted" => Some(GapReason::UpstreamUntrusted),
+        "upstream_handshake_failed" => Some(GapReason::UpstreamHandshakeFailed),
         "alpn_other" | "not_tls" => Some(GapReason::ProtocolOther),
         "hello_too_big" => Some(GapReason::MemoryGuard),
         _ => None,

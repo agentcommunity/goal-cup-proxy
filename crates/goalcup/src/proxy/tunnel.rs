@@ -39,6 +39,8 @@ pub struct TunnelConn {
     pub upstream_prefix: Bytes,
     /// `HostList::is_expected(host)`, decided once where the tunnel is built.
     pub expected: bool,
+    /// For `upstream_handshake_failed`: the I/O error kind of the last try.
+    pub io: Option<String>,
 }
 
 impl TunnelConn {
@@ -55,6 +57,7 @@ impl TunnelConn {
             alpn: None,
             tls: None,
             fingerprint: self.fingerprint.as_deref(),
+            io: self.io.as_deref(),
         }
     }
 
@@ -88,6 +91,9 @@ pub struct ConnMeta<'a> {
     pub alpn: Option<&'a str>,
     pub tls: Option<&'a str>,
     pub fingerprint: Option<&'a str>,
+    /// Set only on `upstream_handshake_failed`, so other conn metas keep their keys.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub io: Option<&'a str>,
 }
 
 /// The per-host `long_tunnel` flag, per boot, shared by every tunnel.

@@ -23,6 +23,7 @@ const H2: &[u8] = b"h2";
 
 /// How long either leg's TLS handshake may take before it is given up (cr-proxy-4): a stalled
 /// upstream becomes a fresh tunnel, a stalled harness a `tls_refused` loss that teaches nothing.
+/// It bounds both upstream tries together.
 pub const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(60);
 
 /// What upstream is offered, from the client's ALPN list.
@@ -183,12 +184,15 @@ pub fn classify_client_handshake(err: &io::Error) -> Refusal {
 pub enum UpstreamFail {
     /// Upstream rejected the offered ALPN: a tunnel with `alpn_other`, GAP 14 `protocol_other`.
     AlpnRejected,
-    /// Everything else: a certificate that does not validate, a client-certificate demand (TLS
-    /// 1.3 `certificate_required`, or under TLS 1.2 usually `handshake_failure` or
-    /// `bad_certificate` after our empty certificate), a reset, an EOF, a version or cipher
-    /// mismatch. A tunnel with `upstream_untrusted`, GAP 13: the harness then meets the real
-    /// server itself, so trust is never lowered.
+    /// The server answered in TLS and the handshake cannot work: a certificate that does not
+    /// validate, a client-certificate demand (TLS 1.3 `certificate_required`, or under TLS 1.2
+    /// usually `handshake_failure` or `bad_certificate` after our empty certificate), a version
+    /// or cipher mismatch. A tunnel with `upstream_untrusted`, GAP 13: the harness then meets the
+    /// real server itself, so trust is never lowered.
     Untrusted,
+    /// No TLS answer: a reset, an EOF, a timeout. Retried once on a fresh TCP leg; a second
+    /// failure is a tunnel with `upstream_handshake_failed`, GAP 16, its kind in the meta.
+    Failed(io::ErrorKind),
 }
 
 /// Classifies the error of the upstream handshake.
@@ -198,7 +202,8 @@ pub fn classify_upstream_handshake(err: &io::Error) -> UpstreamFail {
             Error::AlertReceived(AlertDescription::NoApplicationProtocol)
             | Error::PeerMisbehaved(PeerMisbehaved::SelectedUnofferedApplicationProtocol),
         ) => UpstreamFail::AlpnRejected,
-        _ => UpstreamFail::Untrusted,
+        Some(_) => UpstreamFail::Untrusted,
+        None => UpstreamFail::Failed(err.kind()),
     }
 }
 
