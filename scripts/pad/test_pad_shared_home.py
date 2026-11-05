@@ -21,10 +21,10 @@ def load(name, file):
 padrun = load("padrun_shared_home", "pad-run")
 
 
-def bare(home, **st):
+def bare(gc, **st):
     r = object.__new__(padrun.Run)
     r.st, r.s, r.quiet, r.tmux = dict(st), {}, True, "pad"
-    r.env = {"GOALCUP_HOME": home}
+    r.env = {"GOALCUP_HOME": gc}
     return r
 
 
@@ -70,6 +70,26 @@ class Entry(unittest.TestCase):
             with self.assertRaises(padrun.Step) as ctx:
                 r.entry()
         self.assertIn("pane", ctx.exception.args[1])
+
+
+class HarnessFiles(unittest.TestCase):
+    def test_a_file_from_before_this_row_started_is_not_listed(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = os.path.join(d, "projects")
+            os.makedirs(root)
+            now = time.time()
+            for name, age in (("previous.jsonl", 45 + 60), ("mine.jsonl", 5)):
+                p = os.path.join(root, name)
+                open(p, "w").write("x")
+                os.utime(p, (now - age, now - age))
+            r = bare(d, pasted=now, row_start=now - 60, home=d)
+            r.s = {"native": [{"name": "n", "root": "{home}/projects", "pattern": "*.jsonl"}]}
+            r.project = d
+            written = {}
+            r.path = lambda *a: os.path.join(d, *a)
+            with mock.patch.object(padrun, "write", lambda p, t, m: written.update(t=t)):
+                r.harness_files()
+            self.assertEqual([f["path"] for f in json.loads(written["t"])], ["n:mine.jsonl"])
 
 
 if __name__ == "__main__":

@@ -1080,7 +1080,7 @@ class Run:
 
     def harness_files(self):
         """Files under the connector's native roots changed since the start, as [{path, size}] (PRD-08 section 1)."""
-        out, since = [], self.st.get("pasted", 0) - 120
+        out, since = [], max(self.st.get("pasted", 0) - 120, self.st.get("row_start", 0))  # never before this row began: a shared home holds the previous row's files
         for row in self.s.get("native") or []:
             root = row["root"].replace("{home}", self.st.get("home") or "/nonexistent").replace("{workspace}", self.project)
             for p in glob.glob(os.path.join(root, row.get("pattern", "**")), recursive=True):
