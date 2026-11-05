@@ -63,15 +63,27 @@ fn content_id(p: &Path) -> io::Result<String> {
 /// meanwhile. A pin there whose content matches is reused; else a link (a copy, mode kept, where
 /// a link fails: another volume) to a tmp of this process is hashed and renamed into place. Never
 /// a copy onto a tmp that exists: it may be a link to `exe`, and the copy would empty `exe`. A
-/// symlink at `exe` is followed first. Pins of older builds are left in place.
+/// symlink at `exe` is followed first. Pins of older builds are left in place. Folders it makes
+/// are 0700; a `root` of another user is refused.
 pub fn pin_exe(exe: &Path, root: &Path) -> io::Result<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
     let exe = std::fs::canonicalize(exe)?;
     let at = |id: &str| root.join(id).join(super::EXE_FILE);
     let id = content_id(&exe)?;
+    let mkdir = |p: &Path| {
+        std::fs::DirBuilder::new()
+            .recursive(true)
+            .mode(0o700)
+            .create(p)
+    };
+    mkdir(root)?;
+    // SAFETY: `geteuid` takes nothing and cannot fail.
+    if std::fs::metadata(root)?.uid() != unsafe { libc::geteuid() } {
+        return Err(io::ErrorKind::PermissionDenied.into());
+    }
     if content_id(&at(&id)).is_ok_and(|have| have == id) {
         return Ok(at(&id));
     }
-    std::fs::create_dir_all(root)?;
     let tmp = root.join(format!(".{}.tmp", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
     let done = std::fs::hard_link(&exe, &tmp)
@@ -81,13 +93,24 @@ pub fn pin_exe(exe: &Path, root: &Path) -> io::Result<PathBuf> {
         })
         .and_then(|()| content_id(&tmp))
         .and_then(|id| {
-            std::fs::create_dir_all(root.join(&id))?;
+            mkdir(&root.join(&id))?;
             std::fs::rename(&tmp, at(&id)).map(|()| at(&id))
         });
     if done.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
     done
+}
+
+/// Pins `exe` again at `pinned` (`root/<id>/goalcup`, [`pin_exe`]) when `exe` still hashes to
+/// `id`: a cleaner emptied the cache, but the build is the same.
+pub fn repin(pinned: &Path, exe: &Path) -> io::Result<PathBuf> {
+    let dir = pinned.parent().ok_or(io::ErrorKind::NotFound)?;
+    let root = dir.parent().ok_or(io::ErrorKind::NotFound)?;
+    if dir.file_name() != Some(content_id(exe)?.as_ref()) {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    pin_exe(exe, root)
 }
 
 /// [`bind_exact`], and a port that is taken or refused gives way to port 0 (`goalcup continue`).
@@ -569,6 +592,34 @@ mod tests {
             pin_exe(&exe, &exe.join("bin")).is_err(),
             "a file where the folder goes"
         );
+    }
+
+    /// goalcup's cache folders are the user's alone, and a pin root of another user is refused
+    /// (the caller then starts its own binary, logged).
+    #[test]
+    fn pin_folders_are_private_and_owned() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let t = tempfile::tempdir().unwrap();
+        let exe = t.path().join("goalcup");
+        std::fs::write(&exe, b"private").unwrap();
+        let bin = t.path().join("goalcup-cache").join("bin");
+        let pinned = pin_exe(&exe, &bin).unwrap();
+        for dir in [bin.parent().unwrap(), &bin, pinned.parent().unwrap()] {
+            let mode = std::fs::metadata(dir).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o700, "{}", dir.display());
+        }
+        // `/tmp` belongs to root: a pin root there is another user's.
+        let other = Path::new("/tmp");
+        // SAFETY: `geteuid` takes nothing and cannot fail.
+        if std::fs::metadata(other).unwrap().uid() == unsafe { libc::geteuid() } {
+            return;
+        }
+        std::fs::write(&exe, format!("other {}", std::process::id())).unwrap();
+        let got = pin_exe(&exe, other);
+        if let Ok(p) = &got {
+            let _ = std::fs::remove_dir_all(p.parent().unwrap());
+        }
+        assert_eq!(got.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     }
 
     /// The cache folder follows HOME and XDG_CACHE_HOME, never GOALCUP_HOME; relative ones are

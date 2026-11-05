@@ -156,9 +156,9 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     if let Some(Err(_)) = lock {
         line(&dir, "home_locked", &[]);
     }
-    let exe = std::env::current_exe().unwrap_or_default();
+    let mut exe = super::Pin::fixed(&std::env::current_exe().unwrap_or_default());
     let recorder_pid = Arc::new(Mutex::new(0));
-    let Ok(mut boot) = Boot::start(&exe, &listener, &facts, &recorder_pid, false) else {
+    let Ok(mut boot) = Boot::start(&mut exe, &listener, &facts, &recorder_pid, false) else {
         let _ = report.write_all(&[FAILED]);
         line(
             &dir,
@@ -185,6 +185,6 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
     };
     line(&dir, "watchdog_recovered", &facts_line);
     let pid = facts.harness.as_ref().map(|h| h.pid);
-    let _ = watch(boot, facts, None, (&exe, &listener, &recorder_pid), pid);
+    let _ = watch(boot, facts, None, (&mut exe, &listener, &recorder_pid), pid);
     ExitCode::SUCCESS
 }

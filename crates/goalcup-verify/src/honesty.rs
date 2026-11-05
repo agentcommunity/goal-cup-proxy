@@ -128,7 +128,8 @@ fn head_size(m: &Map<String, Value>) -> u64 {
 }
 
 /// Whether a GAP of `gap` names a listed tunnel of `reason` (PRD-01 section 4). A reason this
-/// build does not know takes any of the six.
+/// build does not know takes any of the six, or any GAP reason this build does not know: the
+/// next new pair (as 1.1.0 met `upstream_handshake_failed` and 16) is still a named gap.
 fn names_tunnel(reason: &str, gap: GapReason) -> bool {
     use GapReason::*;
     match reason {
@@ -146,6 +147,7 @@ fn names_tunnel(reason: &str, gap: GapReason) -> bool {
                 | UpstreamUntrusted
                 | UpstreamHandshakeFailed
                 | ProtocolOther
+                | Other(_)
         ),
     }
 }
@@ -549,5 +551,20 @@ fn fill(c: &mut Check, why: String, facts: Value) {
     c.facts = facts.as_object().cloned().unwrap_or_default();
     if c.result > Res::Skip {
         c.why = why;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tunnel reason and a GAP reason from a newer build (say 99 and `made_up`): the tunnel is
+    /// named, as `upstream_handshake_failed` with GAP 16 should have been for 1.1.0.
+    #[test]
+    fn an_unknown_reason_names_a_tunnel() {
+        assert!(names_tunnel("made_up", GapReason::Other(99)));
+        assert!(names_tunnel("made_up", GapReason::Pinned));
+        assert!(!names_tunnel("made_up", GapReason::RecorderDown));
+        assert!(!names_tunnel("pinned", GapReason::Other(99)));
     }
 }

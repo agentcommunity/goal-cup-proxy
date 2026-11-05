@@ -500,6 +500,44 @@ fn an_entry_with_its_own_ca_gets_both_in_one_file() {
     );
 }
 
+/// An own CA written `~/...` is under the participant's HOME, and a relative one is beside
+/// config.yaml: both are read and combined with the run bundle.
+#[test]
+fn an_own_ca_path_from_home_or_relative_is_found() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let user = d.join("user");
+    let e = env(d, &[("HOME", user.to_str().unwrap())]);
+    let home = d.join("goalcup/homes/hermes-cli");
+    std::fs::create_dir_all(home.join("certs")).unwrap();
+    std::fs::create_dir_all(user.join("certs")).unwrap();
+    std::fs::write(user.join("certs/a.pem"), "HOME CERT\n").unwrap();
+    std::fs::write(home.join("certs/b.pem"), "RELATIVE CERT\n").unwrap();
+    std::fs::write(d.join("bundle.pem"), "RUN BUNDLE\n").unwrap();
+    let config = "custom_providers:\n- name: a\n  base_url: https://llm.example.net/v1\n  \
+        ssl_ca_cert: ~/certs/a.pem\n- name: b\n  base_url: https://llm.example.net/v2\n  \
+        ssl_ca_cert: certs/b.pem\n";
+    std::fs::write(home.join("config.yaml"), config).unwrap();
+    let plan = finished("hermes-cli", &e, d);
+    assert!(
+        plan.log.iter().all(|l| !l.contains("ca_settings")),
+        "{:?}",
+        plan.log
+    );
+    drop(plan);
+    let text = std::fs::read_to_string(home.join("config.yaml")).unwrap();
+    let cas: Vec<String> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix("  ssl_ca_cert: \""))
+        .map(|l| std::fs::read_to_string(l.trim_end_matches('"')).unwrap())
+        .collect();
+    assert_eq!(
+        cas,
+        ["HOME CERT\nRUN BUNDLE\n", "RELATIVE CERT\nRUN BUNDLE\n"],
+        "{text}"
+    );
+}
+
 /// Each address goalcup could not give its certificate is one plain start line (point 6): an own
 /// CA that cannot be read, and `providers: null`.
 #[test]

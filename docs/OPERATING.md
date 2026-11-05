@@ -285,8 +285,9 @@ The version is written once, in the workspace `Cargo.toml`. In order:
 1. If `origin/main` lacks the version, `sh scripts/release.sh prepare <x.y.z>` opens the version pull
    request; merge it under the `main` ruleset.
 2. In a build box, run `sh scripts/gate.sh full` on the merged commit ([README, The gate](../README.md#the-gate)).
-   CI (`.github/workflows/ci.yml`) is one job, `check`, that runs `sh scripts/gate.sh fast` on pull requests
-   into `main` and pushes to `main` and `v1.0/integration`; there is no scope step and no separate Linux check.
+   CI (`.github/workflows/ci.yml`) runs `sh scripts/gate.sh fast` in its parts on pull requests into `main`
+   and pushes to `main` and `v1.0/integration`: `lint`, `rest` and `rust` in three nextest shards, behind
+   one required status, `check`, green only when all of them passed. There is no scope step.
 3. `sh scripts/release.sh tag <x.y.z>` fetches, checks that `origin/main` has the version, runs
    `scripts/pad/table --release-check` on that commit, refuses the tag if it fails, then tags that commit
    and pushes only the tag.

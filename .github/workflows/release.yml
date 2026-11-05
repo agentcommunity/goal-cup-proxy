@@ -65,13 +65,9 @@ jobs:
       - run: >-
           rustup toolchain install --profile minimal --target "$TARGET"
           "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          shared-key: release-${{ matrix.target }}
-          save-if: false
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
-          tool: cargo-nextest
+          tool: cargo-nextest@0.9.148
       # The Rust guards on this machine, so the watchdog, clock and socket-passing tests also run
       # on macOS and Linux arm64 before anything ships.
       - run: cargo nextest run --locked -p goalcup-format -p goalcup -p goalcup-verify

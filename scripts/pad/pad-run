@@ -282,16 +282,22 @@ class Run:
     def entry(self):
         """This run's entry folder under GOALCUP_HOME (PRD-10: runs/<run>/<entry>/status.json): the one that appeared after
         `goalcup start` was launched (st entries_before); on a shared home an older recorder's folder is never taken for it.
-        Several new ones go by the pane's processes; none of them the pane's is refused. Without the list: the newest."""
+        When the pane's pids are known, only a new one of the pane's processes counts (several, none the pane's: refused);
+        a status.json mid-write is read on the next poll. Without the list: the newest."""
         found = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "*", "status.json"))
         before = self.st.get("entries_before")
         if before is not None:
             found = [f for f in found if os.path.dirname(f) not in before]
-            if len(found) > 1:
-                pids = set(self.pane_pids())
-                found = [f for f in found if pids & {pc.dig(loads(path=f), "s4_pid"), pc.dig(loads(path=f), "s4_harness_pid")}]
-                if not found:
+            known = self.st.get("entry_dir")  # taken before: stays this run's after the pane's processes end
+            pids = set(self.pane_pids()) if found else set()
+            if pids:
+                got = {f: loads(path=f) for f in found if os.path.dirname(f) != known}
+                if not all(got.values()):
+                    return known  # a status.json mid-write: unchanged (None before the first), the caller polls
+                mine = [f for f in found if f not in got or pids & {pc.dig(got[f], "s4_pid"), pc.dig(got[f], "s4_harness_pid")}]
+                if not mine and len(found) > 1:
                     raise Step("INCONCLUSIVE", "several new entry folders and none belongs to this run's tmux pane")
+                found = mine
         found = sorted(found, key=os.path.getmtime)
         if found:
             e = os.path.dirname(found[-1])

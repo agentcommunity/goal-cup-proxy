@@ -256,6 +256,11 @@ fn every_gap_reason_has_words() {
     }
     // A pinned host was passed through unread; nobody refused anything.
     assert_ne!(text::gap_words("pinned"), text::gap_words("tls_refused"));
+    // True after one try or two: the retry may find no connection to try on.
+    assert_eq!(
+        words(16),
+        "the connection to the model service did not complete"
+    );
 }
 
 /// PRD-17 SC6: a `status.json` with no seal never prints the finished line or block: an open

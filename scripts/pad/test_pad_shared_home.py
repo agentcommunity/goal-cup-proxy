@@ -25,6 +25,7 @@ def bare(gc, **st):
     r = object.__new__(padrun.Run)
     r.st, r.s, r.quiet, r.tmux = dict(st), {}, True, "pad"
     r.env = {"GOALCUP_HOME": gc}
+    r.pane_pids = lambda: []  # no tmux here: the pane's pids unknown unless a test gives them
     return r
 
 
@@ -70,6 +71,32 @@ class Entry(unittest.TestCase):
             with self.assertRaises(padrun.Step) as ctx:
                 r.entry()
         self.assertIn("pane", ctx.exception.args[1])
+
+    def test_one_new_entry_not_the_panes_is_not_taken(self):  # another row's recorder started after this one
+        make_entry(self.home, "r2", "e2", pid=222)
+        r = bare(self.home, entries_before=[])
+        with mock.patch.object(r, "pane_pids", lambda: [111], create=True):
+            self.assertIsNone(r.entry())
+
+    def test_one_new_entry_the_panes_is_taken(self):
+        mine = make_entry(self.home, "r2", "e2", pid=111)
+        r = bare(self.home, entries_before=[])
+        with mock.patch.object(r, "pane_pids", lambda: [111], create=True):
+            self.assertEqual(r.entry(), mine)
+        with mock.patch.object(r, "pane_pids", lambda: [999], create=True):  # the harness ended; the pane is dead
+            self.assertEqual(r.entry(), mine)
+
+    def test_a_status_mid_write_keeps_polling(self):
+        mine = make_entry(self.home, "r2", "e2", pid=111)
+        make_entry(self.home, "r3", "e3", pid=222)
+        with open(os.path.join(mine, "status.json"), "w") as f:
+            f.write('{"pid": 1')  # half written
+        r = bare(self.home, entries_before=[])
+        with mock.patch.object(r, "pane_pids", lambda: [111], create=True):
+            self.assertIsNone(r.entry())  # not refused: the next poll reads it whole
+            with open(os.path.join(mine, "status.json"), "w") as f:
+                json.dump({"pid": 111, "harness": {"pid": 111}}, f)
+            self.assertEqual(r.entry(), mine)
 
 
 class HarnessFiles(unittest.TestCase):

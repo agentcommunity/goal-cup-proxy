@@ -44,8 +44,7 @@ detect_target() {
             if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then
                 arch=aarch64
             else
-                echo "goalcup runs on Apple silicon Macs and Linux; macOS on Intel is not supported." >&2
-                exit 1
+                die "goalcup runs on Apple silicon Macs and Linux, not Intel Macs; a goalcup already installed here keeps working but cannot be upgraded"
             fi
         fi
         echo "$arch-apple-darwin"

@@ -284,8 +284,9 @@ pub fn run(plan: LaunchPlan, facts: StartFacts) -> ExitCode {
     let Ok(exe) = std::env::current_exe() else {
         return ExitCode::from(NOT_STARTED);
     };
-    let pinned = pin(&facts.entry_dir, &exe);
-    run_with(plan, facts, &pinned)
+    let path = pin(&facts.entry_dir, &exe);
+    let own = (path != exe).then_some(exe);
+    run_pinned(plan, facts, Pin { path, own })
 }
 
 /// The binary the entry's boots start: the one it recorded ([`recorded_pin`]), else `exe` pinned
@@ -307,6 +308,48 @@ fn pin(entry_dir: &Path, exe: &Path) -> PathBuf {
     })
 }
 
+/// The binary recorders start from, and the watchdog's own binary while it is the way back.
+pub(crate) struct Pin {
+    path: PathBuf,
+    own: Option<PathBuf>,
+}
+
+impl Pin {
+    /// A binary with no way back.
+    pub(crate) fn fixed(path: &Path) -> Pin {
+        Pin {
+            path: path.to_path_buf(),
+            own: None,
+        }
+    }
+
+    /// `start` with the pin. When that fails (a cleaner emptied the cache, a noexec mount),
+    /// once: the pin redone from `own` while `own` still has its content ([`spawn::repin`]),
+    /// else `own` itself from then on and `exe_pin_failed` logged. A pin never leaves the
+    /// harness without a recorder.
+    fn spawn<T>(
+        &mut self,
+        dir: &Path,
+        mut start: impl FnMut(&Path) -> io::Result<T>,
+    ) -> io::Result<T> {
+        let failed = match start(&self.path) {
+            Ok(t) => return Ok(t),
+            Err(e) => e,
+        };
+        let Some(own) = self.own.take() else {
+            return Err(failed);
+        };
+        if spawn::repin(&self.path, &own).is_ok_and(|p| p == self.path)
+            && let Ok(t) = start(&self.path)
+        {
+            return Ok(t);
+        }
+        line(dir, "exe_pin_failed", &[]);
+        self.path = own;
+        start(&self.path)
+    }
+}
+
 /// The pin `rec/pin` names, else an older entry's `rec/goalcup`, when it is a file.
 fn recorded_pin(rec: &Path) -> Option<PathBuf> {
     use std::os::unix::ffi::OsStringExt;
@@ -320,7 +363,11 @@ fn recorded_pin(rec: &Path) -> Option<PathBuf> {
 
 /// [`run`] with the recorder started from `recorder_exe`. Every wait runs on boot time
 /// ([`Mono`]) compared by subtraction. The first control line is never logged.
-pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path) -> ExitCode {
+pub fn run_with(plan: LaunchPlan, facts: StartFacts, recorder_exe: &Path) -> ExitCode {
+    run_pinned(plan, facts, Pin::fixed(recorder_exe))
+}
+
+fn run_pinned(mut plan: LaunchPlan, mut facts: StartFacts, mut pin: Pin) -> ExitCode {
     let dir = facts.entry_dir.clone();
     let rec = dir.join("rec");
     not_dumpable();
@@ -360,7 +407,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
     // The recorder's pid, set under its lock in the same step as the spawn, so the tree walk
     // never takes a just-started recorder for a late child of the watchdog.
     let recorder_pid = Arc::new(Mutex::new(0));
-    let mut boot = match Boot::start(recorder_exe, &listener, &facts, &recorder_pid, false) {
+    let mut boot = match Boot::start(&mut pin, &listener, &facts, &recorder_pid, false) {
         Ok(boot) => boot,
         Err(_) => {
             remove_key(&rec);
@@ -411,7 +458,7 @@ pub fn run_with(mut plan: LaunchPlan, mut facts: StartFacts, recorder_exe: &Path
         }
     };
     let own = Some((&plan, modes.as_ref()));
-    let start = (recorder_exe, &listener, &recorder_pid);
+    let start = (&mut pin, &listener, &recorder_pid);
     let exit = watch(boot, facts, own, start, harness_pid);
     if let Some(shield) = shield.as_mut()
         && !shield.harness_exited()
@@ -436,7 +483,7 @@ fn watch(
     mut boot: Boot,
     mut facts: StartFacts,
     own: Option<(&LaunchPlan, Option<&shield::Modes>)>,
-    (recorder_exe, listener, recorder_pid): (&Path, &TcpListener, &Arc<Mutex<u32>>),
+    (pin, listener, recorder_pid): (&mut Pin, &TcpListener, &Arc<Mutex<u32>>),
     mut harness_pid: Option<u32>,
 ) -> Option<Option<ExitStatus>> {
     let dir = facts.entry_dir.clone();
@@ -650,7 +697,7 @@ fn watch(
             // A new boot takes the seal after `ready`.
             (restarts.hold, left) = (None, false);
             // One try a tick; the ended boot stays (its `next` sleeps the tick).
-            match Boot::start(recorder_exe, listener, &facts, recorder_pid, next_null) {
+            match Boot::start(pin, listener, &facts, recorder_pid, next_null) {
                 Ok(next) => {
                     (boot, failing_since) = (next, None);
                     boots += 1;
@@ -703,7 +750,7 @@ struct Boot {
 impl Boot {
     /// Spawns the recorder, sets `pid` to it under its lock, and writes the first line.
     fn start(
-        exe: &Path,
+        pin: &mut Pin,
         listener: &TcpListener,
         facts: &StartFacts,
         pid: &Mutex<u32>,
@@ -714,7 +761,9 @@ impl Boot {
         to.set_write_timeout(Some(Duration::from_secs(10)))?;
         let child = {
             let mut pid = lock(pid);
-            let child = spawn::recorder(exe, null, listener, &theirs)?;
+            let child = pin.spawn(&facts.entry_dir, |p| {
+                spawn::recorder(p, null, listener, &theirs)
+            })?;
             *pid = child.id();
             child
         };
@@ -1216,6 +1265,83 @@ mod tests {
             Some(rec.join(EXE_FILE)),
             "a pin that is gone"
         );
+    }
+
+    /// A pinned recorder that cannot start, set up for [`Pin::spawn`]: `own` a script that
+    /// exits 0, pinned under `t/cache` (points 1 and 3).
+    fn pinned_script(t: &Path) -> (Pin, PathBuf, PathBuf) {
+        let own = t.join("own");
+        fs::write(&own, b"#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&own, fs::Permissions::from_mode(0o755)).unwrap();
+        let path = spawn::pin_exe(&own, &t.join("cache")).unwrap();
+        let pin = Pin {
+            path: path.clone(),
+            own: Some(own.clone()),
+        };
+        (pin, path, own)
+    }
+
+    fn start(pin: &mut Pin, dir: &Path) -> io::Result<PathBuf> {
+        let mut used = PathBuf::new();
+        let mut child = pin.spawn(dir, |p| {
+            used = p.to_path_buf();
+            std::process::Command::new(p).spawn()
+        })?;
+        assert!(child.wait().unwrap().success());
+        Ok(used)
+    }
+
+    fn pin_failed_lines(dir: &Path) -> usize {
+        let log = fs::read_to_string(cli::goalcup_log(dir)).unwrap_or_default();
+        log.matches("exe_pin_failed").count()
+    }
+
+    /// A cleaner empties the cache between boots: the restart pins again from the watchdog's
+    /// own binary, whose content still matches, and starts the recorder from the same path.
+    #[test]
+    fn a_pin_deleted_between_boots_is_pinned_again() {
+        let t = tempfile::tempdir().unwrap();
+        let (mut pin, path, _) = pinned_script(t.path());
+        assert_eq!(start(&mut pin, t.path()).unwrap(), path);
+        fs::remove_dir_all(t.path().join("cache")).unwrap();
+        assert_eq!(start(&mut pin, t.path()).unwrap(), path, "the restart");
+        assert!(path.is_file());
+        assert_eq!(pin_failed_lines(t.path()), 0);
+    }
+
+    /// A pin that cannot run (noexec, a folder made unreadable) or no longer matches the
+    /// watchdog's binary: the recorder starts from the watchdog's own binary, logged once.
+    #[test]
+    fn a_pin_that_cannot_run_falls_back_to_the_exe() {
+        let t = tempfile::tempdir().unwrap();
+        let (mut pin, path, own) = pinned_script(t.path());
+        let id_dir = path.parent().unwrap().to_path_buf();
+        fs::set_permissions(&id_dir, fs::Permissions::from_mode(0o000)).unwrap();
+        let got = start(&mut pin, t.path());
+        fs::set_permissions(&id_dir, fs::Permissions::from_mode(0o700)).unwrap();
+        assert_eq!(got.unwrap(), own);
+        assert_eq!(pin_failed_lines(t.path()), 1);
+        assert_eq!(
+            start(&mut pin, t.path()).unwrap(),
+            own,
+            "it stays on the exe"
+        );
+        assert_eq!(pin_failed_lines(t.path()), 1, "logged once");
+
+        let t = tempfile::tempdir().unwrap();
+        let (mut pin, path, own) = pinned_script(t.path());
+        // A copy of mode 0644 (the pin is a hard link of `own`).
+        let bytes = fs::read(&path).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(start(&mut pin, t.path()).unwrap(), own, "not executable");
+
+        let t = tempfile::tempdir().unwrap();
+        let (mut pin, path, own) = pinned_script(t.path());
+        fs::remove_file(&path).unwrap();
+        fs::write(&own, b"#!/bin/sh\n# a newer build\nexit 0\n").unwrap();
+        assert_eq!(start(&mut pin, t.path()).unwrap(), own, "another build");
+        assert!(!path.exists(), "never pinned under the old id");
     }
 
     /// The first line carries the whole start facts. With the largest built-in connector's

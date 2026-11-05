@@ -1,5 +1,6 @@
 """gate.sh parts, nextest partition and --list: the parts together are exactly `fast`."""
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -33,6 +34,35 @@ class GateParts(unittest.TestCase):
 
     def test_full_refuses_a_part(self):
         self.assertEqual(gate("full", "--part", "lint", "--list").returncode, 2)
+
+
+class PathGuard(unittest.TestCase):
+    """The personal-path step as --list prints it, run in a throwaway repo."""
+
+    def guard(self, text):
+        cmd = [ln for ln in listed("fast", "--part", "rest") if "git grep" in ln][0]
+        self.assertTrue(cmd.startswith("sh -c "))
+        with tempfile.TemporaryDirectory() as tmp:
+            run = lambda *a: subprocess.run(a, cwd=tmp, capture_output=True, text=True)
+            run("git", "init", "-q")
+            if text is not None:
+                Path(tmp, "f.txt").write_text(text)
+                run("git", "add", "f.txt")
+            else:  # not a repo: git grep itself errors
+                Path(tmp, ".git").rename(Path(tmp, "gone"))
+            return run("sh", "-c", cmd[len("sh -c "):]).returncode
+
+    def test_stand_in_passes(self):
+        self.assertEqual(self.guard("see /Users/placeholder/x\n"), 0)
+
+    def test_no_match_passes(self):
+        self.assertEqual(self.guard("nothing here\n"), 0)
+
+    def test_personal_path_beside_stand_in_fails(self):
+        self.assertNotEqual(self.guard("/Users/placeholder/x and /Users/" + "alice/y\n"), 0)
+
+    def test_git_grep_error_fails(self):
+        self.assertNotEqual(self.guard(None), 0)
 
 
 if __name__ == "__main__":

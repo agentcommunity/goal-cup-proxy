@@ -168,9 +168,12 @@ pub(crate) struct Trust {
 /// own CA points at a file in the isolated home holding that CA and the run bundle; its own file
 /// is never changed, and one that cannot be read leaves the entry as it is. An address is an
 /// `https` URL whose host `hosts` decrypts, so a host left to the OS trust store (local, private,
-/// never) keeps it.
-pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<Trust> {
+/// never) keeps it. An own CA path is read as the harness reads it ([`own_path`]).
+pub(crate) fn trust_rows(t: &CaSettings, home: &Path, env: &Env, hosts: &HostList) -> Vec<Trust> {
     let file = launch::fill(&t.file, home, Path::new(""));
+    let user = env.vars.get("HOME").map(Path::new);
+    let beside = Path::new(&file).parent().unwrap_or(Path::new(""));
+    let own_path = |own: &str| own_path(own, user, beside);
     let doc = read(Path::new(&file)).unwrap_or_default();
     let address = |v: &Value| {
         let url = v.as_str()?.trim();
@@ -198,7 +201,7 @@ pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<T
             let ca = format!("{}.{}", path.rsplit_once('.').unwrap().0, t.key);
             let mut own = at(&doc, &ca).into_iter().filter_map(Value::as_str);
             let own = own.find(|v| !v.trim().is_empty() && *v != t.value);
-            let (rows, combine) = match own.map(|own| combined(home, &path, own)) {
+            let (rows, combine) = match own.map(|own| combined(home, &path, own, own_path)) {
                 None => (Ok(vec![row(ca, &t.value)]), None),
                 Some(Ok((to, pem))) => (Ok(vec![row(ca, &to.to_string_lossy())]), Some((to, pem))),
                 Some(Err(why)) => (Err(format!("{file}: {ca}: {why}")), None),
@@ -254,7 +257,12 @@ pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<T
 /// The file in the isolated home that the entry at `path`, holding its own CA `own`, points at
 /// instead, and that CA's PEM. The participant's path is kept beside it, so a later start, which
 /// reads the file's path in the entry, still finds their CA.
-fn combined(home: &Path, path: &str, own: &str) -> Result<(PathBuf, Vec<u8>), &'static str> {
+fn combined(
+    home: &Path,
+    path: &str,
+    own: &str,
+    own_path: impl Fn(&str) -> PathBuf,
+) -> Result<(PathBuf, Vec<u8>), &'static str> {
     let to = home
         .join(".goalcup-ca")
         .join(format!("{}.pem", short(path)));
@@ -263,11 +271,20 @@ fn combined(home: &Path, path: &str, own: &str) -> Result<(PathBuf, Vec<u8>), &'
         true => std::fs::read_to_string(&from).map_err(|_| "its own CA path is lost")?,
         false => own.to_string(),
     };
-    let pem = read_ca(Path::new(&theirs)).ok_or("its own CA file cannot be read")?;
+    let pem = read_ca(&own_path(&theirs)).ok_or("its own CA file cannot be read")?;
     if theirs == own {
         launch::replace(&from, own.as_bytes()).map_err(|_| "cannot keep its own CA path")?;
     }
     Ok((to, pem))
+}
+
+/// A participant's CA path as Hermes opens it: a leading `~/` from their HOME, a relative path
+/// from the config file's folder `beside`.
+fn own_path(own: &str, user: Option<&Path>, beside: &Path) -> PathBuf {
+    match (own.strip_prefix("~/"), user) {
+        (Some(rest), Some(user)) => user.join(rest),
+        _ => beside.join(own),
+    }
 }
 
 /// 8 hex of the SHA-256 of `s`: a name part that stays the same from start to start.

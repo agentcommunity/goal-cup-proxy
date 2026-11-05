@@ -110,6 +110,12 @@ class PathAndPass(Repo):
             self.assertEqual(table.release_check(sha), 1)
         self.assertEqual(out.getvalue().strip(), "no committed scripts/pad/rows/pad-rows.jsonl at %s" % sha)
 
+    def test_skill_change_fails(self):  # crates/goalcup/src/cli/skill.rs include_str!s skills/goal-cup/SKILL.md
+        self.repo(green_rows())
+        code, out = self.check(commit(table.ROOT, {"skills/goal-cup/SKILL.md": "changed\n"}, "skill"))
+        self.assertEqual(code, 1)
+        self.assertIn("skills/goal-cup/SKILL.md", out)
+
 
 def hermes_rows(**over):
     return [dict(r, **over) for r in green_rows() if r["connector"] == "hermes-cli"]
@@ -342,6 +348,14 @@ class VersionBump(Repo):
         code, out = self.check(sha)
         self.assertEqual(code, 1)
         self.assertIn("differs from", out)
+
+    def test_dependency_array_change_fails(self):  # same versions, a different edge inside `dependencies = [`
+        _, sha = self.bumped(extra={"Cargo.lock": (LOCK % ("1.1.0", "1.0.1", "aa")).replace(' "serde",\n', ' "serde_json",\n')})
+        self.assertEqual(self.check(sha)[0], 1)
+
+    def test_removed_dependency_fails(self):
+        _, sha = self.bumped(extra={"Cargo.lock": (LOCK % ("1.1.0", "1.0.1", "aa")).replace(' "serde",\n', "")})
+        self.assertEqual(self.check(sha)[0], 1)
 
     def test_other_cargo_toml_change_fails(self):
         _, sha = self.bumped(extra={"Cargo.toml": (CARGO % "1.1.0").replace('edition = "2021"', 'edition = "2024"')})
