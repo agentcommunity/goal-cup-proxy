@@ -364,3 +364,40 @@ fn watchdog_recover_holds_the_home_lock() {
     });
     until("the lock freed", || f.try_lock().ok());
 }
+
+/// A run recorded under an old id (`opencode2-cli`) has its home there: the recovered watchdog
+/// locks that home, not the one of the id the connector reloads as.
+#[test]
+fn watchdog_recover_locks_the_recorded_home() {
+    let mut d = setup(false);
+    let run_dir = d.entry_dir.parent().unwrap().to_path_buf();
+    let server = json!({"v": 1, "server": null, "run": RUN, "mode": "practice", "deadline": null,
+        "repo": null, "connector": {"id": "opencode2-cli", "name": "OpenCode", "source": "builtin"},
+        "hosts_file": null, "entries": []});
+    std::fs::write(cli::server_json(&run_dir), server.to_string()).unwrap();
+    d.facts.connector["id"] = json!("opencode-cli");
+    let got = watchdog::recover_with(&d.entry_dir, d.facts.clone(), &common::bin());
+    assert!(got.is_ok(), "{got:?}");
+    let homes = d.tmp.path().join("g/homes");
+    std::fs::create_dir_all(&homes).unwrap();
+    let open = |name: &str| {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(homes.join(name))
+            .unwrap()
+    };
+    let old = open("opencode2-cli.goalcup.lock");
+    until("the recorded home locked", || {
+        matches!(old.try_lock(), Err(std::fs::TryLockError::WouldBlock)).then_some(())
+    });
+    assert!(open("opencode-cli.goalcup.lock").try_lock().is_ok());
+
+    d.harness.kill().unwrap();
+    d.harness.wait().unwrap();
+    until("the seal", || {
+        read_json::<Value>(&status_json(&d.entry_dir)).filter(|s| !s["seal"].is_null())
+    });
+}
