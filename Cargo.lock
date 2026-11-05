@@ -475,7 +475,7 @@ dependencies = [
 
 [[package]]
 name = "goalcup"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "base64 0.22.1",
  "brotli-decompressor",
@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "goalcup-format"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "serde_json",
  "sha2",
@@ -519,7 +519,7 @@ dependencies = [
 
 [[package]]
 name = "goalcup-verify"
-version = "1.1.2"
+version = "1.1.3"
 dependencies = [
  "base64 0.22.1",
  "clap",

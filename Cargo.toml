@@ -8,7 +8,7 @@ edition = "2024"
 # the binaries and report fields read it through `env!("CARGO_PKG_VERSION")`. Change it with
 # `sh scripts/release.sh prepare <x.y.z>` opens the version PR when needed; after it merges, run
 # the full gate on that `origin/main`, then use `sh scripts/release.sh tag <x.y.z>`.
-version = "1.1.2"
+version = "1.1.3"
 license = "Apache-2.0"
 repository = "https://github.com/agentcommunity/goal-cup-proxy"
 homepage = "https://agentcommunity.org/goalcup"
