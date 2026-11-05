@@ -38,13 +38,13 @@ def commit(root, files, msg):
     return git(root, "rev-parse", "HEAD")
 
 
-def mkrepo(tmp, rows, tiers_text=None, harness=None):
+def mkrepo(tmp, rows, tiers_text=None, harness=None, base_files=None):
     """Repo in tmp: a base commit (a guarded file), then a commit with the rows at ROWS_REL and harness {cid: text}
     under scripts/pad/harnesses, then connectors/tiers.toml: tiers_text, or None for the file those rows render,
     or False for none. A row goalcup ending "+BASE" (green_rows' default) names the base commit. Returns the sha."""
     root = Path(tmp)
     git(root, "init", "-q")
-    base = commit(root, {"crates/x/lib.rs": "// base\n"}, "base")
+    base = commit(root, dict({"crates/x/lib.rs": "// base\n"}, **(base_files or {})), "base")
     files = {}
     if rows is not None:
         files[table.ROWS_REL] = "".join(json.dumps({k: v.replace("+BASE", "+" + base) if k == "goalcup" else v for k, v in r.items()}) + "\n"
@@ -315,3 +315,40 @@ class ReleaseVersions(Repo):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+CARGO = '[workspace]\nmembers = ["crates/*"]\n\n[workspace.package]\nversion = "%s"\nedition = "2021"\n\n[workspace.dependencies]\nserde = { version = "1", features = ["derive"] }\n'
+LOCK = ('version = 4\n\n[[package]]\nname = "goalcup"\nversion = "%s"\ndependencies = [\n "serde",\n]\n\n'
+        '[[package]]\nname = "serde"\nversion = "%s"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\nchecksum = "%s"\n')
+
+
+class VersionBump(Repo):
+    """A release that only bumps goalcup's own version keeps the rows (they test the same code)."""
+
+    def bumped(self, cargo_v="1.1.0", serde_v="1.0.1", sum_="aa", extra=None):
+        sha0 = self.repo(green_rows(), base_files={"Cargo.toml": CARGO % "1.0.0", "Cargo.lock": LOCK % ("1.0.0", "1.0.1", "aa")})
+        root = table.ROOT
+        files = {"Cargo.toml": CARGO % cargo_v, "Cargo.lock": LOCK % (cargo_v, serde_v, sum_)}
+        files.update(extra or {})
+        return sha0, commit(root, files, "bump")
+
+    def test_version_only_bump_passes(self):
+        _, sha = self.bumped()
+        code, out = self.check(sha)
+        self.assertEqual(code, 0, out)
+
+    def test_dependency_change_fails(self):
+        _, sha = self.bumped(serde_v="1.0.2", sum_="bb")
+        code, out = self.check(sha)
+        self.assertEqual(code, 1)
+        self.assertIn("differs from", out)
+
+    def test_other_cargo_toml_change_fails(self):
+        _, sha = self.bumped(extra={"Cargo.toml": (CARGO % "1.1.0").replace('edition = "2021"', 'edition = "2024"')})
+        code, out = self.check(sha)
+        self.assertEqual(code, 1)
+
+    def test_code_change_with_bump_fails(self):
+        _, sha = self.bumped(extra={"crates/x/lib.rs": "// changed\n"})
+        code, out = self.check(sha)
+        self.assertEqual(code, 1)
