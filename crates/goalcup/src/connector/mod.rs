@@ -303,8 +303,13 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     {
         version_notes.push(say);
     } else if let Some(rules) = connector.unread_rules().filter(|_| read.is_none() && free) {
+        // A line read but not parsed is not a line that could not be read.
+        let (what, printed) = match harness_version {
+            Some(_) => ("understand the version line", " printed"),
+            None => ("read", ""),
+        };
         version_notes.push(format!(
-            "goalcup could not read {} --version, so it used the rules for {rules}.",
+            "goalcup could not {what} {} --version{printed}, so it used the rules for {rules}.",
             connector.program
         ));
     }
