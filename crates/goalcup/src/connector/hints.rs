@@ -157,6 +157,7 @@ fn read(path: &Path) -> Option<Value> {
 /// One address's `ca_settings` rows, or why none can be written; and for an entry holding its own
 /// CA, the file to fill with that CA's PEM and then the run bundle (`LaunchPlan::finish_env`).
 pub(crate) struct Trust {
+    pub(crate) url: String,
     pub(crate) rows: Result<Vec<SettingRow>, String>,
     pub(crate) combine: Option<(PathBuf, Vec<u8>)>,
 }
@@ -202,7 +203,7 @@ pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<T
                 Some(Ok((to, pem))) => (Ok(vec![row(ca, &to.to_string_lossy())]), Some((to, pem))),
                 Some(Err(why)) => (Err(format!("{file}: {ca}: {why}")), None),
             };
-            trusts.push(Trust { rows, combine });
+            trusts.push(Trust { url, rows, combine });
         }
     }
     let mut used: Vec<String> = t
@@ -242,6 +243,7 @@ pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<T
         let ca = format!("{}.{}", key.rsplit_once('.').unwrap().0, t.key);
         let rows = Ok(vec![row(key, &url), row(ca, &t.value)]);
         trusts.push(Trust {
+            url,
             rows,
             combine: None,
         });

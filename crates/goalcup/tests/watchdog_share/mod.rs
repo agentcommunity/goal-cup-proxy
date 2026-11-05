@@ -255,6 +255,7 @@ pub fn plan(d: &Path) -> LaunchPlan {
         ca_env: Vec::new(),
         hosts: HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap(),
         ca_files: Vec::new(),
+        trust_notes: Vec::new(),
         native: NativeSources::default(),
         mask_rules: Vec::new(),
         secret_values: Vec::new(),

@@ -327,6 +327,7 @@ pub fn prepare(
     } else {
         lines.extend(plan.version_notes.clone());
     }
+    lines.extend(plan.trust_notes.clone());
     for (what, file) in [
         ("Connector", first.map(PathBuf::from)),
         ("Host list", sj.hosts_file.clone()),

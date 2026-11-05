@@ -143,6 +143,9 @@ pub struct LaunchPlan {
     /// The applied row's `say`, or the line that the version could not be read on a connector with
     /// rows: shown at start, and also in `notes`.
     pub version_notes: Vec<String>,
+    /// One line for each address `ca_settings` could not give the run CA: shown at start and
+    /// continue.
+    pub trust_notes: Vec<String>,
     /// Hint and refusal files there but not read (linked, over 1 MiB, unreadable, unparsable):
     /// PRD-10 shows one start line for each (section 2) and logs it.
     pub unread: Vec<PathBuf>,
@@ -369,7 +372,7 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     );
 
     // A row not written is a log line, never a refusal (section 5).
-    let mut ca_files = Vec::new();
+    let (mut ca_files, mut missed) = (Vec::new(), Vec::new());
     if free {
         let skipped = write_settings(home, &c.update_off).into_iter();
         log.extend(skipped.map(|s| format!("update_off not written: {}", s.reason)));
@@ -384,6 +387,8 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
             };
             if skipped.is_empty() {
                 ca_files.extend(trust.combine);
+            } else if !missed.contains(&trust.url) {
+                missed.push(trust.url);
             }
             let not = skipped
                 .iter()
@@ -391,6 +396,17 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
             log.extend(not);
         }
     }
+    // Point 6: the participant hears which address may fail.
+    let file = connector.ca_settings.as_ref().map(|t| &t.file);
+    let (name, file) = (&connector.name, file.and_then(|f| f.rsplit('/').next()));
+    let file = file.unwrap_or_default();
+    let trust_notes = missed.iter().map(|url| {
+        format!(
+            "goalcup could not add its certificate for {url} in {name}'s {file}; calls to it may \
+            fail on macOS."
+        )
+    });
+    let trust_notes = trust_notes.collect();
     // Where `home` sets `HOME`, a login shell would lose the handed `PATH` (PRD-17 P11).
     let profile = connector.home.get("HOME").zip(harness_env.get("PATH"));
     if free
@@ -426,6 +442,7 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         secret_values: Vec::new(),
         notes,
         version_notes,
+        trust_notes,
         version_row,
         effective,
         unread,

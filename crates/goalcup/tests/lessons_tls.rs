@@ -338,6 +338,7 @@ fn boot(entry: &Path, mode: &Path) -> std::process::ExitCode {
         ca_env: vec![],
         hosts,
         ca_files: Vec::new(),
+        trust_notes: Vec::new(),
         native: NativeSources::default(),
         mask_rules: vec![],
         secret_values: vec![],

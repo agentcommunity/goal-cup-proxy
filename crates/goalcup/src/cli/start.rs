@@ -320,6 +320,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     } else {
         lines.extend(plan.version_notes.clone());
     }
+    lines.extend(plan.trust_notes.clone());
     lines.push(tier_line(
         &name,
         plan.harness_version.as_deref(),
