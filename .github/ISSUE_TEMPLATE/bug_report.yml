@@ -45,7 +45,6 @@ body:
       label: Platform
       options:
         - macOS, Apple silicon
-        - macOS, Intel
         - Linux, arm64
         - Linux, x86_64
         - Windows, inside WSL2
