@@ -343,6 +343,32 @@ fn watchdog_end_real_seal_records_a_version_read_after_exit() {
     }
 }
 
+/// A version line past 64 units is cut before the after-exit read is compared, as at start: an
+/// unchanged harness whose version sits past the cut gets no `version_read` note.
+#[test]
+fn watchdog_end_real_long_version_line_is_cut_before_the_compare() {
+    let f = Fixture::new();
+    let (d, fake) = (f.d.display().to_string(), f.m("fake"));
+    let long = format!("fake {} 1.0.0", "x".repeat(70));
+    std::fs::write(f.m("version"), format!("{long}\n")).unwrap();
+    let script = format!("#!/bin/sh\nif [ \"$1\" = --version ]; then cat {d}/version; fi\n");
+    std::fs::write(&fake, script).unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut plan = f.plan();
+    (plan.program, plan.argv) = (fake, Vec::new());
+    (plan.before, plan.after) = (Vec::new(), Vec::new());
+    plan.harness_version = Some(goalcup::connector::launch::cut_version(&long).into());
+    let mut facts = f.facts(&plan);
+    facts.harness_version = plan.harness_version.clone();
+    f.run_plan(plan, facts, &real(), || {});
+    let notes = records(&f.entry_dir).into_iter().filter(|r| match r {
+        Record::Event { json, .. } => serde_json::from_slice::<serde_json::Value>(json)
+            .is_ok_and(|e| e["what"] == "version_read"),
+        _ => false,
+    });
+    assert_eq!(notes.count(), 0);
+}
+
 /// Point 3, ledger R3 and L-P1 (PRD-02 section 8 step 8): a recorder killed mid-run is
 /// followed at once by a second boot, and the sealed entry holds exactly one `recorder_down`
 /// GAP, with start before end, in records that decode.
