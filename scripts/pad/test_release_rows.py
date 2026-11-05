@@ -91,21 +91,21 @@ class Main(unittest.TestCase):
 
 class LiveRecorders(unittest.TestCase):
     PS = ("101 /bin/zsh -l\n"
-          "202 /b/goalcup recorder GOALCUP_HOME=/h/signin/home PATH=/usr/bin\n"
+          "202 /b/goalcup recorder GOALCUP_HOME=/h/signin/hm PATH=/usr/bin\n"
           "303 /b/goalcup recorder GOALCUP_HOME=/h/other/home\n"
-          "404 /b/goalcup start --test GOALCUP_HOME=/h/signin/home\n"
-          "505 /h/signin/home/bin/goalcup recorder\n"
-          "606 /b/goalcup recorder GOALCUP_HOME=/h/signin/home2\n")
+          "404 /b/goalcup start --test GOALCUP_HOME=/h/signin/hm\n"
+          "505 /h/signin/hm/bin/goalcup recorder\n"
+          "606 /b/goalcup recorder GOALCUP_HOME=/h/signin/hm2\n")
 
     def test_only_recorders_under_the_signin_home_are_named(self):
-        self.assertEqual([p for p, _ in rr.live_recorders("/h/signin/home", self.PS)], ["202", "505"])
+        self.assertEqual([p for p, _ in rr.live_recorders("/h/signin/hm", self.PS)], ["202", "505"])
 
     def test_a_warning_line_names_them_before_each_signin_row_and_kills_nothing(self):
         out, rows = io.StringIO(), []
         with redirect_stdout(out), mock.patch.object(rr, "ps_text", lambda: self.PS), mock.patch.object(rr, "PAUSE", 0), \
                 mock.patch.object(rr, "run_row", lambda d, row, lock, results: rows.append(row)), \
                 mock.patch.object(rr.shutil, "which", lambda n: None), mock.patch.object(rr.os, "kill", side_effect=AssertionError("kills nothing")):
-            rr.run_chains("/nonexistent", {"signin": ["a", "b"], "gateway": ["c"]}, "/h/signin/home")
+            rr.run_chains("/nonexistent", {"signin": ["a", "b"], "gateway": ["c"]}, "/h/signin/hm")
         lines = [ln for ln in out.getvalue().splitlines() if ln.startswith("warning:")]
         self.assertEqual(sorted(rows), ["a", "b", "c"])
         self.assertEqual(len(lines), 2)  # one before each sign-in row; none for the gateway chain
