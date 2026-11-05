@@ -264,11 +264,13 @@ fn watchdog_recover_refusals_start_nothing() {
     drop(taken);
     std::fs::remove_file(d.entry_dir.join("rec").join(watchdog::KEY_FILE)).unwrap();
     assert_eq!(try_it(&d), Err(NotRecovered::KeyMissing));
-    // The pinning entry leaves no `rec/goalcup` behind when it refuses.
-    let pin = d.entry_dir.join("rec").join(watchdog::EXE_FILE);
+    // Recover starts the binary the entry recorded (so it pins nothing in this HOME), and a
+    // refusal leaves that record alone.
+    let pin = d.entry_dir.join("rec").join(watchdog::PIN_FILE);
+    std::fs::write(&pin, common::bin().as_os_str().as_encoded_bytes()).unwrap();
     let pinned = watchdog::recover(&d.entry_dir, d.facts.clone());
     assert_eq!(pinned, Err(NotRecovered::KeyMissing));
-    assert!(!pin.exists(), "pin left in a dead entry");
+    assert_eq!(std::fs::read(&pin).unwrap(), common::bin().as_os_str().as_encoded_bytes());
     assert!(watchdog_pid(&d.entry_dir).is_none());
     assert!(spawn::bind_exact(d.port).is_ok(), "port left bound");
     d.harness.kill().unwrap();

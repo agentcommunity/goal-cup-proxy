@@ -1177,6 +1177,24 @@ mod tests {
         assert_eq!(moved(&w(false, None, Some(3))), Some(Mono(8 * SEC)));
     }
 
+    /// Every boot of an entry starts the binary it recorded: `rec/pin`, else an old entry's
+    /// `rec/goalcup`, else none (the caller pins).
+    #[test]
+    fn an_entry_keeps_its_pin() {
+        let t = tempfile::tempdir().unwrap();
+        let rec = t.path().join("rec");
+        fs::create_dir(&rec).unwrap();
+        assert_eq!(recorded_pin(&rec), None);
+        fs::write(rec.join(EXE_FILE), b"old pin").unwrap();
+        assert_eq!(recorded_pin(&rec), Some(rec.join(EXE_FILE)));
+        let shared = t.path().join("goalcup");
+        fs::write(&shared, b"x").unwrap();
+        fs::write(rec.join(PIN_FILE), shared.as_os_str().as_encoded_bytes()).unwrap();
+        assert_eq!(recorded_pin(&rec), Some(shared.clone()));
+        fs::remove_file(&shared).unwrap();
+        assert_eq!(recorded_pin(&rec), Some(rec.join(EXE_FILE)), "a pin that is gone");
+    }
+
     /// The first line carries the whole start facts. With the largest built-in connector's
     /// plan, a minted CA and 32 shaped fake values of 120 bytes it stays under the line limit,
     /// so the recorder can read it (point 1: a start line that does not fit records nothing).

@@ -471,39 +471,63 @@ pub fn look(pid: u32) -> Option<Option<std::process::ExitStatus>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
 
+    /// One path per build content, shared by every run: a firewall rule keyed by path holds.
     #[test]
-    fn pin_exe_survives_a_replace() {
+    fn pin_exe_is_one_path_per_content() {
         let t = tempfile::tempdir().unwrap();
-        let (exe, rec) = (t.path().join("goalcup"), t.path().join("rec"));
-        std::fs::create_dir(&rec).unwrap();
+        let (exe, bin) = (t.path().join("goalcup"), t.path().join("cache").join("bin"));
         std::fs::write(&exe, b"old").unwrap();
-        let pinned = pin_exe(&exe, &rec).unwrap();
-        assert_eq!(pinned, rec.join(super::super::EXE_FILE));
+        let pinned = pin_exe(&exe, &bin).unwrap();
+        let id = &hex::encode(sha2::Sha256::digest(b"old"))[..16];
+        assert_eq!(pinned, bin.join(id).join(super::super::EXE_FILE));
+        assert_eq!(pin_exe(&exe, &bin).unwrap(), pinned, "a second run reuses it");
         std::fs::write(t.path().join("new"), b"new").unwrap();
         std::fs::rename(t.path().join("new"), &exe).unwrap(); // install.sh:328
-        assert_eq!(std::fs::read(&pinned).unwrap(), b"old");
-        pin_exe(&exe, &rec).unwrap(); // recover pins again
-        assert_eq!(std::fs::read(&pinned).unwrap(), b"new");
-        assert!(!rec.join("goalcup.tmp").exists());
+        let newer = pin_exe(&exe, &bin).unwrap();
+        assert_ne!(newer, pinned);
+        assert_eq!(std::fs::read(&pinned).unwrap(), b"old", "a running run keeps its binary");
+        assert_eq!(std::fs::read(&newer).unwrap(), b"new");
+        std::fs::remove_file(&newer).unwrap();
+        std::fs::write(&newer, b"bad").unwrap();
+        assert_eq!(pin_exe(&exe, &bin).unwrap(), newer);
+        assert_eq!(std::fs::read(&newer).unwrap(), b"new", "a pin that hashes wrong is redone");
+        assert_eq!(std::fs::read_dir(&bin).unwrap().count(), 2, "no tmp left");
     }
 
     #[test]
     fn pin_exe_follows_a_relative_symlink() {
         let t = tempfile::tempdir().unwrap();
-        let (bin, rec) = (t.path().join("bin"), t.path().join("rec"));
+        let bin = t.path().join("bin");
         std::fs::create_dir(&bin).unwrap();
-        std::fs::create_dir(&rec).unwrap();
         std::fs::write(t.path().join("real"), b"real").unwrap();
         std::os::unix::fs::symlink("../real", bin.join("goalcup")).unwrap();
-        let pinned = pin_exe(&bin.join("goalcup"), &rec).unwrap();
+        let pinned = pin_exe(&bin.join("goalcup"), &t.path().join("pins")).unwrap();
         assert_eq!(std::fs::read(&pinned).unwrap(), b"real");
     }
+
     #[test]
     fn pin_exe_fails_cleanly() {
         let t = tempfile::tempdir().unwrap();
         let exe = t.path().join("goalcup");
         std::fs::write(&exe, b"x").unwrap();
-        assert!(pin_exe(&exe, &t.path().join("no-such-dir")).is_err());
+        assert!(pin_exe(&exe, &exe.join("bin")).is_err(), "a file where the folder goes");
+    }
+
+    /// The cache folder follows HOME and XDG_CACHE_HOME, never GOALCUP_HOME; relative ones are
+    /// ignored.
+    #[test]
+    fn pin_root_is_the_user_cache() {
+        let home = Some("/u".to_string());
+        let xdg = Some("/x".to_string());
+        let mac = pick_pin_root(home.clone(), xdg.clone(), true);
+        assert_eq!(mac.unwrap(), Path::new("/u/Library/Caches/goalcup/bin"));
+        let linux = pick_pin_root(home.clone(), xdg, false);
+        assert_eq!(linux.unwrap(), Path::new("/x/goalcup/bin"));
+        let linux = pick_pin_root(home, Some("rel".into()), false);
+        assert_eq!(linux.unwrap(), Path::new("/u/.cache/goalcup/bin"));
+        assert!(pick_pin_root(Some("rel".into()), None, true).is_none());
+        assert!(pick_pin_root(None, None, false).is_none());
     }
 }
