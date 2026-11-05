@@ -150,11 +150,14 @@ pub(crate) fn run(facts: StartFacts, listener: TcpListener, mut report: UnixStre
         line(&dir, "watchdog_pid_failed", &[]);
     }
     // Held to the end, so a `goalcup start` of this harness is refused. `Err`: a start took it in
-    // the gap after cli/recover.rs dropped its own.
-    let (home, id) = (dir.ancestors().nth(3), facts.connector["id"].as_str());
-    let lock = home
-        .zip(id)
-        .map(|(h, id)| HomeLock::take(&cli::isolated_home(h, id)));
+    // the gap after cli/recover.rs dropped its own. The home is the recorded id's (`run_home`: an
+    // old id keeps its own home), not the id the connector reloads as.
+    let server = dir.parent().map(cli::server_json);
+    let server: Option<cli::ServerJson> = server.and_then(|p| read_json(&p));
+    let recorded = server.map(|s| s.connector.id);
+    let id = recorded.as_deref().or(facts.connector["id"].as_str());
+    let lock =
+        (dir.ancestors().nth(3).zip(id)).map(|(h, id)| HomeLock::take(&cli::isolated_home(h, id)));
     if let Some(Err(_)) = lock {
         line(&dir, "home_locked", &[]);
     }
