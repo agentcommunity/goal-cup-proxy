@@ -564,6 +564,8 @@ fn watch(
                 after = Some(thread::spawn(move || {
                     spawn::helpers(&program, &entries, &env, spawn::BUDGET_NS, &dir, "after");
                     let line = launch::harness_version(&program, &probe_env)?;
+                    // Cut as the start line was, so a long line compares like with like.
+                    let line = launch::cut_version(&line).to_owned();
                     (parsed(&line) != was).then_some(line)
                 }));
             }
