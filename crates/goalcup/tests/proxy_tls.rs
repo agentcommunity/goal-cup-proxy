@@ -14,7 +14,7 @@ use goalcup::proxy::ProxyHandle;
 use goalcup::proxy::ca::RunCa;
 use goalcup::proxy::connect::fingerprint_hex16;
 use goalcup::proxy::hosts::{Hosts, REFUSAL_EXPIRY, SILENT_STRIKES};
-use goalcup::proxy::tls::{Offer, Tls, upstream_offer};
+use goalcup::proxy::tls::{Offer, Tls, UpstreamFail, classify_upstream_handshake, upstream_offer};
 use proxy_fixtures::{client_trusting, conns, get, proxy, serve_null, through};
 use rustls::ClientConnection;
 use rustls::pki_types::ServerName;
@@ -306,6 +306,107 @@ async fn an_untrusted_upstream_is_a_tunnel_to_its_own_certificate() {
     assert_eq!(gaps_of(&calls, sid), [(GapReason::UpstreamUntrusted, None)]);
 }
 
+/// Only a certificate the roots refuse (or an alert) is untrusted; an I/O failure (a reset, an
+/// EOF, a timeout) is a failed handshake, retried once.
+#[test]
+fn only_a_certificate_error_is_untrusted() {
+    use rustls::{CertificateError, Error};
+    let cert = Error::InvalidCertificate(CertificateError::UnknownIssuer);
+    let wrapped = std::io::Error::new(std::io::ErrorKind::InvalidData, cert);
+    assert_eq!(classify_upstream_handshake(&wrapped), UpstreamFail::Untrusted);
+    for kind in [
+        std::io::ErrorKind::ConnectionReset,
+        std::io::ErrorKind::UnexpectedEof,
+        std::io::ErrorKind::TimedOut,
+    ] {
+        let e = std::io::Error::from(kind);
+        assert_eq!(classify_upstream_handshake(&e), UpstreamFail::Failed(kind));
+    }
+}
+
+/// A front for `to` that resets (SO_LINGER 0) each of its first `n` connections once it has read
+/// the ClientHello, and relays every later one.
+async fn resetting_front(to: SocketAddr, n: usize) -> SocketAddr {
+    let front = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let at = front.local_addr().unwrap();
+    tokio::spawn(async move {
+        for i in 0.. {
+            let Ok((mut s, _)) = front.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                if i < n {
+                    let _ = s.read(&mut [0u8; 4096]).await;
+                    let _ = s.set_linger(Some(std::time::Duration::ZERO));
+                } else if let Ok(mut up) = tokio::net::TcpStream::connect(to).await {
+                    let _ = tokio::io::copy_bidirectional(&mut s, &mut up).await;
+                }
+            });
+        }
+    });
+    at
+}
+
+/// `api.openai.com` sent to `at`, trusting `up`'s test CA.
+fn proxy_at(up: &Upstream, at: SocketAddr) -> (ProxyHandle, SocketAddr, Calls, RunCa, TempDir) {
+    let dir = tempfile::tempdir().unwrap();
+    let roots = up.pki().roots_file(dir.path()).display().to_string();
+    let env = [
+        ("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={at}")),
+        ("GOALCUP_TEST_EXTRA_ROOTS", roots),
+    ];
+    let (h, addr, calls, ca) = proxy(HOST_FILE, &env);
+    (h, addr, calls, ca, dir)
+}
+
+/// One reset during the upstream handshake is retried on a fresh TCP leg, and the call is
+/// decrypted (point 1): no gap for a transient failure.
+#[tokio::test]
+async fn an_upstream_reset_once_is_retried_and_decrypted() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let front = resetting_front(up.addr(), 1).await;
+    let (_h, addr, calls, ca, _dir) = proxy_at(&up, front);
+    let c = TlsConnector::from(client_trusting(vec![ca.cert_der().clone()], &[HTTP11]));
+    let mut t = c
+        .connect(name("api.openai.com"), through(addr, TARGET).await)
+        .await
+        .expect("the harness meets the run CA's leaf");
+    get(&mut t).await;
+    drop(t);
+    let (sid, meta, _) = conns(&calls, 1).await.remove(0);
+    assert_eq!(meta["mode"], "decrypt");
+    assert!(gaps_of(&calls, sid).is_empty());
+}
+
+/// Two failed upstream handshakes are a tunnel with its own reason, not `upstream_untrusted`:
+/// the io error kind in the meta, GAP `upstream_handshake_failed`.
+#[tokio::test]
+async fn two_upstream_resets_are_a_failed_handshake_not_untrusted() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let front = resetting_front(up.addr(), 2).await;
+    let (_h, addr, calls, _, _dir) = proxy_at(&up, front);
+    let own = TlsConnector::from(up.pki().client_config(&[HTTP11]));
+    let mut t = own
+        .connect(name("api.openai.com"), through(addr, TARGET).await)
+        .await
+        .unwrap();
+    get(&mut t).await;
+    drop(t);
+    let (sid, meta, _) = conns(&calls, 1).await.remove(0);
+    assert_eq!(
+        (&meta["mode"], &meta["reason"], &meta["io"]),
+        (
+            &json!("tunnel"),
+            &json!("upstream_handshake_failed"),
+            &json!("ConnectionReset")
+        )
+    );
+    assert_eq!(
+        gaps_of(&calls, sid),
+        [(GapReason::UpstreamHandshakeFailed, None)]
+    );
+}
+
 /// A null boot (`serve_null`) with `api.openai.com` sent to `up`, trusting its test CA.
 fn null_proxy(up: &Upstream) -> (ProxyHandle, SocketAddr, Calls, RunCa) {
     let dir = tempfile::tempdir().unwrap();
@@ -466,7 +567,8 @@ async fn a_close_mid_handshake_teaches_nothing() {
 }
 
 /// cr-proxy-4: an upstream that takes the TCP connection and never answers the ClientHello is an
-/// `upstream_untrusted` tunnel once the handshake deadline passes.
+/// `upstream_handshake_failed` tunnel once the handshake deadline passes: the stall used the
+/// whole deadline, so there is no retry (point 3).
 #[tokio::test]
 async fn a_stalled_upstream_handshake_becomes_a_tunnel() {
     let (staller, at) = common::ports::held(); // accepts into the backlog, never answers
@@ -491,7 +593,8 @@ async fn a_stalled_upstream_handshake_becomes_a_tunnel() {
         }
     };
     let meta = common::within_async(std::time::Duration::from_secs(5), opened).await;
-    assert_eq!(meta["reason"], "upstream_untrusted");
+    assert_eq!(meta["reason"], "upstream_handshake_failed");
+    assert_eq!(meta["io"], "TimedOut");
     drop(staller);
 }
 

@@ -247,11 +247,11 @@ fn refused_and_unsent_end_at_the_end() {
 fn every_gap_reason_has_words() {
     let other = |n: u8| format!("other ({n})");
     let words = |n: u8| text::gap_words(&GapReason::from_u8(n).name());
-    for n in 1..=15u8 {
+    for n in 1..=16u8 {
         assert!(!words(n).is_empty());
         assert_eq!(words(n) == other(n), n == 8 || n == 9, "{n}: {}", words(n));
     }
-    for n in [0u8, 16, 200] {
+    for n in [0u8, 17, 200] {
         assert_eq!(words(n), other(n));
     }
     // A pinned host was passed through unread; nobody refused anything.
