@@ -154,13 +154,23 @@ fn read(path: &Path) -> Option<Value> {
     }
 }
 
+/// One address's `ca_settings` rows, or why none can be written; and for an entry holding its own
+/// CA, the file to fill with that CA's PEM and then the run bundle (`LaunchPlan::finish_env`).
+pub(crate) struct Trust {
+    pub(crate) rows: Result<Vec<SettingRow>, String>,
+    pub(crate) combine: Option<(PathBuf, Vec<u8>)>,
+}
+
 /// The rows giving each address the harness uses the run bundle (`ca_settings`): the CA key on
-/// each participant entry holding an address, unless it holds its own CA, and a
-/// `goalcup-trust-*` entry for every other address used; when the file names none, one for each
-/// `fallback` address. An address is an `https` URL whose host `hosts` decrypts, so a host left
-/// to the OS trust store (local, private, never) keeps it.
-pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<SettingRow> {
-    let doc = read(Path::new(&launch::fill(&t.file, home, Path::new("")))).unwrap_or_default();
+/// each participant entry holding an address, and a `goalcup-trust-*` entry for every other
+/// address used; when the file names none, one for each `fallback` address. An entry holding its
+/// own CA points at a file in the isolated home holding that CA and the run bundle; its own file
+/// is never changed, and one that cannot be read leaves the entry as it is. An address is an
+/// `https` URL whose host `hosts` decrypts, so a host left to the OS trust store (local, private,
+/// never) keeps it.
+pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<Trust> {
+    let file = launch::fill(&t.file, home, Path::new(""));
+    let doc = read(Path::new(&file)).unwrap_or_default();
     let address = |v: &Value| {
         let url = v.as_str()?.trim();
         let (https, host, _) = authority(url)?;
@@ -173,7 +183,7 @@ pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<S
         key,
         value: value.to_string(),
     };
-    let (mut rows, mut have) = (Vec::new(), Vec::new());
+    let (mut trusts, mut have) = (Vec::new(), Vec::new());
     for pattern in &t.entries {
         let parts = pattern.split('.').count();
         for (path, value) in at_paths(&doc, pattern) {
@@ -186,8 +196,13 @@ pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<S
             have.push(same(&url));
             let ca = format!("{}.{}", path.rsplit_once('.').unwrap().0, t.key);
             let mut own = at(&doc, &ca).into_iter().filter_map(Value::as_str);
-            let own = own.any(|v| !v.trim().is_empty() && v != t.value);
-            rows.extend((!own).then(|| row(ca, &t.value)));
+            let own = own.find(|v| !v.trim().is_empty() && *v != t.value);
+            let (rows, combine) = match own.map(|own| combined(home, &path, own)) {
+                None => (Ok(vec![row(ca, &t.value)]), None),
+                Some(Ok((to, pem))) => (Ok(vec![row(ca, &to.to_string_lossy())]), Some((to, pem))),
+                Some(Err(why)) => (Err(format!("{file}: {ca}: {why}")), None),
+            };
+            trusts.push(Trust { rows, combine });
         }
     }
     let mut used: Vec<String> = t
@@ -220,15 +235,56 @@ pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<S
         let mut name = name.join("-");
         // Addresses that differ only in punctuation share a name: the later one adds a hash.
         if names.contains(&name) {
-            let hash = hex::encode(&Sha256::digest(url.as_bytes())[..4]);
-            name = format!("{name}-{hash}");
+            name = format!("{name}-{}", short(&url));
         }
         names.push(name.clone());
         let key = t.add.replace('*', &format!("goalcup-trust-{name}"));
         let ca = format!("{}.{}", key.rsplit_once('.').unwrap().0, t.key);
-        rows.extend([row(key, &url), row(ca, &t.value)]);
+        let rows = Ok(vec![row(key, &url), row(ca, &t.value)]);
+        trusts.push(Trust {
+            rows,
+            combine: None,
+        });
     }
-    rows
+    trusts
+}
+
+/// The file in the isolated home that the entry at `path`, holding its own CA `own`, points at
+/// instead, and that CA's PEM. The participant's path is kept beside it, so a later start, which
+/// reads the file's path in the entry, still finds their CA.
+fn combined(home: &Path, path: &str, own: &str) -> Result<(PathBuf, Vec<u8>), &'static str> {
+    let to = home
+        .join(".goalcup-ca")
+        .join(format!("{}.pem", short(path)));
+    let from = to.with_extension("from");
+    let theirs = match Path::new(own) == to {
+        true => std::fs::read_to_string(&from).map_err(|_| "its own CA path is lost")?,
+        false => own.to_string(),
+    };
+    let pem = read_ca(Path::new(&theirs)).ok_or("its own CA file cannot be read")?;
+    if theirs == own {
+        launch::replace(&from, own.as_bytes()).map_err(|_| "cannot keep its own CA path")?;
+    }
+    Ok((to, pem))
+}
+
+/// 8 hex of the SHA-256 of `s`: a name part that stays the same from start to start.
+fn short(s: &str) -> String {
+    hex::encode(&Sha256::digest(s.as_bytes())[..4])
+}
+
+/// A participant's CA file: a regular file of at most 1 MiB, opened without blocking (a link is
+/// followed: the file is theirs).
+fn read_ca(path: &Path) -> Option<Vec<u8>> {
+    let file = (std::fs::OpenOptions::new().read(true))
+        .custom_flags(libc::O_NONBLOCK)
+        .open(path)
+        .ok()?;
+    let meta = file.metadata().ok()?;
+    (meta.is_file() && meta.len() <= 1 << 20).then_some(())?;
+    let mut pem = Vec::new();
+    file.take(1 << 20).read_to_end(&mut pem).ok()?;
+    Some(pem)
 }
 
 /// The values at a dotted key; a segment may be or hold a `*` glob (any key or index, `*_URL`).

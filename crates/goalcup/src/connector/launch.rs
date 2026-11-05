@@ -262,7 +262,7 @@ fn write_row(file: &Path, key: &str, value: &str) -> Result<(), &'static str> {
 }
 
 /// Writes `bytes` beside `file` (0600, never through a link) and renames it over `file`.
-fn replace(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub(crate) fn replace(file: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let parent = file.parent().unwrap_or(Path::new("."));
     make_dir(parent);
     let tmp = parent.join(format!(".{}.goalcup-tmp", std::process::id()));

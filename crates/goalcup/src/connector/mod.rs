@@ -131,6 +131,9 @@ pub struct LaunchPlan {
     pub ca_env: Vec<String>,
     /// Shared, participant and config hosts.
     pub hosts: HostList,
+    /// Files a `ca_settings` entry with its own CA points at, each with that CA's PEM: `finish_env`
+    /// fills each with the PEM, then the run bundle.
+    pub ca_files: Vec<(PathBuf, Vec<u8>)>,
     pub native: NativeSources,
     pub mask_rules: Vec<MaskRule>,
     /// Empty in the default build: no `secret_files` are read (owner question 3 has no yes).
@@ -154,6 +157,12 @@ impl LaunchPlan {
     /// Adds the proxy and CA variables once the port and the two PEM files exist.
     pub fn finish_env(&mut self, port: u16, run_ca: &Path, bundle: &Path) {
         launch::finish_env(&mut self.env, &self.ca_env, port, run_ca, bundle);
+        // A file not written leaves that entry's calls to fail TLS, not the start.
+        let run = std::fs::read(bundle).unwrap_or_default();
+        for (file, pem) in &self.ca_files {
+            let sep: &[u8] = if pem.ends_with(b"\n") { b"" } else { b"\n" };
+            let _ = launch::replace(file, &[pem, sep, &run].concat());
+        }
     }
 }
 
@@ -360,13 +369,26 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
     );
 
     // A row not written is a log line, never a refusal (section 5).
+    let mut ca_files = Vec::new();
     if free {
         let skipped = write_settings(home, &c.update_off).into_iter();
         log.extend(skipped.map(|s| format!("update_off not written: {}", s.reason)));
-        if let Some(t) = &connector.ca_settings {
-            let rows = hints::trust_rows(t, home, &hosts);
-            let skipped = write_settings(home, &rows).into_iter();
-            log.extend(skipped.map(|s| format!("ca_settings not written: {}", s.reason)));
+        let trusts = connector.ca_settings.iter();
+        for trust in trusts.flat_map(|t| hints::trust_rows(t, home, &hosts)) {
+            let skipped = match trust.rows {
+                Ok(rows) => write_settings(home, &rows)
+                    .into_iter()
+                    .map(|s| s.reason)
+                    .collect(),
+                Err(why) => vec![why],
+            };
+            if skipped.is_empty() {
+                ca_files.extend(trust.combine);
+            }
+            let not = skipped
+                .iter()
+                .map(|r| format!("ca_settings not written: {r}"));
+            log.extend(not);
         }
     }
     // Where `home` sets `HOME`, a login shell would lose the handed `PATH` (PRD-17 P11).
@@ -398,6 +420,7 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         after: c.after.clone(),
         ca_env: connector.ca_env.clone(),
         hosts,
+        ca_files,
         native,
         mask_rules: connector.mask.clone(),
         secret_values: Vec::new(),

@@ -381,7 +381,7 @@ fn a_custom_base_url_without_an_entry_gets_one() {
         "  goalcup-trust-llm-example-net-v1:\n    base_url: \"https://llm.example.net/v1\"\n{CA}"
     );
     assert!(text.contains(&entry), "{text}");
-    // A participant entry with its own CA keeps it.
+    // A participant entry whose own CA cannot be read is left as it is.
     assert!(
         text.contains(
             "  mine:\n    base_url: https://other.example.org/v1\n    ssl_ca_cert: /mine.pem\n"

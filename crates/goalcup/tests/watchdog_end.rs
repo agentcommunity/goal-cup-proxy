@@ -95,6 +95,7 @@ impl Fixture {
             ))],
             ca_env: Vec::new(),
             hosts,
+            ca_files: Vec::new(),
             native: NativeSources::default(),
             mask_rules: Vec::new(),
             secret_values: Vec::new(),
