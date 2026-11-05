@@ -419,3 +419,35 @@ fn a_host_left_undecrypted_keeps_the_os_trust() {
         "{text}"
     );
 }
+
+/// Two addresses that differ only in punctuation get two `goalcup-trust-*` entries, and a second
+/// start writes nothing.
+#[test]
+fn trust_names_never_collide() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, e) = (dir.path(), env(dir.path(), &[]));
+    let home = d.join("goalcup/homes/hermes-cli");
+    std::fs::create_dir_all(&home).unwrap();
+    let config = "model:\n  base_url: https://llm.example.net/v.1\n\
+        delegation:\n  base_url: https://llm.example.net/v-1\n";
+    std::fs::write(home.join("config.yaml"), config).unwrap();
+    drop(finished("hermes-cli", &e, d));
+    let text = std::fs::read_to_string(home.join("config.yaml")).unwrap();
+    let keys: Vec<&str> = text
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("goalcup-trust-"))
+        .collect();
+    assert_eq!(keys.len(), 2, "{text}");
+    assert_ne!(keys[0], keys[1], "{text}");
+    for url in ["https://llm.example.net/v.1", "https://llm.example.net/v-1"] {
+        assert!(
+            text.contains(&format!("    base_url: \"{url}\"\n")),
+            "{text}"
+        );
+    }
+    drop(finished("hermes-cli", &e, d));
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+        text
+    );
+}
