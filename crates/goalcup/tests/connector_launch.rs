@@ -209,6 +209,17 @@ fn the_unread_version_uses_the_base_and_says_so() {
     assert_eq!(plan.version_notes, vec![say]);
 }
 
+/// A version line read but not understood is told as such, not as a line that could not be read.
+#[test]
+fn a_version_line_not_understood_says_so() {
+    let dir = tempfile::tempdir().unwrap();
+    let plan = probe(dir.path(), "echo fakev nightly");
+    assert_eq!(plan.harness_version.as_deref(), Some("fakev nightly"));
+    let say = "goalcup could not understand the version line fakev --version printed, so it used \
+        the rules for T 2.0.0.";
+    assert_eq!(plan.version_notes, vec![say]);
+}
+
 #[test]
 fn settings_are_typed_keep_other_keys_and_never_follow_a_link() {
     let dir = tempfile::tempdir().unwrap();
