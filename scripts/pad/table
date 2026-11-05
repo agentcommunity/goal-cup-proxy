@@ -189,6 +189,30 @@ def render_all(rows, lines=None):
     tiers = {c: tier_for(c, rows, lines) for c in CONNECTOR_IDS}
     return tiers, render_tiers(tiers, {c: builds(c, rows, lines) for c in CONNECTOR_IDS})
 
+def lock_packages(text):
+    """Cargo.lock's [[package]] blocks as {key: raw value} dicts, in order."""
+    return [dict(re.findall(r"^(\w+) = (.*)$", b, re.M)) for b in text.split("[[package]]")[1:]]
+
+def version_only(git, c, sha, files):
+    """True when c..sha changes only goalcup's own version: the [workspace.package] version line of Cargo.toml
+    and the version of the workspace crates (no `source`) in Cargo.lock. A release bump then keeps the rows,
+    which tested the same code; any other change in those files, or any other guarded file, does not."""
+    if not files or not set(files) <= {"Cargo.toml", "Cargo.lock"}:
+        return False
+    for f in files:
+        a, b = git("show", "%s:%s" % (c, f)), git("show", "%s:%s" % (sha, f))
+        if a.returncode or b.returncode:
+            return False
+        if f == "Cargo.toml":
+            blank = lambda t: re.sub(r'(?m)^version = "\d+\.\d+\.\d+"$', 'version = ""', t, count=1)
+            same = blank(a.stdout) == blank(b.stdout)
+        else:
+            own = lambda ps: [dict(p, version='""') if "source" not in p else p for p in ps]
+            same = own(lock_packages(a.stdout)) == own(lock_packages(b.stdout))
+        if not same:
+            return False
+    return True
+
 def release_check(commit):
     def git(*a):
         return subprocess.run(["git", "-C", str(ROOT)] + list(a), capture_output=True, text=True)
@@ -234,7 +258,7 @@ def release_check(commit):
         d = git("diff", "--name-only", c, sha, "--", *GUARDED) if len(c) >= 7 and c.isalnum() else None
         if d is None or d.returncode:
             items.append("goalcup commit '%s' names no commit here: %s" % (c, ", ".join(names)))
-        elif d.stdout.strip():
+        elif d.stdout.strip() and not version_only(git, c, sha, d.stdout.split()):
             items.append("%s differs from %s under %s: %s" % (
                 c[:12], commit, ", ".join(d.stdout.split()[:5]), ", ".join(names)))
     tiers = git("show", sha + ":connectors/tiers.toml")
