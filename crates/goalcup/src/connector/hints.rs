@@ -9,6 +9,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 use super::hosts::{self, Decision, HostList, Source};
 use super::{CaSettings, Connector, Env, Host, Refusal, SettingRow, launch};
@@ -202,6 +203,7 @@ pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<S
             .filter_map(|u| address(&Value::from(&**u)))
             .collect();
     }
+    let mut names = Vec::new();
     for url in used {
         if have.contains(&same(&url)) {
             continue;
@@ -215,7 +217,13 @@ pub(crate) fn trust_rows(t: &CaSettings, home: &Path, hosts: &HostList) -> Vec<S
             .split(|c: char| !c.is_ascii_alphanumeric())
             .filter(|p| !p.is_empty())
             .collect();
-        let name = name.join("-");
+        let mut name = name.join("-");
+        // Addresses that differ only in punctuation share a name: the later one adds a hash.
+        if names.contains(&name) {
+            let hash = hex::encode(&Sha256::digest(url.as_bytes())[..4]);
+            name = format!("{name}-{hash}");
+        }
+        names.push(name.clone());
         let key = t.add.replace('*', &format!("goalcup-trust-{name}"));
         let ca = format!("{}.{}", key.rsplit_once('.').unwrap().0, t.key);
         rows.extend([row(key, &url), row(ca, &t.value)]);
