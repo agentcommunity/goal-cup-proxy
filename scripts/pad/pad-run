@@ -425,7 +425,7 @@ class Run:
             lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"]))]
             lines += ["rm -f " + shlex.quote(self.st["key_path"])] * (not self.has("kill-both"))  # goalcup continue relaunches the harness
             # from this shell's lines (kill_both), so a kill-both row keeps the 0600 copy; the seal's wipe removes keys/
-        self.st["entries_before"] = sorted(os.path.dirname(f) for f in glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "*", "status.json")))
+        self.st["entries_before"] = sorted(os.path.dirname(f) for f in glob.glob(os.path.join(self.env.get("GOALCUP_HOME", "/nonexistent"), "runs", "*", "*", "status.json")))
         self.st["row_start"] = time.time()  # a shared home holds other rows' entries and files; only what appears after this is ours
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
         hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
