@@ -451,3 +451,51 @@ fn trust_names_never_collide() {
         text
     );
 }
+
+/// An entry with its own CA on a decrypted host keeps it and trusts the run CA too: it points at a
+/// file in the isolated home holding its CA, then the run bundle. The participant's file is never
+/// changed, and a second start leaves config.yaml as it is.
+#[test]
+fn an_entry_with_its_own_ca_gets_both_in_one_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let (d, e) = (dir.path(), env(dir.path(), &[]));
+    let home = d.join("goalcup/homes/hermes-cli");
+    std::fs::create_dir_all(&home).unwrap();
+    let mine = d.join("mine.pem");
+    std::fs::write(&mine, "MINE CERT\n").unwrap();
+    std::fs::write(d.join("bundle.pem"), "RUN BUNDLE\n").unwrap();
+    let config = format!(
+        "custom_providers:\n- name: mine\n  base_url: https://llm.example.net/v1\n  \
+        ssl_ca_cert: {}\n",
+        mine.display()
+    );
+    std::fs::write(home.join("config.yaml"), &config).unwrap();
+    let plan = finished("hermes-cli", &e, d);
+    assert!(
+        plan.log.iter().all(|l| !l.contains("ca_settings")),
+        "{:?}",
+        plan.log
+    );
+    drop(plan);
+    let text = std::fs::read_to_string(home.join("config.yaml")).unwrap();
+    let ca = text
+        .lines()
+        .find_map(|l| l.strip_prefix("  ssl_ca_cert: \""))
+        .map(|l| l.trim_end_matches('"').to_string())
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(Path::new(&ca).starts_with(&home), "{ca}");
+    assert_eq!(
+        std::fs::read_to_string(&ca).unwrap(),
+        "MINE CERT\nRUN BUNDLE\n"
+    );
+    assert_eq!(std::fs::read_to_string(&mine).unwrap(), "MINE CERT\n");
+    drop(finished("hermes-cli", &e, d));
+    assert_eq!(
+        std::fs::read_to_string(home.join("config.yaml")).unwrap(),
+        text
+    );
+    assert_eq!(
+        std::fs::read_to_string(&ca).unwrap(),
+        "MINE CERT\nRUN BUNDLE\n"
+    );
+}
