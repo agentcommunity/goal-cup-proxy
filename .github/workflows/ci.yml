@@ -1,9 +1,11 @@
-# CI runs the gate, nothing less: one job, `sh scripts/gate.sh fast`, the same command a build box
-# runs before every merge (README.md, "The gate"). There is no scope step and no path filter, so
-# every pull request gets a completed `check` that can be required.
-# Only a superseded pull request run is cancelled. Each push has a group of its own (its sha), so no
-# push run is ever left pending behind another and cancelled by a third: every push to main and
-# v1.0/integration runs to the end.
+# CI runs the gate, nothing less: `sh scripts/gate.sh fast`, the same command a build box runs
+# before every merge (README.md, "The gate"), split into its parts as parallel jobs: `lint` (fmt,
+# clippy), `rust` (nextest in three hash shards) and `rest` (doctests, Worker, scripts, pad, links,
+# paths). `check` is the one required status: green only when every part passed and the three
+# shards together list each test exactly once. No scope step, no path filter: every pull request
+# gets a completed `check`. Swatinem/rust-cache restores the build, keyed by Cargo.lock and toolchain.
+# Only a superseded pull request run is cancelled. Each push has a group of its own (its sha), so
+# every push to main and v1.0/integration runs to the end.
 #
 # A test that hangs the runner moves to the full tier (the night log names it); CI is never
 # narrowed by crate.
@@ -27,34 +29,125 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # A fresh runner never reuses incremental artifacts; they only eat disk.
+  CARGO_INCREMENTAL: 0
+
 jobs:
-  check:
-    name: check
+  lint:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
-    env:
-      # A fresh runner never reuses incremental artifacts; they only eat disk.
-      CARGO_INCREMENTAL: 0
     steps:
-      # Build scripts and tests run PR code; keep the token out of .git/config.
+      # Build scripts run PR code; keep the token out of .git/config.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           persist-credentials: false
       # The one compiler: with no arguments rustup installs what rust-toolchain.toml names,
       # components included.
       - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: lint
+      - run: sh scripts/gate.sh fast --part lint
+
+  rust:
+    name: rust (shard ${{ matrix.shard }}/3)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      # The shards build the same binaries; shard 1 saves the cache, all restore it.
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust
+          save-if: ${{ matrix.shard == 1 }}
       - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
         with:
           tool: cargo-nextest
+      - run: sh scripts/gate.sh fast --part rust --partition ${{ matrix.shard }}/3
+      # The tests this shard ran (shard 1 also lists them all), for `check` to compare.
+      - env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          mkdir -p shard-lists
+          cargo nextest list --locked --workspace --partition "hash:$SHARD/3" --message-format oneline >"shard-lists/shard-$SHARD.txt"
+          if [ "$SHARD" = 1 ]; then
+            cargo nextest list --locked --workspace --message-format oneline >shard-lists/all.txt
+          fi
+          wc -l shard-lists/*.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: shard-list-${{ matrix.shard }}
+          path: shard-lists/
+          if-no-files-found: error
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nextest-junit-${{ matrix.shard }}
+          path: target/nextest/default/junit.xml
+          if-no-files-found: ignore
+
+  rest:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      # Doctests need the compiler; they restore the shards' cache and never save it.
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: rust
+          save-if: false
       # The Worker tests run .ts files natively (server/worker/package.json: node >=22.18).
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22
       - run: npm ci --prefix server/worker
-      - run: sh scripts/gate.sh fast
-      - if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - run: sh scripts/gate.sh fast --part rest
+
+  check:
+    name: check
+    needs: [lint, rust, rest]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - env:
+          LINT: ${{ needs.lint.result }}
+          RUST: ${{ needs.rust.result }}
+          REST: ${{ needs.rest.result }}
+        run: |
+          echo "lint: $LINT, rust: $RUST, rest: $REST"
+          [ "$LINT" = success ] && [ "$RUST" = success ] && [ "$REST" = success ]
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: nextest-junit
-          path: target/nextest/default/junit.xml
-          if-no-files-found: ignore
+          pattern: shard-list-*
+          path: shard-lists
+          merge-multiple: true
+      # Every test in exactly one shard: the sorted shard lines equal the full list, no duplicate.
+      - working-directory: shard-lists
+        run: |
+          set -eu
+          wc -l all.txt shard-1.txt shard-2.txt shard-3.txt
+          sort all.txt >all.sorted
+          cat shard-1.txt shard-2.txt shard-3.txt | sort >shards.sorted
+          dups=$(uniq -d shards.sorted)
+          if [ -n "$dups" ]; then
+            echo "tests in more than one shard:"
+            echo "$dups"
+            exit 1
+          fi
+          if ! diff -u all.sorted shards.sorted; then
+            echo "the shards do not list the same tests as the full list (- missing, + extra)"
+            exit 1
+          fi
+          echo "$(wc -l <all.sorted) tests, each in exactly one shard"

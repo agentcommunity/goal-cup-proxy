@@ -109,7 +109,16 @@ fn live_rounds_follow_the_durable_point() {
 
     // Every call was durable before the uploader started, so every beat carries the totals at a
     // durable LINK: all of them, never fewer. One beat says `ok` from the live recorder's health.
-    let beats = fake.heartbeats();
+    // The beat follows the confirmed point it reports, so wait (bounded by HANG) for it to land
+    // rather than read the fake the moment `upload.json` confirms: a slow runner lost that race.
+    let until = std::time::Instant::now() + common::HANG;
+    let beats = loop {
+        let b = fake.heartbeats();
+        if b.iter().any(|b| b["recording"] == "ok") || std::time::Instant::now() >= until {
+            break b;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert!(!beats.is_empty());
     for b in &beats {
         assert_eq!(b["counts"]["http_post"], CALLS, "{b}");

@@ -173,6 +173,24 @@ class InstallTests(unittest.TestCase):
         self.assertIn(this_target(), result.stderr)
         self.assertEqual(list(self.home.iterdir()), [])
 
+    def test_intel_mac_is_told_plainly(self) -> None:
+        stubs = self.scratch()
+        calls = stubs / "calls"
+        for name, body in (("uname", 'case "$1" in -s) echo Darwin;; *) echo x86_64;; esac'),
+                           ("sysctl", "exit 1"),
+                           ("curl", f'echo curl >> "{calls}"; exit 1'),
+                           ("wget", f'echo wget >> "{calls}"; exit 1')):
+            (stubs / name).write_text(f"#!/bin/sh\n{body}\n")
+            (stubs / name).chmod(0o755)
+        self.base_path = f"{stubs}{os.pathsep}{self.base_path}"
+        result = self.install(self.root / "unused", GOALCUP_RELEASE_BASE="https://example.invalid")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(
+            result.stderr,
+            "goalcup runs on Apple silicon Macs and Linux; macOS on Intel is not supported.\n")
+        self.assertFalse(calls.exists())
+        self.assertEqual(list(self.home.iterdir()), [])
+
     def test_wget_keeps_https_and_tls12(self) -> None:
         # A PATH with no curl: only what install.sh runs before its first download, and a wget
         # that logs its arguments and fails.

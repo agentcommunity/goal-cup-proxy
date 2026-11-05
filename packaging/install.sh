@@ -39,9 +39,14 @@ detect_target() {
     case "$os" in
     Darwin)
         # A shell started under Rosetta reports x86_64 on an Apple silicon Mac; install the
-        # native build.
-        if [ "$arch" = x86_64 ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then
-            arch=aarch64
+        # native build. A real Intel Mac is refused before anything is downloaded.
+        if [ "$arch" = x86_64 ]; then
+            if [ "$(sysctl -n hw.optional.arm64 2>/dev/null || true)" = 1 ]; then
+                arch=aarch64
+            else
+                echo "goalcup runs on Apple silicon Macs and Linux; macOS on Intel is not supported." >&2
+                exit 1
+            fi
         fi
         echo "$arch-apple-darwin"
         ;;

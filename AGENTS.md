@@ -4,7 +4,7 @@ This repository holds Goal Cup Proxy (`goalcup`), the recorder for Goal Cup runs
 participant's machine records every model request a coding agent's harness makes, through a loopback
 proxy, plus the harness's own session files, and writes every loss as a gap with a start and an end.
 It uploads the record while the run goes on. `goalcup-verify` checks a record and reads usage from
-it later. Tested: Linux x86_64 (sandboxes) and macOS arm64 (the owner's Mac). Built, not tested: macOS Intel, Linux arm64. Windows through WSL2, untested ([README](README.md#platforms)). Open work is in
+it later. Tested: Linux x86_64 (sandboxes) and macOS arm64 (the owner's Mac). Built, not tested: Linux arm64. macOS on Intel is not supported. Windows through WSL2, untested ([README](README.md#platforms)). Open work is in
 [TODO.md](TODO.md).
 
 ## The seven points
