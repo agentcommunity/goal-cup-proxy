@@ -1,4 +1,4 @@
-# Release: on four targets, run the Rust guards, build the two binaries, package each as a
+# Release: on three targets, run the Rust guards, build the two binaries, package each as a
 # tarball, smoke-test each tarball and packaging/install.sh on its own architecture, and attach
 # the tarballs, SHA256SUMS, install.sh to a GitHub release.
 #
