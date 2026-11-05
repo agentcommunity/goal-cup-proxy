@@ -290,7 +290,7 @@ The version is written once, in the workspace `Cargo.toml`. In order:
 3. `sh scripts/release.sh tag <x.y.z>` fetches, checks that `origin/main` has the version, runs
    `scripts/pad/table --release-check` on that commit, refuses the tag if it fails, then tags that commit
    and pushes only the tag.
-4. The tag starts `.github/workflows/release.yml`, which builds the four targets and publishes the release.
+4. The tag starts `.github/workflows/release.yml`, which builds the three targets and publishes the release.
    Check the release and the installer on a clean machine; layout and options are in
    [packaging/README.md](../packaging/README.md).
 5. Then the owner deploys the Worker ([Deploy](#deploy)). Raise `MIN_COMPETITION_VERSION` only after the

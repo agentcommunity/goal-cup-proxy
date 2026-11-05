@@ -14,7 +14,7 @@
 #                                           release check on origin/main's commit, then tag that
 #                                           commit (not a local branch) and push only the tag.
 #
-# The tag starts .github/workflows/release.yml, which builds the four targets and publishes the
+# The tag starts .github/workflows/release.yml, which builds the three targets and publishes the
 # release. It refuses a tag that differs from Cargo.toml.
 set -eu
 

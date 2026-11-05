@@ -1,4 +1,4 @@
-# Release: on four targets, run the Rust guards, build the two binaries, package each as a
+# Release: on three targets, run the Rust guards, build the two binaries, package each as a
 # tarball, smoke-test each tarball and packaging/install.sh on its own architecture, and attach
 # the tarballs, SHA256SUMS, install.sh to a GitHub release.
 #
@@ -131,7 +131,7 @@ jobs:
           merge-multiple: true
       - name: checksums and installer
         run: |
-          test "$(ls dist/*.tar.gz | wc -l)" -eq 4
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 3
           (cd dist && sha256sum *.tar.gz > SHA256SUMS && cat SHA256SUMS)
           cp packaging/install.sh dist/install.sh
       - name: publish

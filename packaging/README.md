@@ -1,6 +1,6 @@
 # Releases and the installer
 
-A release is four tarballs, one per target, `SHA256SUMS` and `install.sh`, built by
+A release is three tarballs, one per target, `SHA256SUMS` and `install.sh`, built by
 [.github/workflows/release.yml](../.github/workflows/release.yml) when a `v*` tag is pushed.
 Participants install with one command (macOS, Linux, or Windows inside WSL2):
 
