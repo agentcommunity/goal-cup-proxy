@@ -379,9 +379,11 @@ async fn connection(b: Arc<Boot>, mut client: TcpStream, hold: Admitted) {
     };
     if failed(&upstream_tls) {
         let again = connect::connect_upstream(rec, host, port, is_listed, target);
-        if let Ok(Ok(up)) = tokio::time::timeout_at(end, again).await {
-            upstream_tls = shake(up).await.unwrap_or_else(timed_out);
-        }
+        upstream_tls = match tokio::time::timeout_at(end, again).await {
+            Ok(Ok(up)) => shake(up).await.unwrap_or_else(timed_out),
+            Ok(Err(e)) => Err(e),
+            Err(e) => timed_out(e),
+        };
     }
     // An `h2`-only client whose upstream picked no ALPN is `alpn_other`: the legs would differ.
     let up_tls = match upstream_tls {

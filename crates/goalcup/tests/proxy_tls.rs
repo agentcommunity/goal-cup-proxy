@@ -410,6 +410,54 @@ async fn two_upstream_resets_are_a_failed_handshake_not_untrusted() {
     );
 }
 
+/// The first handshake is reset, and the retry's TCP connect fails (the front is gone until the
+/// deadline has passed): `io` names the last try's error, `TimedOut`, not the first reset.
+#[tokio::test]
+async fn a_failed_retry_connect_names_its_own_error() {
+    let up = Upstream::start(Script::ok(b"hi").with_tls(&["api.openai.com"], &[HTTP11]));
+    let (front, to) = (
+        tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap(),
+        up.addr(),
+    );
+    let at = front.local_addr().unwrap();
+    tokio::spawn(async move {
+        let (mut s, _) = front.accept().await.unwrap();
+        drop(front);
+        let _ = s.read(&mut [0u8; 4096]).await;
+        let _ = socket2::SockRef::from(&s).set_linger(Some(std::time::Duration::ZERO));
+        drop(s);
+        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        let front = tokio::net::TcpListener::bind(at).await.unwrap();
+        while let Ok((mut s, _)) = front.accept().await {
+            tokio::spawn(async move {
+                if let Ok(mut up) = tokio::net::TcpStream::connect(to).await {
+                    let _ = tokio::io::copy_bidirectional(&mut s, &mut up).await;
+                }
+            });
+        }
+    });
+    let dir = tempfile::tempdir().unwrap();
+    let roots = up.pki().roots_file(dir.path()).display().to_string();
+    let env = [
+        ("GOALCUP_TEST_UPSTREAM", format!("api.openai.com={at}")),
+        ("GOALCUP_TEST_EXTRA_ROOTS", roots),
+        ("GOALCUP_TEST_HANDSHAKE_MS", "300".into()),
+    ];
+    let (_h, addr, calls, _) = proxy(HOST_FILE, &env);
+    let own = TlsConnector::from(up.pki().client_config(&[HTTP11]));
+    let mut t = own
+        .connect(name("api.openai.com"), through(addr, TARGET).await)
+        .await
+        .unwrap();
+    get(&mut t).await;
+    drop(t);
+    let (_, meta, _) = conns(&calls, 1).await.remove(0);
+    assert_eq!(
+        (&meta["reason"], &meta["io"]),
+        (&json!("upstream_handshake_failed"), &json!("TimedOut"))
+    );
+}
+
 /// A null boot (`serve_null`) with `api.openai.com` sent to `up`, trusting its test CA.
 fn null_proxy(up: &Upstream) -> (ProxyHandle, SocketAddr, Calls, RunCa) {
     let dir = tempfile::tempdir().unwrap();

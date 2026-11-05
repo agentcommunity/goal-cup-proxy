@@ -377,7 +377,7 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         let skipped = write_settings(home, &c.update_off).into_iter();
         log.extend(skipped.map(|s| format!("update_off not written: {}", s.reason)));
         let trusts = connector.ca_settings.iter();
-        for trust in trusts.flat_map(|t| hints::trust_rows(t, home, &hosts)) {
+        for trust in trusts.flat_map(|t| hints::trust_rows(t, home, env, &hosts)) {
             let skipped = match trust.rows {
                 Ok(rows) => write_settings(home, &rows)
                     .into_iter()
