@@ -63,10 +63,18 @@ os = ""
 reason = "not yet run on the pad"
 
 [hermes-cli]
-tier = "not verified"
-version = ""
-os = ""
-reason = "dodger C1 the harness did no work (commits since start 0, model requests 2, tool turn none; work is a commit, or 10 model requests with a tool-using turn)"
+tier = "verified"
+version = "0.22.6"
+os = "darwin-arm64"
+reason = "subagents shown by their task logs, not tied to individual calls"
+
+[[hermes-cli.builds]]
+version = "0.22.6"
+os = "darwin-arm64"
+
+[[hermes-cli.builds]]
+version = "0.22.5"
+os = "darwin-arm64"
 
 [kilo-cli]
 tier = "not verified"
