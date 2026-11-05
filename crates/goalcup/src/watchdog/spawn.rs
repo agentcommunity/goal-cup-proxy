@@ -28,25 +28,66 @@ pub const CONTROL_FD: RawFd = 4;
 /// The accept backlog; the kernel clamps it to `somaxconn`.
 const BACKLOG: i32 = 4_096;
 
-/// Links `exe` to `rec/goalcup` (a copy, mode kept, where a link fails: another volume), so
-/// every boot of the run starts the binary the run started with, whatever an install puts at
-/// `exe` meanwhile. Never a copy onto a tmp that exists (a crash's, or a second pin's): it may be
-/// a link to `exe`, and the copy would empty `exe`. A symlink at `exe` is followed first: a link
-/// to the symlink itself (macOS `linkat`) could point at nothing from `rec/`.
-pub fn pin_exe(exe: &Path, rec: &Path) -> io::Result<PathBuf> {
+/// The folder of pinned binaries, `<cache>/goalcup/bin`: `~/Library/Caches` on macOS, else
+/// `$XDG_CACHE_HOME` or `~/.cache`. Never under `GOALCUP_HOME`, so one build keeps one path
+/// whatever home a run uses. None when HOME is not a full path.
+pub fn pin_root() -> Option<PathBuf> {
+    let var = |n| std::env::var(n).ok();
+    pick_pin_root(
+        var("HOME"),
+        var("XDG_CACHE_HOME"),
+        cfg!(target_os = "macos"),
+    )
+}
+
+fn pick_pin_root(home: Option<String>, xdg: Option<String>, macos: bool) -> Option<PathBuf> {
+    let full = |v: Option<String>| v.map(PathBuf::from).filter(|p| p.is_absolute());
+    let cache = match (macos, full(xdg)) {
+        (false, Some(x)) => x,
+        _ => full(home)?.join(if macos { "Library/Caches" } else { ".cache" }),
+    };
+    Some(cache.join("goalcup").join("bin"))
+}
+
+/// The first 16 hex of the SHA-256 of the file at `p`.
+fn content_id(p: &Path) -> io::Result<String> {
+    use sha2::Digest;
+    let mut hash = sha2::Sha256::new();
+    io::copy(&mut std::fs::File::open(p)?, &mut hash)?;
+    Ok(hex::encode(hash.finalize())[..16].to_string())
+}
+
+/// Pins `exe` at `root/<id>/goalcup`, `id` from its content ([`content_id`]): one stable path
+/// per build, so a per-app firewall keyed by path (Little Snitch, LuLu) allows it once, and every
+/// boot of a run starts the binary the run started with, whatever an install puts at `exe`
+/// meanwhile. A pin there whose content matches is reused; else a link (a copy, mode kept, where
+/// a link fails: another volume) to a tmp of this process is hashed and renamed into place. Never
+/// a copy onto a tmp that exists: it may be a link to `exe`, and the copy would empty `exe`. A
+/// symlink at `exe` is followed first. Pins of older builds are left in place.
+pub fn pin_exe(exe: &Path, root: &Path) -> io::Result<PathBuf> {
     let exe = std::fs::canonicalize(exe)?;
-    let (tmp, pinned) = (rec.join("goalcup.tmp"), rec.join(super::EXE_FILE));
+    let at = |id: &str| root.join(id).join(super::EXE_FILE);
+    let id = content_id(&exe)?;
+    if content_id(&at(&id)).is_ok_and(|have| have == id) {
+        return Ok(at(&id));
+    }
+    std::fs::create_dir_all(root)?;
+    let tmp = root.join(format!(".{}.tmp", std::process::id()));
     let _ = std::fs::remove_file(&tmp);
     let done = std::fs::hard_link(&exe, &tmp)
         .or_else(|e| match e.kind() {
             io::ErrorKind::AlreadyExists => Err(e),
             _ => std::fs::copy(&exe, &tmp).map(drop),
         })
-        .and_then(|()| std::fs::rename(&tmp, &pinned));
+        .and_then(|()| content_id(&tmp))
+        .and_then(|id| {
+            std::fs::create_dir_all(root.join(&id))?;
+            std::fs::rename(&tmp, at(&id)).map(|()| at(&id))
+        });
     if done.is_err() {
         let _ = std::fs::remove_file(&tmp);
     }
-    done.map(|()| pinned)
+    done
 }
 
 /// [`bind_exact`], and a port that is taken or refused gives way to port 0 (`goalcup continue`).
@@ -482,17 +523,29 @@ mod tests {
         let pinned = pin_exe(&exe, &bin).unwrap();
         let id = &hex::encode(sha2::Sha256::digest(b"old"))[..16];
         assert_eq!(pinned, bin.join(id).join(super::super::EXE_FILE));
-        assert_eq!(pin_exe(&exe, &bin).unwrap(), pinned, "a second run reuses it");
+        assert_eq!(
+            pin_exe(&exe, &bin).unwrap(),
+            pinned,
+            "a second run reuses it"
+        );
         std::fs::write(t.path().join("new"), b"new").unwrap();
         std::fs::rename(t.path().join("new"), &exe).unwrap(); // install.sh:328
         let newer = pin_exe(&exe, &bin).unwrap();
         assert_ne!(newer, pinned);
-        assert_eq!(std::fs::read(&pinned).unwrap(), b"old", "a running run keeps its binary");
+        assert_eq!(
+            std::fs::read(&pinned).unwrap(),
+            b"old",
+            "a running run keeps its binary"
+        );
         assert_eq!(std::fs::read(&newer).unwrap(), b"new");
         std::fs::remove_file(&newer).unwrap();
         std::fs::write(&newer, b"bad").unwrap();
         assert_eq!(pin_exe(&exe, &bin).unwrap(), newer);
-        assert_eq!(std::fs::read(&newer).unwrap(), b"new", "a pin that hashes wrong is redone");
+        assert_eq!(
+            std::fs::read(&newer).unwrap(),
+            b"new",
+            "a pin that hashes wrong is redone"
+        );
         assert_eq!(std::fs::read_dir(&bin).unwrap().count(), 2, "no tmp left");
     }
 
@@ -512,7 +565,10 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         let exe = t.path().join("goalcup");
         std::fs::write(&exe, b"x").unwrap();
-        assert!(pin_exe(&exe, &exe.join("bin")).is_err(), "a file where the folder goes");
+        assert!(
+            pin_exe(&exe, &exe.join("bin")).is_err(),
+            "a file where the folder goes"
+        );
     }
 
     /// The cache folder follows HOME and XDG_CACHE_HOME, never GOALCUP_HOME; relative ones are

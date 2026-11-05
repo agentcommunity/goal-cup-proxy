@@ -212,9 +212,12 @@ pub const KEY_FILE: &str = "run-ca.key";
 /// `rec/watchdog.pid`: `<pid> <start_id>`, read by `cli::watchdog_pid`.
 pub const PID_FILE: &str = "watchdog.pid";
 
-/// `rec/goalcup`: the binary every boot of the entry starts ([`spawn::pin_exe`]), there while a
-/// watchdog of the entry lives. Never a part file.
+/// The pinned binary's file name ([`spawn::pin_exe`]); also an older entry's `rec/goalcup`.
 pub const EXE_FILE: &str = "goalcup";
+
+/// `rec/pin`: the path of the binary every boot of the entry starts, so `goalcup recover`
+/// starts it too. Never a part file.
+pub const PIN_FILE: &str = "pin";
 
 /// The first boot gave no `ready`, or the watchdog could not bind, write its files or mint the
 /// CA: the harness was not started, and PRD-10 says so (its "could not do its job" code).
@@ -281,22 +284,38 @@ pub fn run(plan: LaunchPlan, facts: StartFacts) -> ExitCode {
     let Ok(exe) = std::env::current_exe() else {
         return ExitCode::from(NOT_STARTED);
     };
-    let dir = facts.entry_dir.clone();
-    let code = run_with(plan, facts, &pin(&dir, &exe));
-    let _ = fs::remove_file(dir.join("rec").join(EXE_FILE));
-    code
+    let pinned = pin(&facts.entry_dir, &exe);
+    run_with(plan, facts, &pinned)
 }
 
-/// [`spawn::pin_exe`] into `entry_dir/rec`, else `exe` itself and `exe_pin_failed` logged: a pin
-/// that fails never stops the run.
+/// The binary the entry's boots start: the one it recorded ([`recorded_pin`]), else `exe` pinned
+/// now ([`spawn::pin_exe`]) and recorded in `rec/pin`, else `exe` itself and `exe_pin_failed`
+/// logged: a pin that fails never stops the run.
 fn pin(entry_dir: &Path, exe: &Path) -> PathBuf {
     let rec = entry_dir.join("rec");
-    make_rec(&rec)
-        .and_then(|()| spawn::pin_exe(exe, &rec))
-        .unwrap_or_else(|_| {
-            line(entry_dir, "exe_pin_failed", &[]);
-            exe.to_path_buf()
-        })
+    if let Some(p) = recorded_pin(&rec) {
+        return p;
+    }
+    let root = spawn::pin_root().ok_or(io::Error::from(io::ErrorKind::NotFound));
+    let pinned = root.and_then(|r| spawn::pin_exe(exe, &r)).and_then(|p| {
+        make_rec(&rec)?;
+        fs::write(rec.join(PIN_FILE), p.as_os_str().as_encoded_bytes()).map(|()| p)
+    });
+    pinned.unwrap_or_else(|_| {
+        line(entry_dir, "exe_pin_failed", &[]);
+        exe.to_path_buf()
+    })
+}
+
+/// The pin `rec/pin` names, else an older entry's `rec/goalcup`, when it is a file.
+fn recorded_pin(rec: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStringExt;
+    let named =
+        fs::read(rec.join(PIN_FILE)).map(|b| PathBuf::from(std::ffi::OsString::from_vec(b)));
+    named
+        .into_iter()
+        .chain([rec.join(EXE_FILE)])
+        .find(|p| p.is_file())
 }
 
 /// [`run`] with the recorder started from `recorder_exe`. Every wait runs on boot time
@@ -1192,7 +1211,11 @@ mod tests {
         fs::write(rec.join(PIN_FILE), shared.as_os_str().as_encoded_bytes()).unwrap();
         assert_eq!(recorded_pin(&rec), Some(shared.clone()));
         fs::remove_file(&shared).unwrap();
-        assert_eq!(recorded_pin(&rec), Some(rec.join(EXE_FILE)), "a pin that is gone");
+        assert_eq!(
+            recorded_pin(&rec),
+            Some(rec.join(EXE_FILE)),
+            "a pin that is gone"
+        );
     }
 
     /// The first line carries the whole start facts. With the largest built-in connector's

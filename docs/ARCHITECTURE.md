@@ -82,8 +82,9 @@ The rules of the shape:
   recovered watchdog still seals the part on `goalcup seal`, at the deadline, on any server stop and
   when the harness exits, but leaves a running harness running (`goalcup seal` says so).
 - **Respawn.** A recorder that exits is replaced at once, on the same port, by the pinned
-  executable (`rec/goalcup`, linked or copied at start, so an install over `goalcup` mid-run
-  changes nothing for this run).
+  executable (`<user cache>/goalcup/bin/<sha256, 16 hex>/goalcup`, linked or copied once per
+  build and named in `rec/pin`, so an install over `goalcup` mid-run changes nothing for this run,
+  recover starts the same binary, and a per-app firewall sees one path per build).
 - **Null mode.** Apart from a respawn: if the recorder crashes three times in ten minutes, each
   within a minute of its start, the watchdog runs a relay-only recorder, says so in
   `status.json`, and retries a normal boot after 30 seconds, then 1, 2 and 5 minutes, never more

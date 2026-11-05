@@ -41,8 +41,9 @@ It installs the latest release into `~/.local/bin`, with no `sudo`. If it says t
 your `PATH`, run the line it prints. Update later by running the same command, with no run open:
 the installer refuses while a run is recording.
 
-If a firewall such as Little Snitch asks about `goalcup`, allow it. It asks once for each program,
-and again after each update.
+If a firewall such as Little Snitch or LuLu asks about `goalcup`, allow it. It runs from
+`~/Library/Caches/goalcup/bin/<id>/goalcup` on a Mac (`$XDG_CACHE_HOME/goalcup/bin` or
+`~/.cache/goalcup/bin` on Linux), one path per goalcup version, so it asks once after each update.
 
 `goalcup` keeps its files in `~/Library/Application Support/goalcup` on a Mac, `$XDG_CONFIG_HOME/goalcup` or `~/.config/goalcup`
 on Linux and WSL2, or the folder `GOALCUP_HOME` names: runs in `runs/`, each harness's home in
