@@ -274,9 +274,25 @@ class Run:
             kw["said"] = replace_known(kw["said"], self.known() or [])[0][:2000]
         append(self.path("watch", "faults.jsonl"), dict(kind=kind, **kw))
 
+    def pane_pids(self):
+        """The pids under this run's tmux pane (the launch shell, goalcup, the harness)."""
+        out = sh(["tmux", "display-message", "-p", "-t", self.tmux, "#{pane_pid}"]).stdout.split()
+        return self.tree([int(out[0])]) if out and out[0].isdigit() else []
+
     def entry(self):
-        """The newest entry folder under GOALCUP_HOME (PRD-10: runs/<run>/<entry>/status.json)."""
-        found = sorted(glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "*", "status.json")), key=os.path.getmtime)
+        """This run's entry folder under GOALCUP_HOME (PRD-10: runs/<run>/<entry>/status.json): the one that appeared after
+        `goalcup start` was launched (st entries_before); on a shared home an older recorder's folder is never taken for it.
+        Several new ones go by the pane's processes; none of them the pane's is refused. Without the list: the newest."""
+        found = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "*", "status.json"))
+        before = self.st.get("entries_before")
+        if before is not None:
+            found = [f for f in found if os.path.dirname(f) not in before]
+            if len(found) > 1:
+                pids = set(self.pane_pids())
+                found = [f for f in found if pids & {pc.dig(loads(path=f), "s4_pid"), pc.dig(loads(path=f), "s4_harness_pid")}]
+                if not found:
+                    raise Step("INCONCLUSIVE", "several new entry folders and none belongs to this run's tmux pane")
+        found = sorted(found, key=os.path.getmtime)
         if found:
             e = os.path.dirname(found[-1])
             self.st.update(entry_dir=e, entry=os.path.basename(e), run=os.path.basename(os.path.dirname(e)))
@@ -409,6 +425,8 @@ class Run:
             lines += ['export %s="$(cat %s)"' % (self.st["key_env"], shlex.quote(self.st["key_path"]))]
             lines += ["rm -f " + shlex.quote(self.st["key_path"])] * (not self.has("kill-both"))  # goalcup continue relaunches the harness
             # from this shell's lines (kill_both), so a kill-both row keeps the 0600 copy; the seal's wipe removes keys/
+        self.st["entries_before"] = sorted(os.path.dirname(f) for f in glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", "*", "*", "status.json")))
+        self.st["row_start"] = time.time()  # a shared home holds other rows' entries and files; only what appears after this is ours
         argv = [tool("goalcup"), "start", "--test", "--harness", s["harness_id"], "--prompt", self.path("prompt.txt")]
         hosts = s.get("hosts") or os.path.exists(self.path("hosts.toml")) and "hosts.toml"  # a pre script may write it
         argv += [a for k, v in (("connector", s.get("connector")), ("hosts", hosts)) if v for a in ("--" + k, self.path(v))]
@@ -497,7 +515,7 @@ class Run:
             for k in ([keys] if isinstance(keys, str) else keys):  # one screen per item
                 sh(["tmux", "send-keys", "-t", t, "-l", k.encode().decode("unicode_escape")])
                 time.sleep(3)
-        first = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", self.st.get("run") or "*", "first-message.txt"))  # a signed-in home holds other runs
+        first = glob.glob(os.path.join(self.env["GOALCUP_HOME"], "runs", self.st["run"], "first-message.txt")) if self.st.get("run") else []  # a signed-in home holds other runs: never "*"
         text = open(first[-1] if first else self.path("prompt.txt")).read().strip()
         # tmux(1) FORMATS: bracket_paste_flag. Without it a multi-line paste can submit early: join lines.
         bracketed = sh(["tmux", "list-panes", "-t", t, "-F", "#{bracket_paste_flag}"]).stdout.strip() == "1"
