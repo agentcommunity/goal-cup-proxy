@@ -128,12 +128,13 @@ fn cut_commands_and_unknown_flags_exit_1_never_2() {
 }
 
 #[test]
-fn version_is_1_0_0() {
+fn version_is_the_workspace_version() {
+    // The workspace version (Cargo.toml), so a release bump needs no test edit.
     let out = Homes::new().run(&["--version"]);
     assert_eq!(out.status.code(), Some(0));
     assert_eq!(
         String::from_utf8(out.stdout).unwrap().trim(),
-        "goalcup 1.0.0"
+        concat!("goalcup ", env!("CARGO_PKG_VERSION"))
     );
 }
 
