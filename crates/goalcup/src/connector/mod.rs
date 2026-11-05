@@ -191,14 +191,16 @@ fn read(path: &Path) -> Result<Vec<u8>, ConnectorError> {
 }
 
 /// The built-in id `arg` names: the id itself, else the one id that is `arg` plus `-cli`, whose
-/// program is `arg` or that lists `arg` in `old_ids`. None or several is `UnknownId`, listing the matches, else every id.
+/// program is `arg` or that lists `arg` or `arg` plus `-cli` in `old_ids`. None or several is
+/// `UnknownId`, listing the matches, else every id.
 pub fn resolve_id(arg: &str) -> Result<&'static str, ConnectorError> {
     let ids = || builtin::CONNECTORS.iter().map(|(id, _)| *id);
     if let Some(id) = ids().find(|id| *id == arg) {
         return Ok(id);
     }
     let parsed = |text: &str| schema::parse(text.as_bytes(), "");
-    let by = |c: schema::Connector| c.program == arg || c.old_ids.iter().any(|o| o == arg);
+    let old = |o: &String| o == arg || o.strip_suffix("-cli") == Some(arg);
+    let by = |c: schema::Connector| c.program == arg || c.old_ids.iter().any(old);
     let matches: Vec<&str> = builtin::CONNECTORS
         .iter()
         .filter(|(id, text)| id.strip_suffix("-cli") == Some(arg) || parsed(text).is_ok_and(by))
