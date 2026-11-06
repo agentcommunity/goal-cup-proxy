@@ -5,7 +5,7 @@
 # no path filter: every pull request gets a completed `check`. Swatinem/rust-cache restores the
 # build, keyed by Cargo.lock and toolchain; only a push to main saves it.
 # Only a superseded pull request run is cancelled. Each push has a group of its own (its sha), so
-# every push to main and v1.0/integration runs to the end.
+# every push to main runs to the end.
 #
 # A test that hangs the runner moves to the full tier (the night log names it); CI is never
 # narrowed by crate.
@@ -19,7 +19,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main, v1.0/integration]
+    branches: [main]
   workflow_dispatch:
 
 concurrency:

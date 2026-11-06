@@ -180,7 +180,7 @@ export PATH="$PWD/target/release:$PATH"
 ### The gate
 
 One script, two tiers. Its last line is `gate <tier>: PASS in <N>s` or `gate <tier>: FAIL`. CI runs
-`sh scripts/gate.sh fast` on every pull request to `main` and every push to `main` and `v1.0/integration`.
+`sh scripts/gate.sh fast` on every pull request to `main` and every push to `main`.
 
 ```sh
 cargo install cargo-nextest --locked   # once per machine

@@ -3,7 +3,7 @@
 What is here, who runs it, and whether the gate or CI runs it. "The gate" is
 `sh scripts/gate.sh fast|full` ([README](../README.md#the-gate)). CI is `.github/workflows/ci.yml`:
 one job, `check`, that runs `sh scripts/gate.sh fast` on every pull request into `main` and every
-push to `main` and `v1.0/integration`. "Release CI" is `.github/workflows/release.yml`, which runs
+push to `main`. "Release CI" is `.github/workflows/release.yml`, which runs
 on a tag. "By hand" means nothing runs it for you. The header of each script has its options.
 
 | Script | What it does | Who | Run by |
