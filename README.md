@@ -23,7 +23,6 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
 
    ```sh
    curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
-   goalcup --version
    ```
 
    It checks the download against the release's `SHA256SUMS` and installs
