@@ -54,8 +54,9 @@ The build uses each default below until the owner answers.
 - Website purge migration.
 - Canary on.
 - Little Snitch back on, with one rule for `goalcup` to any server.
-- Raise `DEVICE_TOKEN_PER_MINUTE` and `DEVICE_START_PER_MINUTE`, and set `EVENT_ID`, in
-  `server/worker/wrangler.toml`.
+- In `server/worker/wrangler.toml` `[vars]`: raise `DEVICE_TOKEN_PER_MINUTE` and
+  `DEVICE_START_PER_MINUTE` if the event needs more (1200 and 120 today), and set `EVENT_ID` to the
+  cup event on the day before the start window opens, not earlier.
 
 ## After 1.0
 
@@ -77,6 +78,7 @@ The build uses each default below until the owner answers.
 
 - Repoint the harness sheets in `docs/harnesses/` from [HARNESS-SETUP](docs/HARNESS-SETUP.md) to
   the [participant's guide](docs/PARTICIPANT-GUIDE.md), then delete HARNESS-SETUP (PRD-11).
+  Until then the two duplicate each other: change both.
 
 - The DECISIONS rewrite to 24 entries with a retired-numbers table (PRD-15). Each "This supersedes"
   line names every old entry its status rows point to (D3, D9, D37, D40, D43, D45, D46, D52, D53

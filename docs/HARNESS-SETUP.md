@@ -97,7 +97,7 @@ Files are under the private home (`$GOALCUP_HOME/homes/<id>`).
 ## Hermes
 
 Before and after the harness, goalcup runs `hermes gateway stop -y` (`connectors/hermes-cli.toml`). Hermes
-0.22.5 and 0.22.6 are verified; other 0.22.x builds record the same way but are not verified. Since 0.21.6 its model calls on macOS
+0.22.5 and 0.22.6 are verified and work on macOS with no pad-only config; other 0.22.x builds record the same way but are not verified. Since 0.21.6 its model calls on macOS
 do not read `SSL_CERT_FILE`, so at every start and continue the connector's `ca_settings` write
 `ssl_ca_cert` for each provider address `config.yaml` names (its own entries or a custom `base_url`),
 and use its nine built-in routes only when the file names none. The first-run setup screen and its telemetry question are in the
