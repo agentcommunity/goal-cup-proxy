@@ -1,4 +1,6 @@
 """gate.sh parts, nextest partition and --list: the parts together are exactly `fast`."""
+import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -32,8 +34,46 @@ class GateParts(unittest.TestCase):
         self.assertEqual(gate("fast", "--partition", "1/3", "--list").returncode, 2)
         self.assertEqual(gate("fast", "--part", "lint", "--partition", "1/3", "--list").returncode, 2)
 
+    def test_full_list_exits_0_with_no_release_build(self):
+        self.assertIn("cargo build --release --locked -p goalcup -p goalcup-verify", listed("full"))
+
     def test_full_refuses_a_part(self):
         self.assertEqual(gate("full", "--part", "lint", "--list").returncode, 2)
+
+
+class Prerequisites(unittest.TestCase):
+    """The real gate on a PATH without cargo, npm or python: it stops at the `missing:` line, no step runs."""
+
+    def run_gate(self, *args):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        bin_dir = Path(tmp.name, "bin")
+        bin_dir.mkdir()
+        for tool in ("dirname", "date", "id"):
+            bin_dir.joinpath(tool).symlink_to(shutil.which(tool))
+        pg_bin = Path(tmp.name, "pg")
+        pg_bin.mkdir()
+        env = dict(os.environ, PATH=str(bin_dir), PG_BIN=str(pg_bin), GOALCUP_GATE_ALLOW_ROOT="1")
+        return subprocess.run([shutil.which("sh"), GATE, *args], capture_output=True, text=True, env=env)
+
+    def test_full_needs_initdb(self):
+        r = self.run_gate("full")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("missing:", r.stdout)
+        self.assertIn("initdb(install PostgreSQL", r.stdout)
+
+    def test_fast_rest_does_not_need_initdb(self):
+        r = self.run_gate("fast", "--part", "rest")
+        self.assertIn("missing:", r.stdout)
+        self.assertNotIn("initdb", r.stdout)
+
+    def test_full_lists_sql_without_initdb(self):
+        r = self.run_gate("full", "--list")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("sh server/worker/scripts/check-sql.sh", r.stdout.splitlines())
+
+    def test_check_links_tests_listed(self):
+        self.assertTrue(any("scripts/test_check_links.py" in ln for ln in listed("fast", "--part", "rest")))
 
 
 class PathGuard(unittest.TestCase):
