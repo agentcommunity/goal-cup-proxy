@@ -172,8 +172,10 @@ impl LaunchPlan {
 /// Why a connector or a host list cannot load. Names the file and the key, never a value.
 #[derive(Debug, thiserror::Error)]
 pub enum ConnectorError {
-    #[error("no built-in connector `{id}`. Choose one of: {valid}")]
-    UnknownId { id: String, valid: String },
+    #[error("no harness called `{id}`. {list}")]
+    UnknownId { id: String, list: String },
+    #[error("`{id}` names more than one harness: {matches}. Use the full id.")]
+    Ambiguous { id: String, matches: String },
     #[error("{file}: cannot read it ({kind})")]
     Read {
         file: String,
@@ -202,9 +204,21 @@ fn read(path: &Path) -> Result<Vec<u8>, ConnectorError> {
     })
 }
 
+/// The tiers PRD-12 writes, read at build time.
+pub const TIERS: &str = include_str!("../../../../connectors/tiers.toml");
+
+/// The built-in ids whose row in `tiers.toml` says verified, in `CONNECTORS` order.
+pub fn verified_ids() -> Vec<&'static str> {
+    let rows = toml::from_str::<BTreeMap<String, toml::Value>>(TIERS).unwrap_or_default();
+    let verified =
+        |id: &str| rows.get(id).and_then(|r| r.get("tier")?.as_str()) == Some("verified");
+    let ids = builtin::CONNECTORS.iter().map(|(id, _)| *id);
+    ids.filter(|id| verified(id)).collect()
+}
+
 /// The built-in id `arg` names: the id itself, else the one id that is `arg` plus `-cli`, whose
-/// program is `arg` or that lists `arg` or `arg` plus `-cli` in `old_ids`. None or several is
-/// `UnknownId`, listing the matches, else every id.
+/// program is `arg` or that lists `arg` or `arg` plus `-cli` in `old_ids`. None is `UnknownId`, listing
+/// the verified harnesses first; several is `Ambiguous`.
 pub fn resolve_id(arg: &str) -> Result<&'static str, ConnectorError> {
     let ids = || builtin::CONNECTORS.iter().map(|(id, _)| *id);
     if let Some(id) = ids().find(|id| *id == arg) {
@@ -220,13 +234,26 @@ pub fn resolve_id(arg: &str) -> Result<&'static str, ConnectorError> {
         .collect();
     match matches[..] {
         [id] => Ok(id),
-        [] => Err(ConnectorError::UnknownId {
+        [] => {
+            let verified = verified_ids();
+            let list = if verified.is_empty() {
+                format!("Choose one of: {}", ids().collect::<Vec<_>>().join(", "))
+            } else {
+                let others: Vec<_> = ids().filter(|id| !verified.contains(id)).collect();
+                format!(
+                    "Verified: {}. Not verified yet: {}. Which is which: https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/harnesses/README.md",
+                    verified.join(", "),
+                    others.join(", ")
+                )
+            };
+            Err(ConnectorError::UnknownId {
+                id: arg.to_string(),
+                list,
+            })
+        }
+        _ => Err(ConnectorError::Ambiguous {
             id: arg.to_string(),
-            valid: ids().collect::<Vec<_>>().join(", "),
-        }),
-        _ => Err(ConnectorError::UnknownId {
-            id: arg.to_string(),
-            valid: matches.join(", "),
+            matches: matches.join(", "),
         }),
     }
 }
@@ -448,5 +475,47 @@ pub fn plan(connector: &Connector, env: &Env, home: &Path) -> LaunchPlan {
         unread,
         log,
         refusal,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unknown_harness_lists_verified_first() {
+        let e = resolve_id("nope").unwrap_err().to_string();
+        assert!(e.starts_with("no harness called `nope`."), "{e}");
+        let verified = format!(
+            "Verified: {}. Not verified yet: ",
+            verified_ids().join(", ")
+        );
+        assert!(e.contains(&verified), "{e}");
+        assert!(e.contains("docs/harnesses/README.md"), "{e}");
+        assert!(!e.contains("connector"), "{e}");
+    }
+
+    // No arg matches two ids today (every `program` is unique; the only `old_ids` is
+    // opencode2-cli), so pin the message itself.
+    #[test]
+    fn ambiguous_names_only_the_matches() {
+        let e = ConnectorError::Ambiguous {
+            id: "x".into(),
+            matches: "a-cli, b-cli".into(),
+        };
+        assert_eq!(
+            e.to_string(),
+            "`x` names more than one harness: a-cli, b-cli. Use the full id."
+        );
+    }
+
+    // No harness names here (tests/rule_code.rs): read the file's own text instead.
+    #[test]
+    fn verified_ids_match_tiers_file() {
+        let want: Vec<&str> = (builtin::CONNECTORS.iter().map(|(id, _)| *id))
+            .filter(|id| TIERS.contains(&format!("[{id}]\ntier = \"verified\"\n")))
+            .collect();
+        assert!(!want.is_empty());
+        assert_eq!(verified_ids(), want);
     }
 }

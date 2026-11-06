@@ -24,7 +24,7 @@ It has eight commands: `setup`, `start`, `continue`, `recover`, `status`, `seal`
   Windows drive.
 - A direct internet connection: company proxy networks are not supported, so `goalcup setup` and
   `goalcup start` refuse when `HTTPS_PROXY` or `ALL_PROXY` is set (`goalcup continue` does not).
-- `git`, and a GitHub account for the real run.
+- `git`, and a GitHub account for the competition run.
 - A harness from [the harness list](harnesses/README.md), and the account or API key it uses.
 - An Agent Community account signed up at [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup),
   where you hand in your two videos (a setup video before the run, a demo after it) and the
@@ -164,7 +164,8 @@ d=$(mktemp -d) && cd "$d" && goalcup start --practice
 Approve the run in the browser and return to the terminal at once. The harness opens in that
 folder. Type any prompt. After about ten minutes the server stops the run, and `goalcup` seals and
 uploads it. A practice run needs no repository or token, so the agent cannot push. It never counts;
-do as many as you like.
+do as many as you like. A practice run uploads at most 1 GiB; past that the server answers that it
+reached its upload limit.
 
 Check that the agent works without asking you anything, that `goalcup status` shows "Written so
 far" model requests, and that the end screen ([section 8](#8-the-end)) reads right. If `status` says
@@ -173,8 +174,8 @@ no model request was written, fix the setup now.
 ## 6. Your run
 
 Start inside the start window (date and length: [RULES](RULES.md#timeline)).
-Steps 1 to 4 can be done before it opens. A real run needs its own new repository and token. Do the
-steps in this order: a token for one repository needs the repository to exist first.
+Steps 1 to 4 can be done before it opens. A competition run needs its own new repository and token.
+Do the steps in this order: a token for one repository needs the repository to exist first.
 
 1. **Create the repository.** On [github.com/new](https://github.com/new): public, and empty. Add no
    README, no `.gitignore`, no licence. A repository with any commit is refused, and the server
@@ -295,8 +296,8 @@ Your competition run with Claude Code: recording.
   once when 16 MiB wait. A failed send waits 2 seconds, doubling up to 2 minutes, and then tries again.
 - **Parts**: one `start` or `continue` is one part. **Problems** has one line for each cause.
 
-Before any run exists, `status` says "There is no run on this computer yet. To start one, run:
-goalcup start". `goalcup status --json` prints the same facts as JSON.
+Before any run exists, `status` says "There is no run on this computer yet. First run: goalcup
+setup. Then try: goalcup start --practice". `goalcup status --json` prints the same facts as JSON.
 
 **The recording line** is one of these.
 
@@ -465,7 +466,7 @@ Every folder problem is listed in one refusal, then "Nothing was created." Fix e
 |---|---|
 | `It holds "<names>". Start in a new folder that holds only .gitignore, .DS_Store and .env files.` | Make a new folder with only those. |
 | `.gitignore does not cover "<name>", so a push could publish it. Add the line .env* to .gitignore.` | Add the line `.env*`. |
-| `".env.local" needs exactly one plain GH_TOKEN=<your token> line (no quotes, no export, no spaces, no Windows CRLF line ending).` | Fix the line. A real run needs it; a practice run needs no token. |
+| `".env.local" needs exactly one plain GH_TOKEN=<your token> line (no quotes, no export, no spaces, no Windows CRLF line ending).` | Fix the line. A competition run needs it; a practice run needs no token. |
 | `It is inside the Git work tree "<path>". Start in a folder outside any Git repository.` | Use another folder. |
 | `It and goalcup's folder "<path>" hold each other or sit side by side.` | Use a folder elsewhere, or set `GOALCUP_HOME` to a folder away from it. |
 | `The prompt file "<path>" is inside the project folder. Move it out.` | Move the file out. |

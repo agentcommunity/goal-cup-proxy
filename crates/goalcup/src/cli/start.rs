@@ -23,9 +23,6 @@ use crate::mask::{Masker, SecretValue, launch_values, skipped_values};
 use crate::pipeline::Mono;
 use crate::watchdog::{self, CaPem, StartFacts};
 
-/// The tiers PRD-12 writes, read at build time.
-const TIERS: &str = include_str!("../../../../connectors/tiers.toml");
-
 /// The start arguments. `repo` is `<owner>/<name>`. `test` makes an organizer test run, `practice`
 /// a practice run, neither a competition run (which needs `repo`).
 #[derive(Default)]
@@ -489,7 +486,7 @@ struct Build {
 
 /// Section 6: the tier line of the connector, from `tiers.toml`.
 fn tier_line(name: &str, probed: Option<&str>, id: &str) -> String {
-    let mut rows: BTreeMap<String, Row> = toml::from_str(TIERS).unwrap_or_default();
+    let mut rows: BTreeMap<String, Row> = toml::from_str(connector::TIERS).unwrap_or_default();
     let row = rows.remove(id).unwrap_or_default();
     let text = |v: &str| connector::version::parse(v).map_or(v.to_owned(), |p| p.text);
     let mut builds: Vec<(String, String)> = (row.builds.iter())
@@ -524,7 +521,7 @@ mod tests {
     #[test]
     fn tiers_file_parses() {
         type Rows = std::collections::BTreeMap<String, super::Row>;
-        let rows = toml::from_str::<Rows>(super::TIERS);
+        let rows = toml::from_str::<Rows>(crate::connector::TIERS);
         assert!(rows.is_ok_and(|r| !r.is_empty()));
         let with = "[x]\ntier = \"verified\"\nversion = \"\"\n[[x.builds]]\nversion = \"1.0.0\"\nos = \"linux-x86_64\"\n";
         let rows = toml::from_str::<Rows>(with).unwrap();
