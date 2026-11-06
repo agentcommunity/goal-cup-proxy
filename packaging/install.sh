@@ -3,7 +3,7 @@
 #
 #   curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
 #
-# It picks the build for this machine (macOS or Linux, arm64 or x86_64; WSL2 is Linux), checks the
+# It picks the build for this machine (macOS arm64, or Linux arm64 or x86_64; WSL2 is Linux; an Intel Mac is refused), checks the
 # download against the SHA256SUMS file of the same release, and installs goalcup and goalcup-verify
 # into ~/.local/bin. It writes nothing outside the prefix: no shell profile (when the folder is not
 # on PATH it prints one line for the participant to run), nothing of any harness. Run it again to

@@ -287,7 +287,7 @@ The version is written once, in the workspace `Cargo.toml`. In order:
    request; merge it under the `main` ruleset.
 2. In a build box, run `sh scripts/gate.sh full` on the merged commit ([README, The gate](../README.md#the-gate)).
    CI (`.github/workflows/ci.yml`) runs `sh scripts/gate.sh fast` in its parts on pull requests into `main`
-   and pushes to `main` and `v1.0/integration`: `lint`, `rest` and `rust` in three nextest shards, behind
+   and pushes to `main`: `lint`, `rest` and `rust` in three nextest shards, behind
    one required status, `check`, green only when all of them passed. There is no scope step.
 3. `sh scripts/release.sh tag <x.y.z>` fetches, checks that `origin/main` has the version, runs
    `scripts/pad/table --release-check` on that commit, refuses the tag if it fails, then tags that commit
