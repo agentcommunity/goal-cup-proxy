@@ -486,10 +486,11 @@ mod tests {
     fn unknown_harness_lists_verified_first() {
         let e = resolve_id("nope").unwrap_err().to_string();
         assert!(e.starts_with("no harness called `nope`."), "{e}");
-        assert!(
-            e.contains("Verified: claude-code-cli, codex-cli, hermes-cli."),
-            "{e}"
+        let verified = format!(
+            "Verified: {}. Not verified yet: ",
+            verified_ids().join(", ")
         );
+        assert!(e.contains(&verified), "{e}");
         assert!(e.contains("docs/harnesses/README.md"), "{e}");
         assert!(!e.contains("connector"), "{e}");
     }
@@ -508,11 +509,13 @@ mod tests {
         );
     }
 
+    // No harness names here (tests/rule_code.rs): read the file's own text instead.
     #[test]
     fn verified_ids_match_tiers_file() {
-        assert_eq!(
-            verified_ids(),
-            ["claude-code-cli", "codex-cli", "hermes-cli"]
-        );
+        let want: Vec<&str> = (builtin::CONNECTORS.iter().map(|(id, _)| *id))
+            .filter(|id| TIERS.contains(&format!("[{id}]\ntier = \"verified\"\n")))
+            .collect();
+        assert!(!want.is_empty());
+        assert_eq!(verified_ids(), want);
     }
 }
