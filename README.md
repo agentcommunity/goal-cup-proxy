@@ -74,12 +74,12 @@ The setup video comes before the run ([rules](docs/RULES.md#submission),
 
 A **run** is your one 168-hour attempt. A **part** is one `start` or one `continue` inside it. Every
 flag is in `goalcup <command> --help`. Exit codes: 0 done; 1 refused, and you can fix it; 3 the
-command could not do its job. `--test`, `--connector` and `--hosts` are hidden organizer flags.
+command could not do its job.
 
 | Command | What it does |
 |---|---|
 | `goalcup setup [--harness <ID>] [--yes] [--record-host <HOST>]` | Pick your harness, sign in to it once, check this machine. `--yes` asks nothing and opens nothing. `--record-host` adds a model host goalcup records. |
-| `goalcup start [--harness <ID>] [--practice \| --test] [--repo <OWNER/NAME>] [--prompt <FILE>] [--connector <FILE>] [--hosts <FILE>]` | Start a run: open your harness in the current folder and record it. A real run needs `--repo`. |
+| `goalcup start [--harness <ID>] [--practice \| --test] [--repo <OWNER/NAME>] [--prompt <FILE>] [--connector <FILE>] [--hosts <FILE>]` | Start a run: open your harness in the current folder and record it. A real run needs `--repo`. `--test` is for organizers. `--connector` and `--hosts` load a file, for practice and test runs; `continue` takes the first part's files again. All three are hidden from `--help`. |
 | `goalcup continue [<RUN>] [--connector <FILE>] [--hosts <FILE>]` | Start your agent again in the same run, on the machine that started it, after it stopped early. |
 | `goalcup recover [<RUN>]` | Restart recording in place when `status` says recording stopped and your agent still runs; the agent is not restarted. |
 | `goalcup status [<PART>] [--json]` | Show how the run is doing, and its parts. |

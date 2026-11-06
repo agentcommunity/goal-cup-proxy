@@ -34,9 +34,8 @@ The build uses each default below until the owner answers.
 
 ## Known issues
 
-- Linux x86_64 and macOS arm64 (owner's Mac, 3 Nov) are tested. Linux arm64 is first built and
-  tested by the release workflow at the owner's release (PRD-14 G5, after the merge). macOS Intel
-  is not supported. Windows (WSL2) is untested.
+- Linux x86_64 and macOS arm64 (owner's Mac, 3 Nov) are tested. Linux arm64 is built by the
+  release workflow, not tested. macOS Intel is not supported. Windows (WSL2) is untested.
 - Unmasked memory (held bytes, the run CA key) can still reach disk through swap on Linux
   ([PRD-00](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md#architecture)).
 - The `zstd` command line tool may stop short on a live entry; read one with `goalcup-verify dump`
@@ -74,7 +73,10 @@ The build uses each default below until the owner answers.
 - Restated passwords stay raw (OpenClaw): server-side scrub.
 - Copilot and Droid subagent readers; Cline and Factory Droid rows.
 
-## After the merge to main
+## Left from the 1.0 plans
+
+- Repoint the harness sheets in `docs/harnesses/` from [HARNESS-SETUP](docs/HARNESS-SETUP.md) to
+  the [participant's guide](docs/PARTICIPANT-GUIDE.md), then delete HARNESS-SETUP (PRD-11).
 
 - The DECISIONS rewrite to 24 entries with a retired-numbers table (PRD-15). Each "This supersedes"
   line names every old entry its status rows point to (D3, D9, D37, D40, D43, D45, D46, D52, D53

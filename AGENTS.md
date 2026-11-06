@@ -25,7 +25,7 @@ Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), t
 | `crates/goalcup-verify` | `goalcup-verify`: `check`, `dump`, `secrets`, `usage`. Every judgement about the bytes lives here. |
 | `connectors/` | One `<id>.toml` per harness, `model-hosts.toml` (the one host list) and `tiers.toml` (written by the test pad). Data: the connector files are compiled into both binaries by `crates/goalcup-format/build.rs`, the two list files into `goalcup`, `shapes.tsv` (the masker's shapes) into both. |
 | `server/worker` | The upload server, a Cloudflare Worker. It stores bytes and interprets nothing. |
-| `server/worker/sql/` | The Postgres functions the Worker calls (a copy of the website migration). Checked by `server/worker/scripts/check-sql.sh` in the gate. |
+| `server/worker/sql/` | The Postgres functions the Worker calls (a copy of the website migration). Checked by `server/worker/scripts/check-sql.sh` in the gate when Postgres is installed. |
 | `scripts/` | The gate, release, `fetch-run.sh`, the test pad (`scripts/pad/`) and its canary (`scripts/pad/canary`, new harness builds): [scripts/README.md](scripts/README.md). |
 | `skills/` | `goal-cup` (copied into the harness home) and `adding-a-capture-harness` (contributors). |
 | `docs/` | By reader: the [docs map](README.md#docs-map). Plans and history: the `archive` branch. |
