@@ -66,8 +66,13 @@ pub fn proxy_with(
     hosts: &str,
     env: &[(&str, String)],
 ) -> (ProxyHandle, SocketAddr, RunCa) {
+    assert_eq!(
+        std::env::var("NEXTEST_EXECUTION_MODE").as_deref(),
+        Ok("process-per-test"),
+        "the proxy tests set process env; run them with `cargo nextest run`, not `cargo test`"
+    );
     for (k, v) in env {
-        // SAFETY: nextest runs each test in its own process; this runs before `serve` reads them.
+        // SAFETY: the assert above enforces one process per test; this runs before `serve` reads.
         unsafe { std::env::set_var(k, v) };
     }
     let (listener, addr) = crate::common::ports::held();
