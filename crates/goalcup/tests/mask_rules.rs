@@ -47,6 +47,7 @@ const KINDS: &[&str] = &[
     "bedrock_key",
     "bedrock_key",
     "stripe_webhook_secret",
+    "run_credential",
 ];
 
 #[test]
@@ -609,5 +610,24 @@ fn provider_prefixes_leave_ordinary_identifiers_alone() -> Res {
         &cuts,
     );
     assert!(got.spans.is_empty() && got.bytes == input.as_bytes());
+    Ok(())
+}
+
+/// The run credential `gcr_` plus 64 lowercase hex: masked bare and inside a JSON string;
+/// one hex digit short stays raw.
+#[test]
+fn run_credential_is_masked() -> Res {
+    let m = masker()?;
+    let cred = ["gcr", "_", &run(b"0123456789abcdef", 64, 98)].concat();
+    let bare = format!("the run credential is {cred} for this run");
+    let json = serde_json::json!({ "x": cred }).to_string();
+    for input in [&bare, &json] {
+        assert_masks(&m, input, &cred);
+        let out = m.mask_whole(input.as_bytes());
+        assert_eq!(kinds(&m, &out), ["run_credential"], "{input}");
+    }
+    let short = ["gcr", "_", &run(b"0123456789abcdef", 63, 99), " "].concat();
+    let out = m.mask_whole(short.as_bytes());
+    assert!(!kinds(&m, &out).iter().any(|k| k == "run_credential"));
     Ok(())
 }
