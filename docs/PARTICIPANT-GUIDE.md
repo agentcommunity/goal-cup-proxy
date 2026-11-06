@@ -34,7 +34,6 @@ It has eight commands: `setup`, `start`, `continue`, `recover`, `status`, `seal`
 
 ```sh
 curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh
-goalcup --version
 ```
 
 It installs the latest release into `~/.local/bin`, with no `sudo`. If it says that folder is not on

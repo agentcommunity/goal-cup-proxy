@@ -355,7 +355,7 @@ static BEDROCK_SHORT: [&[u8]; 44] = each(b"bedrock-api-key-YmVkcm9jay5hbWF6b25hd
 /// The streaming recognizer of each shared literal, in `shapes.tsv` order. A recognizer never
 /// decides a span below the bound (the regex does); it says how long a candidate must be held,
 /// and how long a fail-closed window must run.
-static SHAPES: [Shape; 31] = [
+static SHAPES: [Shape; 32] = [
     prefixed(
         "anthropic_key",
         r"sk-ant-[A-Za-z0-9_\-]{20,}",
@@ -596,6 +596,15 @@ static SHAPES: [Shape; 31] = [
         base64_padded,
         24,
         None,
+    ),
+    // The run credential (server/worker/src/auth.ts): `gcr_` and exactly 64 lowercase hex.
+    prefixed(
+        "run_credential",
+        r"gcr_[0-9a-f]{64}",
+        &[b"g", b"c", b"r", b"_"],
+        hex_lower,
+        64,
+        Some(64),
     ),
 ];
 
@@ -2509,6 +2518,7 @@ mod tests {
         b"vck_",
         b"tgp_v1_",
         b"sgamp_",
+        b"gcr_",
         b"fk-",
         b"ABSKQmVkcm9ja0FQSUtleS",
         b"bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t",

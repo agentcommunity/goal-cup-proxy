@@ -318,7 +318,8 @@ main() {
     # Last check before the first change: never replace goalcup while a run is recording.
     guard_recording_run
 
-    mkdir -p "$prefix/bin"
+    mkdir -p "$prefix/bin" 2>/dev/null && [ -w "$prefix/bin" ] ||
+        die "cannot write to $prefix/bin; nothing was installed. Fix the folder's owner (sudo chown -R \"\$USER\" \"$prefix\") or pick another folder with: sh -s -- --prefix <dir>"
     # Stage both binaries beside their destinations before changing any installed file, so each
     # promotion is a rename on one filesystem.
     bin_stage=$(mktemp -d "$prefix/bin/.goalcup-install.XXXXXX")
@@ -351,16 +352,18 @@ main() {
     if [ -n "$found" ] && [ "$found" != "$prefix/bin/goalcup" ]; then
         say "Note: your PATH finds $found first, not the one just installed."
     fi
+    next="goalcup setup"
     case ":${PATH:-}:" in
     *":$prefix/bin:"*) ;;
     *)
+        next="run the line above, then: goalcup setup"
         say ""
         say "$where is not on your PATH. To add it now and for new shells, run:"
         path_line || say "  (add $prefix/bin to PATH in your shell profile)"
         ;;
     esac
     say ""
-    say "Next: goalcup setup"
+    say "Next: $next"
 }
 
 main "$@"

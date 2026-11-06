@@ -156,6 +156,15 @@ class InstallTests(unittest.TestCase):
         self.assertIn('fish_add_path "$HOME/.local/bin"', result.stdout)
         self.assertNotIn("export PATH", result.stdout)
 
+    def test_an_unwritable_folder_is_named_with_a_next_step(self) -> None:
+        locked = self.scratch()
+        locked.chmod(0o555)
+        self.addCleanup(locked.chmod, 0o755)
+        result = self.install(make_release(self.scratch()), "--prefix", str(locked))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(result.stderr.startswith("goalcup install: cannot write to"), result.stderr)
+        self.assertIn('chown -R "$USER"', result.stderr)
+
     def test_wrong_checksum_installs_nothing(self) -> None:
         release = make_release(self.root)
         sums = release / "SHA256SUMS"

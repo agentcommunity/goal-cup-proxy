@@ -42,3 +42,4 @@ fk_key	1	fk-[A-Za-z0-9]{20,}
 bedrock_key	1	ABSKQmVkcm9ja0FQSUtleS[A-Za-z0-9+/]{82,}
 bedrock_key	1	bedrock-api-key-YmVkcm9jay5hbWF6b25hd3MuY29t[A-Za-z0-9+/]{20,}
 stripe_webhook_secret	1	whsec_[A-Za-z0-9+/=]{24,}
+run_credential	1	gcr_[0-9a-f]{64}
