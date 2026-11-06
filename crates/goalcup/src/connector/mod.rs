@@ -241,7 +241,7 @@ pub fn resolve_id(arg: &str) -> Result<&'static str, ConnectorError> {
             } else {
                 let others: Vec<_> = ids().filter(|id| !verified.contains(id)).collect();
                 format!(
-                    "Verified: {}. Not verified yet: {}. Which is which: docs/harnesses/README.md",
+                    "Verified: {}. Not verified yet: {}. Which is which: https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/harnesses/README.md",
                     verified.join(", "),
                     others.join(", ")
                 )

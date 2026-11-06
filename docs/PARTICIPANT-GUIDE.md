@@ -24,7 +24,7 @@ It has eight commands: `setup`, `start`, `continue`, `recover`, `status`, `seal`
   Windows drive.
 - A direct internet connection: company proxy networks are not supported, so `goalcup setup` and
   `goalcup start` refuse when `HTTPS_PROXY` or `ALL_PROXY` is set (`goalcup continue` does not).
-- `git`, and a GitHub account for the real run.
+- `git`, and a GitHub account for the competition run.
 - A harness from [the harness list](harnesses/README.md), and the account or API key it uses.
 - An Agent Community account signed up at [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup),
   where you hand in your two videos (a setup video before the run, a demo after it) and the
@@ -174,8 +174,8 @@ no model request was written, fix the setup now.
 ## 6. Your run
 
 Start inside the start window (date and length: [RULES](RULES.md#timeline)).
-Steps 1 to 4 can be done before it opens. A real run needs its own new repository and token. Do the
-steps in this order: a token for one repository needs the repository to exist first.
+Steps 1 to 4 can be done before it opens. A competition run needs its own new repository and token.
+Do the steps in this order: a token for one repository needs the repository to exist first.
 
 1. **Create the repository.** On [github.com/new](https://github.com/new): public, and empty. Add no
    README, no `.gitignore`, no licence. A repository with any commit is refused, and the server
@@ -466,7 +466,7 @@ Every folder problem is listed in one refusal, then "Nothing was created." Fix e
 |---|---|
 | `It holds "<names>". Start in a new folder that holds only .gitignore, .DS_Store and .env files.` | Make a new folder with only those. |
 | `.gitignore does not cover "<name>", so a push could publish it. Add the line .env* to .gitignore.` | Add the line `.env*`. |
-| `".env.local" needs exactly one plain GH_TOKEN=<your token> line (no quotes, no export, no spaces, no Windows CRLF line ending).` | Fix the line. A real run needs it; a practice run needs no token. |
+| `".env.local" needs exactly one plain GH_TOKEN=<your token> line (no quotes, no export, no spaces, no Windows CRLF line ending).` | Fix the line. A competition run needs it; a practice run needs no token. |
 | `It is inside the Git work tree "<path>". Start in a folder outside any Git repository.` | Use another folder. |
 | `It and goalcup's folder "<path>" hold each other or sit side by side.` | Use a folder elsewhere, or set `GOALCUP_HOME` to a folder away from it. |
 | `The prompt file "<path>" is inside the project folder. Move it out.` | Move the file out. |
