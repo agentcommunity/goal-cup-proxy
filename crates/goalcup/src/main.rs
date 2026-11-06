@@ -44,7 +44,7 @@ enum Command {
         #[arg(long, value_name = "HOST")]
         record_host: Option<String>,
     },
-    /// Step 2. Start a run: open your agent here and record what it does.
+    /// Step 2. Start a run: open your agent here and record what it does. Try --practice first.
     Start {
         /// Your agent (the harness). Without it, the one setup saved.
         #[arg(long, value_name = "ID", long_help = harness_help("the one setup saved"))]

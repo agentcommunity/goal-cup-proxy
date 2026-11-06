@@ -164,7 +164,8 @@ d=$(mktemp -d) && cd "$d" && goalcup start --practice
 Approve the run in the browser and return to the terminal at once. The harness opens in that
 folder. Type any prompt. After about ten minutes the server stops the run, and `goalcup` seals and
 uploads it. A practice run needs no repository or token, so the agent cannot push. It never counts;
-do as many as you like.
+do as many as you like. A practice run uploads at most 1 GiB; past that the server answers that it
+reached its upload limit.
 
 Check that the agent works without asking you anything, that `goalcup status` shows "Written so
 far" model requests, and that the end screen ([section 8](#8-the-end)) reads right. If `status` says
@@ -295,8 +296,8 @@ Your competition run with Claude Code: recording.
   once when 16 MiB wait. A failed send waits 2 seconds, doubling up to 2 minutes, and then tries again.
 - **Parts**: one `start` or `continue` is one part. **Problems** has one line for each cause.
 
-Before any run exists, `status` says "There is no run on this computer yet. To start one, run:
-goalcup start". `goalcup status --json` prints the same facts as JSON.
+Before any run exists, `status` says "There is no run on this computer yet. First run: goalcup
+setup. Then try: goalcup start --practice". `goalcup status --json` prints the same facts as JSON.
 
 **The recording line** is one of these.
 

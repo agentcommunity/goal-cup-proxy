@@ -503,8 +503,8 @@ fn host_list(hosts: &[(&str, u64)]) -> String {
 }
 
 // Status (section 4).
-pub const NO_RUN_YET: &str =
-    "There is no run on this computer yet. To start one, run: goalcup start";
+pub const NO_RUN_YET: &str = "There is no run on this computer yet. First run: goalcup setup. \
+Then try: goalcup start --practice";
 
 pub fn no_such_part(arg: &str) -> String {
     format!(
@@ -1061,8 +1061,8 @@ pub fn time_left_unknown(practice: bool) -> String {
     )
 }
 
-pub const NO_OPEN_RUN_TIME_LEFT: &str = "Run goalcup status to see your runs. No run is open on \
-this computer, so there is no time left to show.";
+pub const NO_OPEN_RUN_TIME_LEFT: &str =
+    "No run is open on this computer, so there is no time left to show.";
 
 // Push block and `--prompt` (section 8).
 pub const PUSH_FRAME: &str = "Your first message must start with these lines. Without them your \
@@ -1173,8 +1173,8 @@ pub fn no_prompts_left(name: &str) -> String {
 }
 
 // The start screen and its refusals.
-pub const NEEDS_REPO: &str =
-    "a real run needs --repo <owner>/<name>, its new, empty, public GitHub repository.";
+pub const NEEDS_REPO: &str = "a competition run needs --repo <owner>/<name>, its new, empty, public \
+GitHub repository. To try goalcup first with no GitHub, run: goalcup start --practice";
 
 pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harness <id>";
 
@@ -1473,6 +1473,16 @@ pub fn recover_on_again(name: &str, part: usize, span: &str, from: &str, to: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn newcomer_messages_point_to_setup_and_practice() {
+        assert!(NO_RUN_YET.starts_with("There is no run on this computer yet."));
+        assert!(NO_RUN_YET.contains("goalcup setup"));
+        assert!(NO_RUN_YET.contains("goalcup start --practice"));
+        assert!(NEEDS_REPO.contains("--repo <owner>/<name>"));
+        assert!(NEEDS_REPO.contains("goalcup start --practice"));
+        assert!(!NO_OPEN_RUN_TIME_LEFT.contains("goalcup status"));
+    }
 
     #[test]
     fn the_request_count_says_requests_to_model_hosts() {
