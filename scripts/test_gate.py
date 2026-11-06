@@ -62,10 +62,15 @@ class Prerequisites(unittest.TestCase):
         self.assertIn("missing:", r.stdout)
         self.assertIn("initdb(install PostgreSQL", r.stdout)
 
-    def test_fast_rest_skips_sql_without_initdb(self):
+    def test_fast_rest_does_not_need_initdb(self):
         r = self.run_gate("fast", "--part", "rest")
         self.assertIn("missing:", r.stdout)
         self.assertNotIn("initdb", r.stdout)
+
+    def test_full_lists_sql_without_initdb(self):
+        r = self.run_gate("full", "--list")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("sh server/worker/scripts/check-sql.sh", r.stdout.splitlines())
 
     def test_check_links_tests_listed(self):
         self.assertTrue(any("scripts/test_check_links.py" in ln for ln in listed("fast", "--part", "rest")))

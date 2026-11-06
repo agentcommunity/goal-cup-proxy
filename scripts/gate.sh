@@ -161,12 +161,15 @@ fi
 if want rest; then
 step cargo test --locked --workspace --doc # nextest does not run doctests
 step npm --prefix server/worker test
-if have_initdb; then step sh server/worker/scripts/check-sql.sh; else [ -n "$list" ] || echo "gate.sh: SQL scenarios skipped (no initdb)"; fi
+# fast skips the SQL scenarios only when PostgreSQL is absent and PG_BIN is not set; full never skips.
+if [ "$tier" = full ] || [ -n "${PG_BIN:-}" ] || have_initdb; then step sh server/worker/scripts/check-sql.sh; else [ -n "$list" ] || echo "gate.sh: SQL scenarios skipped (no initdb)"; fi
 # A named list, not `discover -s scripts`: old script tests name the old crates. A new script test
 # joins only if it guards one of the seven points, the format, masking or the never-stop rules (B10).
-step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py scripts/test_gate.py scripts/test_check_links.py
+step python3 -m unittest scripts/test_install.py scripts/test_fetch_run.py scripts/test_gate.py
 step "$py311" -m unittest discover -s scripts/pad -p 'test_*.py'
-step python3 scripts/check-links.py
+# The link checker needs Python 3.10 or later (`str | None` at import).
+step "$py311" -m unittest scripts/test_check_links.py
+step "$py311" scripts/check-links.py
 # No personal path in tracked files: only the stand-in user names listed below are allowed. Each match
 # alone (-o), so a stand-in cannot hide another path on its line; git grep's own error (above 1) fails.
 step sh -c "p=\$(git grep -h -o -E '/(Users|home)/[A-Za-z0-9_.-]+'); s=\$?; [ \$s -le 1 ] || exit \$s; ! echo \"\$p\" | grep -v -E '^(/(Users|home)/(Shared|placeholder|user|p|you|h|u|x|runs|participant|secret-root|hermes|opencode|openclaw|claude|codex))?\$'"
@@ -178,14 +181,15 @@ if [ "$tier" = full ]; then
     step cargo nextest run --locked --workspace --run-ignored only \
         -E 'not test(/^by_hand_/)'
     step cargo build --release --locked -p goalcup -p goalcup-verify
-    [ -z "$list" ] || exit 0 # the hook checks below read built files; --list builds nothing
-    hooks=$(grep -ac GOALCUP_TEST_ target/release/goalcup || true)
-    echo "+ GOALCUP_TEST_ in target/release/goalcup: $hooks"
-    [ "$hooks" = 0 ] || fail
-    # The hooked debug build must hold the text, else the clean count above proves nothing.
-    hooked=$(grep -ac GOALCUP_TEST_ target/debug/goalcup || true)
-    echo "+ GOALCUP_TEST_ in target/debug/goalcup: $hooked"
-    [ "${hooked:-0}" -gt 0 ] || { echo "gate.sh: target/debug/goalcup has no GOALCUP_TEST_ text, so the release grep proves nothing; waits on a hook reachable from main (PRD-06 calls Policy::from_env)"; fail; }
+    if [ -z "$list" ]; then # the hook checks read built files; --list builds nothing
+        hooks=$(grep -ac GOALCUP_TEST_ target/release/goalcup || true)
+        echo "+ GOALCUP_TEST_ in target/release/goalcup: $hooks"
+        [ "$hooks" = 0 ] || fail
+        # The hooked debug build must hold the text, else the clean count above proves nothing.
+        hooked=$(grep -ac GOALCUP_TEST_ target/debug/goalcup || true)
+        echo "+ GOALCUP_TEST_ in target/debug/goalcup: $hooked"
+        [ "${hooked:-0}" -gt 0 ] || { echo "gate.sh: target/debug/goalcup has no GOALCUP_TEST_ text, so the release grep proves nothing; waits on a hook reachable from main (PRD-06 calls Policy::from_env)"; fail; }
+    fi
 fi
 
 [ -z "$list" ] || exit 0
