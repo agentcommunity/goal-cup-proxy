@@ -317,14 +317,8 @@ mod tests {
 
     #[test]
     fn default_pick_prefers_saved_then_the_only_installed() {
-        assert_eq!(
-            default_pick(Some("codex-cli"), &["claude-code-cli", "codex-cli"]),
-            Some("codex-cli")
-        );
-        assert_eq!(
-            default_pick(None, &["claude-code-cli"]),
-            Some("claude-code-cli")
-        );
+        assert_eq!(default_pick(Some("b"), &["a", "b"]), Some("b"));
+        assert_eq!(default_pick(None, &["a"]), Some("a"));
         assert_eq!(default_pick(None, &["a", "b"]), None);
         assert_eq!(default_pick(None, &[]), None);
     }
