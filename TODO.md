@@ -1,6 +1,6 @@
-# TODO
+# goalcup 1.1: open list
 
-The open list for goalcup 1.0. Decisions live in [DECISIONS](docs/DECISIONS.md). Done is defined in
+The open list for goalcup 1.1. Decisions live in [DECISIONS](docs/DECISIONS.md). Done is defined in
 [AGENTS.md](AGENTS.md#done).
 
 ## Open owner questions
@@ -34,9 +34,9 @@ The build uses each default below until the owner answers.
 
 ## Known issues
 
-- Linux x86_64 and macOS arm64 (owner's Mac, 3 Nov) are tested. macOS x86_64 and Linux arm64 are
-  first built and tested by the release workflow at the owner's release (PRD-14 G5, after the merge).
-  Windows (WSL2) is untested.
+- Linux x86_64 and macOS arm64 (owner's Mac, 3 Nov) are tested. Linux arm64 is first built and
+  tested by the release workflow at the owner's release (PRD-14 G5, after the merge). macOS Intel
+  is not supported. Windows (WSL2) is untested.
 - Unmasked memory (held bytes, the run CA key) can still reach disk through swap on Linux
   ([PRD-00](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md#architecture)).
 - The `zstd` command line tool may stop short on a live entry; read one with `goalcup-verify dump`
@@ -48,25 +48,17 @@ The build uses each default below until the owner answers.
 - F-07: a guarded key prefix right after a `-` inside a base64url run masks the rest of the run,
   failing closed past 16 KiB, up to the end of the message
   ([PRD-05](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-05-masking.md#risks-and-blind-spots), question 10).
-- PRD-11 hand-off: repoint the harness facts sheets in `docs/harnesses/` from
-  [HARNESS-SETUP](docs/HARNESS-SETUP.md) to the [participant's guide](docs/PARTICIPANT-GUIDE.md#3-set-up),
-  then delete HARNESS-SETUP. Until then it is a temporary duplicate and still
-  describes the removed MCP command (D84).
 
-## Release 1.0
+## Owner, before 5 Dec
 
-Done 5 Nov: release rows on 91a12d70 and `--release-check` pass at c3e7820b (Hermes 0.22.5 and 0.22.6 verified on macOS).
+- Production Worker deploy ([OPERATING](docs/OPERATING.md#deploy)).
+- Website purge migration.
+- Canary on.
+- Little Snitch back on, with one rule for `goalcup` to any server.
+- Raise `DEVICE_TOKEN_PER_MINUTE` and `DEVICE_START_PER_MINUTE`, and set `EVENT_ID`, in
+  `server/worker/wrangler.toml`.
 
-In order:
-
-1. Merge v1.1/integration to main.
-2. `scripts/release.sh tag 1.0.0`.
-3. (owner) Production Worker deploy ([OPERATING](docs/OPERATING.md#deploy)).
-4. (owner) Website purge migration.
-5. (owner) Turn on the canary for the event.
-6. (owner) Little Snitch on the owner's Mac: one rule for `goalcup` to any server (the recorder runs from `~/Library/Caches/goalcup/bin/<id>/goalcup`).
-
-After 1.0:
+## After 1.0
 
 - A one-hour run that passes (best so far misses on harness subagent counts, not loss).
 - macOS CI job for the lifecycle tests (owner decision).
@@ -90,8 +82,17 @@ After 1.0:
 - Hermes notes from D61 and D72 move into [its facts sheet](docs/harnesses/hermes-cli.md) (PRD-11).
 - PRD-15's contributor run and organizer run.
 - The judge view (PRD-08).
-- PRD-14 G2 (sabotage) and G5 (the release workflow on four targets); PRD-12 P8 (contributor dry run).
+- PRD-14 G2 (sabotage) and G5 (the release workflow on three targets); PRD-12 P8 (contributor dry run).
 - `stopped-runs.sql`, the organizer query for stopped runs (PRD-07).
 - Following HTTP/2 PUSH_PROMISE, WebSocket over HTTP/2 (RFC 8441) (PRD-03); today each is a GAP
   (`h2_unsupported`), never silent. Compressed gRPC bodies are a GAP too (`unsupported_encoding`).
 - The mask worker pool, only if PRD-02's throughput test shows masking is the slow stage (PRD-02).
+
+## After the event
+
+- One copy of `own_server`/`OWN_SERVER` and the `shapes.tsv` parsing, in
+  `crates/goalcup-format/src/shared.rs`.
+- A seam S1-S18 table in [ARCHITECTURE](docs/ARCHITECTURE.md).
+- Cut `scripts/check-links.py` to about 80 lines.
+- `tomllib` in the pad, when the box has Python 3.11.
+- Pad `version` and `release_versions` checked against the connector `checked` and `[[versions]]`.
