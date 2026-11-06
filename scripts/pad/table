@@ -16,10 +16,15 @@ CASES, CHECKS = ("direct", "gateway", "dodger"), ("C1", "C2", "C3", "C4", "C5", 
 CORE = ("claude-code-cli", "codex-cli", "hermes-cli")
 GUARDED = ["crates/", "server/worker/src/", "connectors/", "skills/", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
            ":(exclude)connectors/tiers.toml", ":(glob,exclude)crates/*/tests/**"]  # tests are not in the binary; skills/ is include_str!ed
-# The 15 connector ids, PRD-11 section 5.
-CONNECTOR_IDS = ["amp-cli", "claude-code-cli", "cline-cli", "codex-cli", "copilot-cli", "crush-cli", "droid-cli",
-                 "gemini-cli", "goose-cli", "hermes-cli", "kilo-cli", "kimi-code-cli", "openclaw-cli",
-                 "opencode-cli", "qwen-cli"]
+def ids(names):
+    """Connector ids from file names in connectors/: the same rule as crates/goalcup-format/build.rs."""
+    return sorted(n[:-5] for n in names if n.endswith(".toml") and not n.startswith(".")
+                  and n[:-5] not in ("model-hosts", "tiers"))
+
+def connector_ids(root):
+    return ids(p.name for p in (root / "connectors").iterdir() if p.is_file())
+
+CONNECTOR_IDS = connector_ids(ROOT)
 HEAD = ["Started", "Case", "Mode", "Variant", "Result"] + list(CHECKS) + [
     "Wire / harness calls", "Subagents", "Tokens in / out", "Gaps", "Why"]
 HEADER = "# Written by scripts/pad/table (PRD-12 section 9). Do not edit by hand.\n"
@@ -149,10 +154,10 @@ def builds(cid, rows, lines=None):
 def cell(v):
     return "-" if v in (None, "", [], {}) else str(v).replace("|", "/").replace("\n", " ")
 
-def run_cells(r, many):
+def run_cells(r):
     f, tok = r.get("facts") or {}, g(r.get("facts"), "tokens")
     variant = (r.get("variant") or []) + ["(%s %s)" % kv for kv in sorted((r.get("exec") or {}).items())]
-    return ([started(r), ("%s " % r.get("connector")) * many + str(r.get("case")), r.get("mode"),
+    return ([started(r), r.get("case"), r.get("mode"),
              " ".join(map(str, variant)), r.get("result")] + [g(r.get("checks"), c) for c in CHECKS]
             + ["%s / %s" % (g(f, "wire_requests"), g(f, "harness_calls")), g(f, "subagents"),
                "%s / %s" % (g(tok, "input"), g(tok, "output")),
@@ -164,30 +169,25 @@ def table(head, lines):
         "| " + " | ".join(cell(x) for x in ln) + " |" for ln in lines]
 
 def results_md(rows, tiers):
-    groups = {}
-    for cid in CONNECTOR_IDS:  # OpenCode's two connectors share one harness line
-        groups.setdefault("opencode" if cid.startswith("opencode") else cid, []).append(cid)
     summary, body = [], []
-    for h, cids in sorted(groups.items()):
-        tier = [("verified with a note: " + why if why else t) if t == "verified" else "%s: %s" % (t, why)
-                for t, _, _, why in (tiers[c] for c in cids)]
-        last = latest(rows, lambda r: r.get("connector") in cids)
-        kill = latest(rows, lambda r: r.get("connector") in cids and kills(r)) if h in CORE else None
-        summary.append([h, " / ".join(dict.fromkeys(tier)), " / ".join(dict.fromkeys(tiers[c][1] for c in cids))]
-                       + [g(latest(rows, tier_row(cids, c)), "result") for c in CASES]
+    for h in CONNECTOR_IDS:
+        t, v, _, why = tiers[h]
+        last = latest(rows, lambda r: r.get("connector") == h)
+        kill = latest(rows, lambda r: r.get("connector") == h and kills(r)) if h in CORE else None
+        summary.append([h, ("verified with a note: " + why if why else t) if t == "verified" else "%s: %s" % (t, why), v]
+                       + [g(latest(rows, tier_row((h,), c)), "result") for c in CASES]
                        + [g(kill, "result"), started(last)[:10] if last else None])
         for title, fault in (("runs", False), ("fault and check runs", True)):
-            sel = sorted((r for r in rows if r.get("connector") in cids and is_fault(r) == fault), key=started)
-            body += ["", "## %s, %s" % (h, title), ""] + table(HEAD, [run_cells(r, len(cids) > 1)
-                                                                    for r in reversed(sel)]) if sel else []
+            sel = sorted((r for r in rows if r.get("connector") == h and is_fault(r) == fault), key=started)
+            body += ["", "## %s, %s" % (h, title), ""] + table(HEAD, [run_cells(r) for r in reversed(sel)]) if sel else []
     return "\n".join(["# Pad results", "", "Written by scripts/pad/table (PRD-12 section 9) from pad-rows.jsonl. "
                       "Do not edit by hand.", ""] + table(["Harness", "Tier", "Version"] + list(CASES)
                                                          + ["Kill row", "Date"], summary) + body) + "\n"
 
-def render_all(rows, lines=None):
+def render_all(rows, lines=None, cids=None):
     """({connector id: tier tuple}, tiers.toml text): what main writes and the release check compares."""
-    tiers = {c: tier_for(c, rows, lines) for c in CONNECTOR_IDS}
-    return tiers, render_tiers(tiers, {c: builds(c, rows, lines) for c in CONNECTOR_IDS})
+    tiers = {c: tier_for(c, rows, lines) for c in (CONNECTOR_IDS if cids is None else cids)}
+    return tiers, render_tiers(tiers, {c: builds(c, rows, lines) for c in tiers})
 
 def version_only(git, c, sha, files):
     """True when c..sha changes only goalcup's own version: the [workspace.package] version line of Cargo.toml
@@ -261,7 +261,9 @@ def release_check(commit):
     tiers = git("show", sha + ":connectors/tiers.toml")
     if tiers.returncode:
         items.append("connectors/tiers.toml missing at %s" % sha)
-    elif tiers.stdout != render_all(rows, lambda c: harness_lines(c, sha))[1]:
+    elif tiers.stdout != render_all(rows, lambda c: harness_lines(c, sha), ids(  # the connectors at sha, not the tree's
+            ln.split("\t", 1)[1][len("connectors/"):] for ln in git("ls-tree", sha, "connectors/").stdout.splitlines()
+            if " blob " in ln))[1]:
         items.append("connectors/tiers.toml differs from the rows; run scripts/pad/table and commit it")
     print("\n".join(items) if items else "release check: pass at %s" % sha)
     return 1 if items else 0

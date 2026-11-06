@@ -44,7 +44,8 @@ def mkrepo(tmp, rows, tiers_text=None, harness=None, base_files=None):
     or False for none. A row goalcup ending "+BASE" (green_rows' default) names the base commit. Returns the sha."""
     root = Path(tmp)
     git(root, "init", "-q")
-    base = commit(root, dict({"crates/x/lib.rs": "// base\n"}, **(base_files or {})), "base")
+    base = commit(root, dict({"crates/x/lib.rs": "// base\n"}, **{"connectors/%s.toml" % c: "" for c in table.CONNECTOR_IDS},
+                             **(base_files or {})), "base")
     files = {}
     if rows is not None:
         files[table.ROWS_REL] = "".join(json.dumps({k: v.replace("+BASE", "+" + base) if k == "goalcup" else v for k, v in r.items()}) + "\n"
@@ -103,6 +104,12 @@ class PathAndPass(Repo):
         self.assertEqual(table.ROWS_REL, "scripts/pad/rows/pad-rows.jsonl")
         with redirect_stdout(io.StringIO()) as out:
             self.assertEqual(table.release_check(sha), 0, out.getvalue())
+
+    def test_connectors_read_at_the_commit(self):  # a connector only in the working tree changes nothing
+        sha = self.repo(green_rows())
+        with mock.patch.object(table, "CONNECTOR_IDS", table.CONNECTOR_IDS + ["new-cli"]):
+            code, out = self.check(sha)
+        self.assertEqual(code, 0, out)
 
     def test_missing_rows_file(self):
         sha = self.repo(None)

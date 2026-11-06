@@ -2,7 +2,9 @@
 import importlib.machinery
 import importlib.util
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -39,6 +41,33 @@ class TierNote(unittest.TestCase):
     def test_no_note_is_plain_verified(self):
         with mock.patch.object(table, "harness_lines", return_value=["[gateway]"]):
             self.assertEqual(table.tier_for("hermes-cli", ROWS), ("verified", "0.22.5", "darwin-arm64", ""))
+
+
+class ConnectorIds(unittest.TestCase):
+    def test_ids_come_from_connectors_dir(self):
+        with tempfile.TemporaryDirectory() as d:
+            c = Path(d) / "connectors"
+            c.mkdir()
+            for n in ("a-cli.toml", "model-hosts.toml", "tiers.toml", ".x.toml", "notes.md"):
+                (c / n).write_text("")
+            (c / "dir.toml").mkdir()
+            self.assertEqual(table.connector_ids(Path(d)), ["a-cli"])
+
+    def test_ids_match_repo(self):
+        want = sorted(p.stem for p in (table.ROOT / "connectors").glob("*.toml")
+                      if p.stem not in ("model-hosts", "tiers") and not p.stem.startswith("."))
+        self.assertEqual(table.CONNECTOR_IDS, want)
+        self.assertEqual(len(want), 15)
+
+    def test_opencode_has_one_line(self):
+        rows = [dict(ROWS[0], connector="opencode-cli")]
+        with mock.patch.object(table, "harness_lines", return_value=["[gateway]"]):
+            md = table.results_md(rows, {cid: table.tier_for(cid, rows) for cid in table.CONNECTOR_IDS})
+        lines = md.splitlines()
+        self.assertEqual(sum(ln.startswith("| opencode-cli |") for ln in lines), 1)
+        self.assertFalse(any(ln.startswith("| opencode |") for ln in lines))
+        self.assertIn("## opencode-cli, runs", md)
+        self.assertNotIn("## opencode, ", md)
 
 
 if __name__ == "__main__":
