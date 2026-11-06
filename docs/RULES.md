@@ -170,7 +170,7 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
 - **You will see that it is working.** `goalcup status` shows the recording's state and health, and a
   `PROBLEM:` line for anything wrong. The server emails you when your run starts, when it has heard
   nothing from Goal Cup Proxy for 20 minutes, when your agent has made no model calls for 3 hours and
-  again at 6 hours, when the recording has a problem, when the disk is full, and when the run has ended and its commit is
+  again at 6 hours, when the recording has a problem, and when the run has ended and its commit is
   recorded. There is no token
   limit.
 - Ordinary public internet pages and normal third-party service responses do not need to be

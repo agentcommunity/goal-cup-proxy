@@ -5,7 +5,7 @@ Goal Cup Proxy or reviews a change to it.
 
 ## Supported versions
 
-Version 1.0 only. Release tarballs are unsigned and not notarized
+The latest release only (see GitHub releases). Release tarballs are unsigned and not notarized
 ([packaging/README.md](packaging/README.md)).
 
 ## Reporting a vulnerability

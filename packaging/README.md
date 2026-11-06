@@ -9,7 +9,7 @@ curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/down
 ```
 
 [install.sh](install.sh) is plain POSIX `sh` and needs no `sudo`. It picks the build for macOS
-arm64 or x86_64, or Linux arm64 or x86_64 (WSL2 is Linux), downloads the release's `SHA256SUMS`
+arm64 (an Intel Mac is refused), or Linux arm64 or x86_64 (WSL2 is Linux), downloads the release's `SHA256SUMS`
 and the tarball, refuses the install on a checksum mismatch, runs each new binary from the
 temporary folder (a build the machine cannot run, such as one that needs a newer glibc, stops the
 install with the old one untouched), and installs `goalcup` and `goalcup-verify` into
@@ -91,7 +91,7 @@ commands. The release workflow fetches its target graph, then builds with `--off
    runs `scripts/pad/table --release-check` on that commit in a temporary worktree and refuses the
    tag if it fails (what it needs: PRD-12 section 9). Then it tags that commit and pushes only the
    tag.
-4. The tag starts the workflow. It refuses a tag that differs from `Cargo.toml`, builds the four
+4. The tag starts the workflow. It refuses a tag that differs from `Cargo.toml`, builds the three
    targets and creates the GitHub release with every asset.
 
 The installer stages the two new binaries before changing the prefix and refuses a directory at a

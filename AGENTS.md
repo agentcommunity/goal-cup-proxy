@@ -14,9 +14,7 @@ The seven points are in [VISION.md](VISION.md#the-seven-points). Every change is
 Less code is better. Cut before you add. Ready one week before the start window opens.
 
 Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), then
-[DECISIONS](docs/DECISIONS.md) from "Owner decisions in force". While the 1.0 build runs, also the
-[ledger](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/OWNER-DECISIONS.md), which wins over every PRD, then the
-[PRD index](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md).
+[DECISIONS](docs/DECISIONS.md) from "Owner decisions in force".
 
 ## Map
 
@@ -27,6 +25,7 @@ Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), t
 | `crates/goalcup-verify` | `goalcup-verify`: `check`, `dump`, `secrets`, `usage`. Every judgement about the bytes lives here. |
 | `connectors/` | One `<id>.toml` per harness, `model-hosts.toml` (the one host list) and `tiers.toml` (written by the test pad). Data: the connector files are compiled into both binaries by `crates/goalcup-format/build.rs`, the two list files into `goalcup`, `shapes.tsv` (the masker's shapes) into both. |
 | `server/worker` | The upload server, a Cloudflare Worker. It stores bytes and interprets nothing. |
+| `server/worker/sql/` | The Postgres functions the Worker calls (a copy of the website migration). Checked by `server/worker/scripts/check-sql.sh` in the gate. |
 | `scripts/` | The gate, release, `fetch-run.sh`, the test pad (`scripts/pad/`) and its canary (`scripts/pad/canary`, new harness builds): [scripts/README.md](scripts/README.md). |
 | `skills/` | `goal-cup` (copied into the harness home) and `adding-a-capture-harness` (contributors). |
 | `docs/` | By reader: the [docs map](README.md#docs-map). Plans and history: the `archive` branch. |
@@ -80,8 +79,7 @@ prefix that asserts the same promise. Where they are:
 ## Done
 
 1. `sh scripts/gate.sh fast` passes. `full` too before a release.
-2. At least two independent reviewers read each diff during the 1.0 build (ledger B2); after it, one
-   reviewer reads the PR once.
+2. One reviewer reads each PR once.
 3. `README.md`, the participant guide or `TODO.md` is updated if behaviour changed.
 
 Rust edition 2024, stable toolchain (`rust-toolchain.toml`). Questions about rules or scope go to
