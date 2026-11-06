@@ -1167,8 +1167,8 @@ pub fn no_prompts_question(name: &str) -> String {
 
 pub fn no_prompts_left(name: &str) -> String {
     format!(
-        "Left as it is: {name} will stop and ask for approval during the run. Turn approvals off in \
-         goalcup's own {name} home yourself, or stay near it to answer."
+        "Left as it is: {name} will stop and wait for approval, and nobody may answer it during the \
+         run. To turn approvals off, run goalcup setup again and answer Y."
     )
 }
 
@@ -1176,7 +1176,7 @@ pub fn no_prompts_left(name: &str) -> String {
 pub const NEEDS_REPO: &str = "a competition run needs --repo <owner>/<name>, its new, empty, public \
 GitHub repository. To try goalcup first with no GitHub, run: goalcup start --practice";
 
-pub const NO_HARNESS_SAVED: &str = "no harness picked. Run: goalcup setup --harness <id>";
+pub const NO_HARNESS_SAVED: &str = "No harness is set up yet. Run: goalcup setup";
 
 /// The end screen's first line when the harness never started; `kind` is the logged io error.
 pub fn harness_not_started(name: &str, kind: Option<&str>, run: &str) -> String {

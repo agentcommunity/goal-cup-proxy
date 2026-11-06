@@ -171,16 +171,29 @@ fn read_line(prompt: &str) -> String {
     line.trim().to_owned()
 }
 
-/// Step 1: Enter takes the saved harness; otherwise the id typed.
+/// The harness Enter takes: the saved one, else the only one installed.
+fn default_pick<'a>(saved: Option<&'a str>, installed: &[&'a str]) -> Option<&'a str> {
+    saved.or(match installed {
+        [only] => Some(*only),
+        _ => None,
+    })
+}
+
+/// Step 1: Enter takes the default harness; otherwise the id typed.
 fn pick(saved: Option<&str>, installed: &[&str]) -> Option<String> {
-    let found = installed.join(", ");
+    let found = if installed.is_empty() {
+        "none".to_owned()
+    } else {
+        installed.join(", ")
+    };
+    let default = default_pick(saved, installed);
     let line = read_line(&format!(
-        "Harness ({found}) [{}]: ",
-        saved.unwrap_or("none")
+        "Harness (installed: {found}) [{}]: ",
+        default.unwrap_or("type an id")
     ));
     (!line.is_empty())
         .then_some(line)
-        .or(saved.map(str::to_owned))
+        .or(default.map(str::to_owned))
 }
 
 /// Step 2: the harness in the isolated home with its own launch data; a failure is a line.
@@ -296,4 +309,23 @@ fn add_host(home: &Path, name: &str) -> ExitCode {
 /// One line on stdout; a closed stdout is not worth a panic.
 fn put(line: &str) {
     let _ = writeln!(std::io::stdout(), "{line}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_pick;
+
+    #[test]
+    fn default_pick_prefers_saved_then_the_only_installed() {
+        assert_eq!(
+            default_pick(Some("codex-cli"), &["claude-code-cli", "codex-cli"]),
+            Some("codex-cli")
+        );
+        assert_eq!(
+            default_pick(None, &["claude-code-cli"]),
+            Some("claude-code-cli")
+        );
+        assert_eq!(default_pick(None, &["a", "b"]), None);
+        assert_eq!(default_pick(None, &[]), None);
+    }
 }
