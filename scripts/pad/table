@@ -16,10 +16,13 @@ CASES, CHECKS = ("direct", "gateway", "dodger"), ("C1", "C2", "C3", "C4", "C5", 
 CORE = ("claude-code-cli", "codex-cli", "hermes-cli")
 GUARDED = ["crates/", "server/worker/src/", "connectors/", "skills/", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
            ":(exclude)connectors/tiers.toml", ":(glob,exclude)crates/*/tests/**"]  # tests are not in the binary; skills/ is include_str!ed
+def ids(names):
+    """Connector ids from file names in connectors/: the same rule as crates/goalcup-format/build.rs."""
+    return sorted(n[:-5] for n in names if n.endswith(".toml") and not n.startswith(".")
+                  and n[:-5] not in ("model-hosts", "tiers"))
+
 def connector_ids(root):
-    """The harness list is connectors/*.toml, the same rule as crates/goalcup-format/build.rs."""
-    return sorted(p.stem for p in (root / "connectors").iterdir() if p.is_file() and p.suffix == ".toml"
-                  and not p.stem.startswith(".") and p.stem not in ("model-hosts", "tiers"))
+    return ids(p.name for p in (root / "connectors").iterdir() if p.is_file())
 
 CONNECTOR_IDS = connector_ids(ROOT)
 HEAD = ["Started", "Case", "Mode", "Variant", "Result"] + list(CHECKS) + [
@@ -181,10 +184,10 @@ def results_md(rows, tiers):
                       "Do not edit by hand.", ""] + table(["Harness", "Tier", "Version"] + list(CASES)
                                                          + ["Kill row", "Date"], summary) + body) + "\n"
 
-def render_all(rows, lines=None):
+def render_all(rows, lines=None, cids=None):
     """({connector id: tier tuple}, tiers.toml text): what main writes and the release check compares."""
-    tiers = {c: tier_for(c, rows, lines) for c in CONNECTOR_IDS}
-    return tiers, render_tiers(tiers, {c: builds(c, rows, lines) for c in CONNECTOR_IDS})
+    tiers = {c: tier_for(c, rows, lines) for c in (CONNECTOR_IDS if cids is None else cids)}
+    return tiers, render_tiers(tiers, {c: builds(c, rows, lines) for c in tiers})
 
 def version_only(git, c, sha, files):
     """True when c..sha changes only goalcup's own version: the [workspace.package] version line of Cargo.toml
@@ -258,7 +261,9 @@ def release_check(commit):
     tiers = git("show", sha + ":connectors/tiers.toml")
     if tiers.returncode:
         items.append("connectors/tiers.toml missing at %s" % sha)
-    elif tiers.stdout != render_all(rows, lambda c: harness_lines(c, sha))[1]:
+    elif tiers.stdout != render_all(rows, lambda c: harness_lines(c, sha), ids(  # the connectors at sha, not the tree's
+            ln.split("\t", 1)[1][len("connectors/"):] for ln in git("ls-tree", sha, "connectors/").stdout.splitlines()
+            if " blob " in ln))[1]:
         items.append("connectors/tiers.toml differs from the rows; run scripts/pad/table and commit it")
     print("\n".join(items) if items else "release check: pass at %s" % sha)
     return 1 if items else 0
