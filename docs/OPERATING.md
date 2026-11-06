@@ -211,7 +211,8 @@ To find a run whose recording stopped, read the `heartbeats` list in its `fetch.
 ## Storage cost and the one manual lever
 
 R2 costs $0.015 per GB-month, Class A writes $4.50 per million after 1 million free a month, and egress is
-free ([R2 pricing](https://developers.cloudflare.com/r2/pricing/)). There is no per-run size limit.
+free ([R2 pricing](https://developers.cloudflare.com/r2/pricing/)). Only practice runs have a size limit: 1 GiB
+(`PRACTICE_MAX_BYTES`).
 
 | Case | Compressed size (estimate) | Cost |
 |---|---|---|

@@ -7,8 +7,8 @@ This page lists every message a participant can get about a run. Email is the se
 The terminal and `goalcup status` lines are shown for comparison: they are goalcup's own words on
 the participant's computer, and they should say the same thing as the email. Sources:
 `server/worker/src/notices.ts` (when an email is queued), `goal_cup_tracer.notice_text` in
-`server/worker/sql/` (the words), `crates/goalcup-cli/src/participant.rs` (the terminal words),
-and `PARTICIPANT-REVIEW-2026-10-21.md` on the `archive` branch (A1, A3, A6, A7).
+`server/worker/sql/` (the words), `crates/goalcup/src/cli/text.rs` (the terminal words),
+and `PARTICIPANT-REVIEW-2026-10-21.md` on the `archive` branch (A1, A3, A6).
 
 ## Rules for every message
 
@@ -25,8 +25,7 @@ and `PARTICIPANT-REVIEW-2026-10-21.md` on the `archive` branch (A1, A3, A6, A7).
 5. **No alarm during our own trouble.** If the server itself was not well, it sends no silence
    email. See "The silence rule" below.
 6. **Nothing goes to the agent.** Messages go to the person. goalcup never types into the agent
-   or writes to it about any of this (D66). The disk pause (D65) freezes the agent; it sends no
-   words.
+   or writes to it about any of this (D66).
 7. **Once per thing.** Each email goes at most once per run, kind and key. Each has a limit, shown
    in the table.
 8. **Plain words.** "Run" and "part" only. Times in UTC. No jargon such as entry, segment, chain or
@@ -52,14 +51,12 @@ last sections). Times like `X` are filled in by the server.
 | 3 | Idle 3 h | The run is beating (heartbeat within 20 min), has reported model calls at least once, and its last new model call is more than 3 h old. | `idle_3h`. Once per idle period (key: the last model call). | Today: **Goal Cup: no model calls for 3 hours.** "Your agent made no model calls for 3 hours (since X UTC): is it finished, out of tokens, or offline?" Proposed: "Your agent has made no model calls for 3 hours (since X UTC). Your run is still open and recording. Look at the agent's window. If the agent has stopped, type keep going. That is all you may type." | None. | Look at the agent. If it stopped: type keep going. |
 | 4 | Idle 6 h | The same, 6 h. | `idle_6h`. Once per idle period. | The same as row 3, with 6 hours. | None. | The same as row 3. |
 | 5 | Recording problem | A heartbeat said the recording has `gaps` or `failed`. | `recording`. Once per run. | Today: "Goal Cup Proxy reports a recording problem (gaps). Run `goalcup status` on the machine that started the run." Proposed, the same as the terminal: gaps: "Part of what happened was not recorded. Keep the run going. If this keeps happening, write to goalcup@agentcommunity.org." failed: "The recording failed. Write to goalcup@agentcommunity.org and name run R." | gaps: `PROBLEM: the recording has gaps: part of what happened was not recorded. Keep the run going. If this keeps happening, write to goalcup@agentcommunity.org.` failed: `PROBLEM: the recording failed. Write to goalcup@agentcommunity.org and name run R.` | gaps: nothing. failed: write to support. |
-| 6 | Disk paused | A heartbeat's vitals say goalcup paused the agent for the disk (`agent_paused: "disk"`), starting a new pause. | `disk_full`. Within one tick. At most one per run per 6 h. | **Goal Cup: your agent is paused, the disk is almost full.** "Goal Cup Proxy paused your agent at X (UTC) because the disk of the computer running it is almost full. Free space outside your run's folder. Do not delete anything the agent made. The agent resumes by itself. If it still seems stuck after that, type "keep going" in the agent." (**changed now**) | `The disk is almost full, so your agent is paused. Free some disk space outside your run's folders, and do not delete anything the agent made; it resumes by itself. If your agent seems stuck afterwards, type keep going.` | Free space outside the run's folder. |
-| 7 | Disk short (before a pause) | None the server uses. The vitals carry `disk_short`. | No email. | None. | `PROBLEM: only X of disk is free. Free some space outside your run's folders, and do not delete anything the agent made.` | Free space outside the run's folder. |
-| 8 | Upload behind | Proposed: the run beats, but the server has stored no new part of it for 2 h while goalcup reports more on disk. The server does not keep this fact for the cron yet. | Today: no email. Proposed: an organizer alert, not a participant email (the cause is often ours, D64). | None. | `PROBLEM: nothing was uploaded for X (why). Nothing is lost; it waits on this computer. Check the network.` | Nothing. goalcup retries by itself. |
-| 9 | Server refuses uploads (D64) | The server's own fault. | No email. Organizers fix the server. | None. | `PROBLEM: the server refuses this run's uploads (HTTP N). Recording continues on this computer and nothing is lost; it is sent once the server takes it again. Nothing to do.` | Nothing. |
-| 10 | Run ended | The run reached its deadline and was not replaced. The judged commit is recorded, or an hour has passed without it. | `ended`. 5 to 60 min after the end. Once per run. | **Goal Cup: your agent finished.** "Your agent finished at X (UTC). The commit we recorded is C in R." (or "No commit was recorded for R.") Then, if the server holds the run sealed: "Your run is sealed on the server. Nothing more to do." If not: "Part of your run has not arrived yet. On the computer that ran it, run `goalcup upload` before Z (UTC). It sends only what is missing. After that time the server takes no more uploads." Z is the end plus 24 h. (**changed now**) | `Time is up. <harness> was stopped.` Then `Your run is sealed and uploaded. Nothing more to do.` or `Your run is sealed on this computer.` / `Part of the run is not uploaded yet. Next: when you are online, run: goalcup upload` | Nothing, or `goalcup upload` before Z. |
-| 11 | Upload incomplete before the 24 h close | Proposed: the run is over, not replaced, and still not sealed on the server 18 h after its end. | Proposed new kind `close_soon`. Once per run, 6 h before the close. | Proposed: **Goal Cup: part of your run has not arrived.** "Your run ended at X (UTC), but part of it has still not arrived. On the computer that ran it, run `goalcup upload` before Z (UTC). After that time the server takes no more uploads." | `Next: run goalcup upload`, or for a computer that died before the seal `Next: run goalcup seal, then goalcup upload` | `goalcup upload` before Z. |
-| 12 | Replaced | A newer competition start on the account replaced the run (`replaced_at`). | Today: no email. Proposed new kind `replaced`. Once per run, at the next tick. | Proposed: **Goal Cup: your run was replaced.** "Your run R was replaced at X (UTC) by a newer run on your account. Only the newer run counts. If you did not start a new run, write to goalcup@agentcommunity.org now." | On the old run's computer: `This run was replaced by a newer run on your account. <harness> was stopped.` / `Only the newer run counts.` | Nothing, or write to support if you did not start it. |
-| 13 | Our own trouble (missed ticks, database down, maintenance) | The server's health marker (see below). | No participant email. Proposed: one notice on the website, by the organizers. | None. | The terminal's network or server lines (rows 2, 8, 9). | Nothing. |
+| 6 | Upload behind | Proposed: the run beats, but the server has stored no new part of it for 2 h while goalcup reports more on disk. The server does not keep this fact for the cron yet. | Today: no email. Proposed: an organizer alert, not a participant email (the cause is often ours, D64). | None. | `PROBLEM: nothing was uploaded for X (why). Nothing is lost; it waits on this computer. Check the network.` | Nothing. goalcup retries by itself. |
+| 7 | Server refuses uploads (D64) | The server's own fault. | No email. Organizers fix the server. | None. | `PROBLEM: the server refuses this run's uploads (HTTP N). Recording continues on this computer and nothing is lost; it is sent once the server takes it again. Nothing to do.` | Nothing. |
+| 8 | Run ended | The run reached its deadline and was not replaced. The judged commit is recorded, or an hour has passed without it. | `ended`. 5 to 60 min after the end. Once per run. | **Goal Cup: your agent finished.** "Your agent finished at X (UTC). The commit we recorded is C in R." (or "No commit was recorded for R.") Then, if the server holds the run sealed: "Your run is sealed on the server. Nothing more to do." If not: "Part of your run has not arrived yet. On the computer that ran it, run `goalcup upload` before Z (UTC). It sends only what is missing. After that time the server takes no more uploads." Z is the end plus 24 h. (**changed now**) | `Time is up. <harness> was stopped.` Then `Your run is sealed and uploaded. Nothing more to do.` or `Your run is sealed on this computer.` / `Part of the run is not uploaded yet. Next: when you are online, run: goalcup upload` | Nothing, or `goalcup upload` before Z. |
+| 9 | Upload incomplete before the 24 h close | Proposed: the run is over, not replaced, and still not sealed on the server 18 h after its end. | Proposed new kind `close_soon`. Once per run, 6 h before the close. | Proposed: **Goal Cup: part of your run has not arrived.** "Your run ended at X (UTC), but part of it has still not arrived. On the computer that ran it, run `goalcup upload` before Z (UTC). After that time the server takes no more uploads." | `Next: run goalcup upload`, or for a computer that died before the seal `Next: run goalcup seal, then goalcup upload` | `goalcup upload` before Z. |
+| 10 | Replaced | A newer competition start on the account replaced the run (`replaced_at`). | Today: no email. Proposed new kind `replaced`. Once per run, at the next tick. | Proposed: **Goal Cup: your run was replaced.** "Your run R was replaced at X (UTC) by a newer run on your account. Only the newer run counts. If you did not start a new run, write to goalcup@agentcommunity.org now." | On the old run's computer: `This run was replaced by a newer run on your account. <harness> was stopped.` / `Only the newer run counts.` | Nothing, or write to support if you did not start it. |
+| 11 | Our own trouble (missed ticks, database down, maintenance) | The server's health marker (see below). | No participant email. Proposed: one notice on the website, by the organizers. | None. | The terminal's network or server lines (rows 2, 6, 7). | Nothing. |
 
 ## The silence rule (built now)
 
@@ -98,8 +95,7 @@ maintenance, an unreadable marker, and a healthy server with one silent run).
 - **Silence email:** new subject and words (row 2), and the silence rule above.
 - **Ended email:** the server adds two facts to its payload: whether the run is sealed on the
   server (`uploaded`), and when it closes (`closes_at`). The email then says either "Nothing more to
-  do" or "run `goalcup upload` before Z" (row 10).
-- **Disk paused email:** says where to free space, and not to delete the agent's work (row 6).
+  do" or "run `goalcup upload` before Z" (row 8).
 - The words are a new pending migration,
   `server/worker/sql/pending/20261021100000_goal_cup_tracer_event_readiness.sql`. It replaces only
   `notice_text`. It works in either order with the Worker.
@@ -110,11 +106,11 @@ maintenance, an unreadable marker, and a healthy server with one silent run).
 - **Idle words** (rows 3 and 4): drop "offline" (a beating run is online) and say the one thing to
   do. Waits for the owner's ruling on mid-run keystrokes and quota (review B3).
 - **Recording words** (row 5): split `gaps` and `failed` and match the terminal.
-- **New email `replaced`** (row 12): a new start replaces a run with no email today. It is also a
+- **New email `replaced`** (row 10): a new start replaces a run with no email today. It is also a
   security signal if someone else started it.
-- **New email `close_soon`** (row 11): one reminder 6 h before the close, if the run is still not
+- **New email `close_soon`** (row 9): one reminder 6 h before the close, if the run is still not
   sealed on the server.
-- **Upload behind** (row 8): an organizer alert, not a participant email. The cron would need the
+- **Upload behind** (row 6): an organizer alert, not a participant email. The cron would need the
   server's stored length and goalcup's reported length per run.
 - **Terminal lines** to match the emails (crate changes, outside this change):
   - After the upload, `Part of the run is not uploaded yet; goalcup continue sends it.` should name
@@ -123,8 +119,6 @@ maintenance, an unreadable marker, and a healthy server with one silent run).
     once the run has ended" forever (A3). The ended email's `goalcup upload` relies on this fix.
   - The preflight refusal during `goalcup continue` should say `goalcup continue <run>. Your run is
     still open.`, not "start again" (A6).
-  - The disk pause line should say "Free space outside your run's folder; do not delete anything the
-    agent made." like the email and the guide (A7).
   - The heartbeat problem line could add "Your run is still open; nothing is lost." to "Check the
     network."
 
@@ -139,7 +133,7 @@ maintenance, an unreadable marker, and a healthy server with one silent run).
 ## Needs the owner's or the website's decision
 
 - **The website owns mail delivery** (Resend, the address, suppression) **and may own the words.**
-  Please approve the new words for `silence`, `ended` and `disk_full`, then merge the pending
+  Please approve the new words for `silence` and `ended`, then merge the pending
   migration in the website repo (`sql/pending/README.md`).
 - Is it all right that a lone run gets no silence email?
 - Add the `replaced` and `close_soon` emails? Each needs a new kind in the database's CHECK

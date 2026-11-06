@@ -79,7 +79,7 @@ command could not do its job.
 | Command | What it does |
 |---|---|
 | `goalcup setup [--harness <ID>] [--yes] [--record-host <HOST>]` | Pick your harness, sign in to it once, check this machine. `--yes` asks nothing and opens nothing. `--record-host` adds a model host goalcup records. |
-| `goalcup start [--harness <ID>] [--practice \| --test] [--repo <OWNER/NAME>] [--prompt <FILE>] [--connector <FILE>] [--hosts <FILE>]` | Start a run: open your harness in the current folder and record it. A real run needs `--repo`. `--test` is for organizers. `--connector` and `--hosts` load a file and are for practice and test runs. |
+| `goalcup start [--harness <ID>] [--practice \| --test] [--repo <OWNER/NAME>] [--prompt <FILE>] [--connector <FILE>] [--hosts <FILE>]` | Start a run: open your harness in the current folder and record it. A real run needs `--repo`. `--test` is for organizers. `--connector` and `--hosts` load a file, for practice and test runs; `continue` needs the same files again. All three are hidden from `--help`. |
 | `goalcup continue [<RUN>] [--connector <FILE>] [--hosts <FILE>]` | Start your agent again in the same run, on the machine that started it, after it stopped early. |
 | `goalcup recover [<RUN>]` | Restart recording in place when `status` says recording stopped and your agent still runs; the agent is not restarted. |
 | `goalcup status [<PART>] [--json]` | Show how the run is doing, and its parts. |
@@ -219,7 +219,7 @@ the same points on real harnesses.
 | 7 Real harnesses | Pad tiers | `crates/goalcup/tests`, `scripts` |
 | Usage | Pad C5 | `crates/goalcup-verify/tests` |
 | Format | Pad | `crates/goalcup-format/tests` |
-| All together | Done items 1 and 2 | not merged yet |
+| All together | Done item 1 | `scripts/gate.sh` |
 
 ### Releasing
 
