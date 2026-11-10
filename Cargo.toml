@@ -77,7 +77,7 @@ tempfile = "3"
 # The uploader's HTTP client (`goalcup`'s `upload`). A blocking HTTP/1.1 client and nothing
 # more. `default-features = false` drops ureq's own TLS stack and its gzip decoder: TLS goes
 # through ureq's connector hook on the rustls below.
-ureq = { version = "2", default-features = false }
+ureq = { version = "3", default-features = false }
 # The OS calls std does not have (descriptors, process and signal identity), made through
 # one shared version.
 libc = "0.2"
