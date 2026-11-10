@@ -6,8 +6,12 @@
 // The functions are public.goal_cup_upload_* in the website repo's migration
 // supabase/migrations/20261015120000_goal_cup_tracer_upload.sql (copied, for reference, to
 // sql/goal-cup-tracer-upload.sql); their tables live in the private schema goal_cup_tracer, which
-// PostgREST does not expose. The Worker's key is a Supabase secret API key whose role may execute
-// only those functions.
+// PostgREST does not expose. The Worker's key is a dedicated Supabase secret API key
+// (`sb_secret_...`, one per environment). It goes on the `apikey` header only: Supabase says to send
+// publishable and secret keys on `apikey`, never as a Bearer token
+// (https://supabase.com/docs/guides/api/api-keys). Any other key kind (a legacy JWT, a publishable
+// key) is refused at construction, so the Worker never falls back to a legacy key. Note: a secret key
+// acts as the service_role Postgres role; the key itself does not limit the Worker to these functions.
 // Credentials and device codes: Supabase stores only their sha256, so the Worker hashes the
 // bearer credential (or the device code) and sends the hash. The one plain value that comes
 // back is a freshly minted credential, once, from upload_poll_device.
@@ -145,25 +149,54 @@ async function errorSummary(res: Response): Promise<string> {
   }
 }
 
+/** The only key kind the Worker accepts: a Supabase secret API key. */
+export const SECRET_KEY_PREFIX = "sb_secret_";
+
+/**
+ * First 12 hex characters of the key's sha256: the `key_fp` the cut-over ledger records. Supabase
+ * says to record a SHA256 hash of a key, never the key (https://supabase.com/docs/guides/api/api-keys).
+ */
+export async function keyFingerprint(key: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key)));
+  return [...digest.slice(0, 6)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Fingerprints already logged by this isolate: the key line is written once per key, not per call. */
+const loggedKeys = new Set<string>();
+
 export class SupabaseDb implements Db {
   readonly #base: string;
   readonly #key: string;
 
   constructor(url: string | undefined, key: string | undefined) {
     if (!url || !key) throw new Error("DB_BACKEND=supabase needs the SUPABASE_URL and SUPABASE_KEY secrets");
+    // Fail closed on any other key kind. The message names the variable and the expected kind only.
+    if (!key.startsWith(SECRET_KEY_PREFIX) || key.length === SECRET_KEY_PREFIX.length) {
+      throw new Error(`SUPABASE_KEY must be a Supabase secret API key (${SECRET_KEY_PREFIX}...); this one is not`);
+    }
     this.#base = url.replace(/\/+$/, "");
     this.#key = key;
   }
 
+  /** One line per isolate and key that names the key by fingerprint, never by value. */
+  async #logKeyOnce(): Promise<void> {
+    const fp = await keyFingerprint(this.#key);
+    if (loggedKeys.has(fp)) return;
+    loggedKeys.add(fp);
+    console.log(`key_switch holder=H23 key_fp=${fp} key_kind=sb_secret`);
+  }
+
   /** Call one function. Any failure becomes a 502, which goalcup retries with backoff. */
   async #rpc(fn: string, args: Record<string, unknown>): Promise<unknown> {
+    await this.#logKeyOnce();
     let res: Response;
     try {
       res = await fetch(`${this.#base}/rest/v1/rpc/${PREFIX}${fn}`, {
         method: "POST",
+        // The secret key on `apikey` only. No Authorization header: a secret key sent as Bearer is
+        // parsed as a JWT. test/key-switch.test.ts fails if that header comes back.
         headers: {
           apikey: this.#key,
-          authorization: `Bearer ${this.#key}`,
           "content-type": "application/json",
           accept: "application/json",
         },
