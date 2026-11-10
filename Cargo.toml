@@ -86,7 +86,7 @@ libc = "0.2"
 # and the regexes of the connector manifests are written in its syntax.
 regex = "1"
 # Base64 for the proxy, the masker and the verifier.
-base64 = "0.22"
+base64 = "0.23"
 # The runtime under the proxy's listeners. No `fs`: filesystem I/O is `std::fs`.
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal"] }
 # The recording proxy (`goalcup`'s `proxy`), run in-process. TLS termination and upstream TLS
