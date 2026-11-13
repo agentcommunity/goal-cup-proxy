@@ -562,7 +562,7 @@ run as before. Expired device requests stay in the table until it lands.
 
 ## The cron
 
-`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes. Five steps, in this
+`scheduled` in `src/index.ts` runs `runTick` (`src/notices.ts`) every 5 minutes (staging: every 15 minutes, see `wrangler.toml`). Five steps, in this
 order, each in its own try/catch: `closeRuns`, `recordFinalCommits`, `queueNotices`, `sendNotices`
 (`src/mail.ts`) and `purgeDevices` (deletes device requests that expired more than a day ago; needs
 the [pending migration](#deploying-a-pending-migration)). All take the time as a parameter. All but `sendNotices` and `purgeDevices` read `Db.runsForTick(now)` (open
