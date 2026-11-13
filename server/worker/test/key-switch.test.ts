@@ -73,6 +73,20 @@ test("H23: a wrong key kind makes the Worker misconfigured (500) and the log doe
   assert.ok(!errors.some((l) => l.includes(key)), "the key value reached the log");
 });
 
+test("H23: a missing SUPABASE_KEY fails closed with a message that names the secret", async () => {
+  assert.throws(
+    () => new SupabaseDb("https://p.example", undefined),
+    (e: unknown) => e instanceof Error && /SUPABASE_URL and SUPABASE_KEY secrets/.test(e.message),
+  );
+  const errors: string[] = [];
+  console.error = (...args: unknown[]) => void errors.push(args.map(String).join(" "));
+  const headers = stubFetch();
+  const env = { DB_BACKEND: "supabase", SUPABASE_URL: "https://p.example" } as unknown as Env;
+  await assert.rejects(getDb(env), (e) => e instanceof ApiError && e.status === 500 && e.code === "misconfigured");
+  assert.ok(errors.some((l) => /SUPABASE_KEY/.test(l)), errors.join("\n"));
+  assert.equal(headers.length, 0, "no request may go out without the key");
+});
+
 test("H23: key_fp is the first 12 hex of sha256, logged once per key with the kind, and never the key", async () => {
   stubFetch();
   const key = "sb_secret_h23_fingerprint_line";
