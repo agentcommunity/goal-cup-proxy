@@ -86,7 +86,7 @@ DEVICE_TOKEN_PER_MINUTE = "1200"
 # (README "Deploying 1.0"; the 0.7 Worker refuses every call without it).
 
 # The 5-minute cron (src/notices.ts): closes runs that are over, records the GitHub commit at each
-# deadline, queues the run emails into the outbox. Staging repeats it below.
+# deadline, queues the run emails into the outbox. Staging runs it every 15 minutes (below).
 [triggers]
 crons = ["*/5 * * * *"]
 
@@ -116,8 +116,12 @@ routes = []
 workers_dev = true
 preview_urls = false
 
+# Staging ticks every 15 minutes, not 5: its tick reads the same production Supabase project (about as many
+# calls a day as production, each about ten times heavier; DB review 2026-11-13). Closes, judged commits and
+# emails on staging therefore lag up to 15 minutes. For a rehearsal that needs the 5-minute cadence, deploy
+# staging with this line set back to "*/5 * * * *" for the rehearsal only.
 [env.staging.triggers]
-crons = ["*/5 * * * *"]
+crons = ["*/15 * * * *"]
 
 [env.staging.observability]
 enabled = true

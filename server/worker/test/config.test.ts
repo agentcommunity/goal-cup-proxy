@@ -212,10 +212,10 @@ test("TEST_APPROVAL_KEY is absent from the production block; only staging says S
   assert.equal(tables.vars!.DB_BACKEND, "supabase"); // production never runs the local database
 });
 
-test("the 5-minute cron runs in production and in staging; staging is a Worker of its own", () => {
+test("the cron runs every 5 minutes in production and every 15 in staging; staging is a Worker of its own", () => {
   const tables = wranglerTables();
   assert.equal(tables.triggers!.crons, '["*/5 * * * *"]');
-  assert.equal(tables["env.staging.triggers"]!.crons, '["*/5 * * * *"]');
+  assert.equal(tables["env.staging.triggers"]!.crons, '["*/15 * * * *"]'); // staging polls production Supabase: slower on purpose
   assert.equal(tables[""]!.name, "goalcup-ingest");
   assert.equal(tables["env.staging"]!.name, "goalcup-ingest-staging");
   assert.equal(tables["env.staging.vars"]!.NOTICE_RECIPIENT_OVERRIDE, "delivered@resend.dev"); // staging never emails a member
