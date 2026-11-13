@@ -36,7 +36,7 @@ function stub(...replies: unknown[]): Call[] {
   return calls;
 }
 
-const db = () => new SupabaseDb("https://p.example", "key");
+const db = () => new SupabaseDb("https://p.example", "sb_secret_key");
 const H = (c: string) => c.repeat(64);
 
 const T = "2026-11-06T09:00:00Z";

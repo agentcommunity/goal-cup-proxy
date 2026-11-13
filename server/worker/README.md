@@ -187,7 +187,7 @@ Secrets (`wrangler secret put <NAME>`; locally in `.dev.vars`):
 
 | Name | Meaning |
 |---|---|
-| `SUPABASE_URL`, `SUPABASE_KEY` | The project URL, and a Supabase secret API key whose role may only run `public.goal_cup_upload_*`. Not the community-wide service key. |
+| `SUPABASE_URL`, `SUPABASE_KEY` | The project URL, and this environment's own Supabase secret API key (`sb_secret_...`). Any other key kind, including a legacy JWT, is refused (`misconfigured`). The key is sent on `apikey` only, and the Worker logs `key_switch holder=H23 key_fp=<12 hex> key_kind=sb_secret` once per isolate (the first 12 hex of its sha256, never the key). A secret key acts as `service_role`; the Worker's code, not the key, limits it to `public.goal_cup_upload_*`. Not the community-wide service key. |
 | `RATE_LIMIT_KEY` | Random, at least 32 characters: the HMAC key of every rate-limit key. A deployment answers every device call `500 misconfigured` without it. |
 | `GITHUB_TOKEN` | Read-only token for public repositories. Required in production and staging: the cron reads each run's judged commit (repository, activity and possibly `commits/HEAD`), and the unauthenticated rate limit is shared by every Worker on Cloudflare's egress addresses. Without it the cron logs `WARNING: GITHUB_TOKEN is not set` and carries on. |
 | `RESEND_API_KEY` | Switches the run emails on. Send-only. |

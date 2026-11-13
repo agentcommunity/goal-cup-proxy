@@ -668,7 +668,7 @@ describe("a run still unsealed 24 hours after it ends is closed as incomplete", 
 describe("test-only clocks are refused outside the local backend", () => {
   let worker: RunningWorker;
   before(async () => {
-    worker = await startWorker({ EVENT_ID: "practice", DB_BACKEND: "supabase", RUN_SECONDS: "5", SUPABASE_URL: "https://unused.invalid", SUPABASE_KEY: "unused" });
+    worker = await startWorker({ EVENT_ID: "practice", DB_BACKEND: "supabase", RUN_SECONDS: "5", SUPABASE_URL: "https://unused.invalid", SUPABASE_KEY: "sb_secret_unused" });
   });
   after(async () => {
     await worker?.stop();
