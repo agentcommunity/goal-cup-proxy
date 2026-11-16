@@ -3,7 +3,7 @@
 -- under a "-- ===== <file name> =====" line. Do not edit it by hand. After a website migration merges,
 -- run this from the root of the website checkout (at its main), with F set to this file, to rewrite it
 -- (the header above the REGEN-END line is kept, the rest is regenerated):
---   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/migrations/*goal_cup*.sql; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
+--   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/history/*goal_cup*.sql supabase/migrations/*goal_cup*.sql; do [ -e "$m" ] || continue; printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
 -- Change a migration there first, then regenerate here.
 -- Scope (widened 2026-10-26 from *goal_cup_tracer*.sql): the sign-up migrations (20261021120000 to
 -- 20261021120400) and 20261017150200 replace goal_cup_upload_open_run and goal_cup_upload_claim_notices,
