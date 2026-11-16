@@ -72,7 +72,7 @@ what it needs: [README](README.md#the-gate).
 - The Worker uses Main (`tcymqfwwphacnosnnzxl`, the agentcommunity.org database). Schema and data changes to Main are made only in `agentcommunity_page`, through the loop in its `docs/DATABASE.md`. Never use `psql`, the SQL editor, `supabase db push` or an MCP write on Main from this repository.
 - The Worker calls Main's `public.goal_cup_upload_*` functions. `server/worker/sql/` is a copy of the website's migrations for local checks and is never applied to production from here. A new or changed function, including one in `sql/pending/`, becomes a migration in `agentcommunity_page` first.
 - Run notices go to real people through `goal_cup_upload_claim_notices`, which skips suppressed and opted-out addresses: never send a notice around it. The Goal Cup campaign on Main is paused: never resume it.
-- Never start or widen mail to members. Never delete rows. No secrets, vault names or member addresses in code, logs or PRs.
+- Never start or widen mail to members. Never delete rows on Main by hand. No secrets, vault names or member addresses in code, logs or PRs.
 - When unsure, ask the owner.
 
 ## Tests
