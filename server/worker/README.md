@@ -220,6 +220,8 @@ Without `routes = []`, a staging deploy would move `ingest.agentcommunity.org` t
 
 ## Operator runbook
 
+The `psql` steps on Main in this runbook are superseded by the loop in `agentcommunity_page` `docs/DATABASE.md` and need the owner's go.
+
 Short steps for the people who run the event. Run the wrangler commands in `server/worker`, in a shell
 where `CLOUDFLARE_ACCOUNT_ID` is set to the Agent Community account id (`export CLOUDFLARE_ACCOUNT_ID=<id>`).
 Sign in with `npx wrangler login`, or set `CLOUDFLARE_API_TOKEN`. Production is the Worker `goalcup-ingest`
