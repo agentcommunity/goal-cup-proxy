@@ -129,10 +129,10 @@ A parse error names the file and the line; a rule error names the file and the k
   in `env` gets this error.
 - `env` names no variable the code owns: the proxy and CA variables it removes and sets
   (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` in both cases, `NODE_EXTRA_CA_CERTS`,
-  `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`), `NODE_USE_ENV_PROXY`, `GIT_TERMINAL_PROMPT`, `HOME`, the
-  three that turn TLS checks off (`SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `NODE_TLS_REJECT_UNAUTHORIZED`),
-  and none in `home`, `ca_env` or `unset`. `ca_env` names none of these and no `home` key; a `home`
-  key none but `HOME`.
+  `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`), `NODE_USE_ENV_PROXY`, `GIT_TERMINAL_PROMPT`, `TMUX`,
+  `TMUX_PANE`, `HOME`, the three that turn TLS checks off (`SSL_CERT_DIR`, `CURL_CA_BUNDLE`,
+  `NODE_TLS_REJECT_UNAUTHORIZED`), and none in `home`, `ca_env` or `unset`. `ca_env` names none of
+  these and no `home` key; a `home` key none but `HOME`.
 - Paths stay inside: every component after the leading template is not empty, `.` or `..`, and holds
   no brace or NUL. A `refuse_if_set` or `host_hints` file and a `secret_files` entry start with
   `{home}` or `{workspace}`; a `no_prompts` or `update_off` file and `skills_dir` start with `{home}`,

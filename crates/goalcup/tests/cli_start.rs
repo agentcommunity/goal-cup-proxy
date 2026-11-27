@@ -164,6 +164,28 @@ fn the_skill_lands_in_the_harness_home_and_never_in_the_project() {
     assert_eq!(fix.listing(&fix.project), before);
 }
 
+/// A tmux the harness starts never joins the participant's server: `TMUX` and `TMUX_PANE` are not
+/// handed on, and `TMUX_TMPDIR` is the run's folder, so tmux starts its own server there with the
+/// run's environment (G158).
+#[test]
+fn a_tmux_the_harness_starts_runs_its_own_server_in_the_run_folder() {
+    let fix = Fix::new("{home}/skills", "");
+    let mut ctx = fix.ctx(Server::Off);
+    for (k, v) in [
+        ("TMUX", "/tmp/tmux-1000/default,4242,0"),
+        ("TMUX_PANE", "%3"),
+        ("TMUX_TMPDIR", "/tmp"),
+    ] {
+        ctx.vars.insert(k.into(), v.into());
+    }
+    let ready =
+        prepare(&fix.args(), &ctx, &mut Vec::new()).unwrap_or_else(|s| panic!("{}", s.text));
+    let v = &ready.plan.env;
+    assert!(!v.contains_key("TMUX") && !v.contains_key("TMUX_PANE"));
+    let run = goalcup::cli::run_dir(&fix.gc(), &ready.facts.run);
+    assert_eq!(v["TMUX_TMPDIR"], run.to_string_lossy());
+}
+
 #[test]
 fn every_folder_problem_is_listed_at_once_and_nothing_is_created() {
     let fix = Fix::new("{home}/skills", "");

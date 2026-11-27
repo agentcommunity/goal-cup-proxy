@@ -369,8 +369,8 @@ pub(super) struct Part {
     pub local_wall: u64,
 }
 
-/// The start facts (seam S17) of `start` and `continue`; adds `GOALCUP_TIME_LEFT_FILE` to the
-/// plan's environment (section 10).
+/// The start facts (seam S17) of `start` and `continue`; adds `GOALCUP_TIME_LEFT_FILE` and
+/// `TMUX_TMPDIR` to the plan's environment (section 10).
 pub(super) fn start_facts(
     project: &Path,
     vars: &BTreeMap<String, String>,
@@ -390,6 +390,14 @@ pub(super) fn start_facts(
             .to_string_lossy()
             .into_owned(),
     );
+    // A tmux the harness starts runs its own server in the run's folder, with this environment,
+    // and never joins the participant's (G158). The run folder, not the entry folder: the socket
+    // `<default macOS GOALCUP_HOME>/runs/<run>/tmux-<uid>/default` fits the 104-byte `sun_path`;
+    // the entry folder adds 18 bytes and does not.
+    if let Some(run) = part.entry_dir.parent() {
+        plan.env
+            .insert("TMUX_TMPDIR".to_owned(), run.to_string_lossy().into_owned());
+    }
     StartFacts {
         run: part.run,
         entry: part.entry,

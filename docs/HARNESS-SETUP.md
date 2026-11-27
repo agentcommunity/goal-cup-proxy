@@ -62,9 +62,12 @@ The harness's environment is the participant's, with:
 
 Both CA files are in the part's folder. Removed first: `HTTPS_PROXY`,
 `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` (both cases), `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
-`REQUESTS_CA_BUNDLE`, and the connector's `unset` names. `HTTP_PROXY` is never set. `SSL_CERT_DIR`,
-`CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` are never touched, so a value the participant
-exported passes through. goalcup never sets a model base URL. `GOALCUP_TIME_LEFT_FILE` is set by `start`.
+`REQUESTS_CA_BUNDLE`, `TMUX`, `TMUX_PANE`, and the connector's `unset` names. `HTTP_PROXY` is never
+set. `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` are never touched, so a
+value the participant exported passes through. goalcup never sets a model base URL.
+`GOALCUP_TIME_LEFT_FILE` and `TMUX_TMPDIR` (the run's folder, so a `tmux` the harness starts runs its
+own server with this environment and never joins the participant's) are set by `start` and
+`continue`.
 
 The harness gets the `PATH` of the terminal that ran `goalcup start`. `goalcup` must be on it for the agent
 to run `goalcup time-left`.

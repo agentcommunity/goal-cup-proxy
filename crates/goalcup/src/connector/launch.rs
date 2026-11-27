@@ -15,7 +15,8 @@ use serde_json::Value;
 use super::hints::{self, yaml_key};
 use super::{Connector, Env, Refusal, SettingRow, Skipped};
 
-/// Removed from the participant's environment before anything is set (step 1).
+/// Removed from the participant's environment before anything is set (step 1): the proxy and CA
+/// variables, and tmux's client variables.
 pub(crate) const REMOVED: &[&str] = &[
     "HTTPS_PROXY",
     "https_proxy",
@@ -28,6 +29,8 @@ pub(crate) const REMOVED: &[&str] = &[
     "NODE_EXTRA_CA_CERTS",
     "SSL_CERT_FILE",
     "REQUESTS_CA_BUNDLE",
+    "TMUX",
+    "TMUX_PANE",
 ];
 
 /// Loopback stays off the proxy (step 3).
