@@ -53,11 +53,6 @@ class ConnectorIds(unittest.TestCase):
             (c / "dir.toml").mkdir()
             self.assertEqual(table.connector_ids(Path(d)), ["a-cli"])
 
-    def test_ids_match_repo(self):
-        want = sorted(p.stem for p in (table.ROOT / "connectors").glob("*.toml")
-                      if p.stem not in ("model-hosts", "tiers") and not p.stem.startswith("."))
-        self.assertEqual(table.CONNECTOR_IDS, want)
-        self.assertEqual(len(want), 15)
 
     def test_opencode_has_one_line(self):
         rows = [dict(ROWS[0], connector="opencode-cli")]

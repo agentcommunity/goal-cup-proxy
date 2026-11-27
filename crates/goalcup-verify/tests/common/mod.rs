@@ -987,3 +987,15 @@ pub fn call_table(dir: &Path) -> CallTable {
     recs.iter().for_each(|r| calls.push(r));
     calls.finish()
 }
+
+/// A built-in connector's `checked` key, which the summary reports as `native_checked_on`.
+pub fn checked(id: &str) -> String {
+    let (_, text) = *goalcup_format::connectors::CONNECTORS
+        .iter()
+        .find(|c| c.0 == id)
+        .unwrap();
+    toml::from_str::<toml::Table>(text).unwrap()["checked"]
+        .as_str()
+        .unwrap()
+        .into()
+}

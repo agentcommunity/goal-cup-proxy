@@ -129,26 +129,11 @@ fn every_builtin_row_is_reached_by_a_fixture_line() {
                 .any(|v| k.for_version(Some(&v)).1.as_deref() == Some(row.spec.as_str()));
             assert!(
                 reached,
-                "{id}: versions[{i}] ({}) is first for no fixture line",
+                "{id}: versions[{i}] ({}) is picked by no line of crates/goalcup/tests/fixtures/version-lines.tsv; see docs/CONNECTOR-SCHEMA.md#harness-versions",
                 row.spec
             );
         }
     }
-}
-
-#[test]
-fn checked_is_set_where_a_header_named_a_build() {
-    let mut got: Vec<(String, String)> = Vec::new();
-    for (id, _) in connector::builtin::CONNECTORS {
-        if let Some(v) = connector::load(id, None).unwrap().checked {
-            got.push((id.trim_end_matches("-cli").to_string(), v));
-        }
-    }
-    let want = "amp 0.0.1793275344-g17bf52, claude-code 2.1.312, cline 3.0.74, codex 0.165.0, \
-                crush 0.99.0, droid 0.251.0, gemini 0.66.0, goose 1.57.0, hermes 0.22.5, \
-                kilo 7.8.25, kimi-code 2.4.1, openclaw 2026.10.9, opencode 2.2.2, qwen 0.26.4";
-    let got: Vec<String> = got.iter().map(|(id, v)| format!("{id} {v}")).collect();
-    assert_eq!(got.join(", "), want);
 }
 
 /// Every key a launch reads, for comparing two connectors.

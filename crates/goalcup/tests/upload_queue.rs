@@ -22,7 +22,8 @@ use std::time::{Duration, Instant};
 
 /// The older entry, in the live entry's run or in an earlier one.
 const OLD: &str = "e00000000000000b1";
-const DEADLINE: &str = "2026-11-07T10:00:00Z";
+/// Far in the future, so the tail window (deadline + 24 h) is still open on the real clock.
+const DEADLINE: &str = "2099-11-07T10:00:00Z";
 
 /// A run folder under `home` naming `url`, with `deadline` and the run credential.
 fn run(home: &Path, id: &str, url: &str, deadline: &str) -> PathBuf {

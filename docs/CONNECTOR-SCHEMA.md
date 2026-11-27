@@ -96,6 +96,11 @@ a start.
   [RECORD-FORMAT](RECORD-FORMAT.md)).
 - Rules per version: `[[versions]]` rows over the base keys (table above). The first row whose
   `match` holds wins, so order rows most specific first. An unread version gets the base.
+- Each row needs one line in
+  [`crates/goalcup/tests/fixtures/version-lines.tsv`](../crates/goalcup/tests/fixtures/version-lines.tsv):
+  the connector id, a real build's `--version` first line that picks the row (the first row whose
+  `match` holds for it), and the version read from it (`0.22.6`), tab-separated. The file is data,
+  not a test; the gate fails until every row has its line.
 - "Verified" is not a connector field. [`connectors/tiers.toml`](../connectors/tiers.toml) is
   written from pad rows, as (version, os) pairs under `builds`.
 
