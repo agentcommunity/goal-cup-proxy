@@ -37,8 +37,8 @@ curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/down
 ```
 
 It installs the latest release into `~/.local/bin`, with no `sudo`. If it says that folder is not on
-your `PATH`, run the line it prints. Update later by running the same command, with no run open:
-the installer refuses while a run is recording.
+your `PATH`, run the line it prints. Update later by running the same command, with nothing recording:
+the installer refuses while a run is recording. After an update, run `goalcup setup` again before you start a run.
 
 If a firewall such as Little Snitch or LuLu asks about `goalcup`, allow it. It runs from
 `~/Library/Caches/goalcup/bin/<id>/goalcup` on a Mac (`$XDG_CACHE_HOME/goalcup/bin` or
@@ -225,6 +225,33 @@ Do the steps in this order: a token for one repository needs the repository to e
    upload `.env.local`.
 4. **Write your prompt** in a file outside the project folder, for example `~/goal-prompt.txt`. Ask
    in it for the MIT License and a `GOALCUP.md` (what the project is, how to run it, what works).
+   For goal mode, ask for it in the prompt; never type `/goal` ([RULES](RULES.md#one-prompt-then-only-keep-going)).
+
+**Before you start: the week.** Pause automatic OS updates and restarts for the week (under WSL2,
+those of Windows): every run spans 8 December, Microsoft's monthly update day, and a restart stops
+the agent until you run `goalcup continue`. An editor's terminal (VS Code, Cursor, JetBrains) lives
+only as long as the editor: quitting it, closing its window or restarting it to update stops the
+agent, so start inside `tmux` there, as over SSH. In a container, keep `HOME` (or `GOALCUP_HOME`)
+on a named volume and do not use `--rm`: goalcup's folder holds the run's approval, and without it
+the run cannot be continued. GitHub Codespaces, Google Cloud Shell and other hosted dev
+environments stop on their own after an idle time or a quota: use a VM or a server you control.
+Over SSH, Codex's ChatGPT sign-in cannot reach its `localhost:1455` callback: choose Sign in with
+Device Code (turn it on first in ChatGPT Settings, Security) or connect with
+`ssh -L 1455:localhost:1455`. A Claude Code claude.ai login has a fixed end date that use does not
+extend. On the day you start, check it in goalcup's Claude Code home (Claude Code 2.1.318 or later;
+with `GOALCUP_HOME` set, use `"$GOALCUP_HOME/homes/claude-code-cli"`):
+
+```sh
+# Mac
+CLAUDE_CONFIG_DIR="$HOME/Library/Application Support/goalcup/homes/claude-code-cli" claude auth status --text
+# Linux and WSL2
+CLAUDE_CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/goalcup/homes/claude-code-cli" claude auth status --text
+```
+
+If the first date on its `Sign-in ends:` line is less than 7 days away, or the line says "any day
+now" or "may have ended", run `goalcup setup`, sign in again with `/login`, and check again. If it
+is still less than 7 days away, sign in with an API key instead: it has no such end date.
+
 5. **Start.** In the project folder:
 
    ```sh
@@ -375,6 +402,13 @@ may run it too. After 11 minutes without word it says the time is unknown.
 **Leaving the machine.** Keep it on mains power, awake, online and the lid open; over SSH, start
 inside `tmux`. Sleep suspends the agent too and loses nothing, but the clock runs on.
 
+**News from the organizers.** During the run, news comes by email to your Agent Community address
+and on the event page, [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup). For a
+competition run the server also emails you when the run starts, when it has not heard from the run
+for 20 minutes, when the agent has made no model request for 3 hours (and again at 6), when the
+recording has a problem, and when the run has ended
+(if part of it has not arrived, with the time until which it can still be uploaded).
+
 **Change nothing the agent can read:** files, issues, messages, documents, websites. See
 [RULES, During the run](RULES.md#during-the-run).
 
@@ -442,8 +476,8 @@ replaced by stars of the same length. It cannot catch every secret. These can st
 key the model repeats back in its reply, a key written right after a letter, a digit or `_`, a short
 password, an AWS secret access key that is not in your environment or your project's `.env` files, most of an AWS session token, and a value with no known shape (for example a line of `cat .env` whose name is not one of
 those). For a harness that keeps a database, the database is read whole and can hold the same. Your
-email address and your plan and credit balance are recorded. Raw records stay private and are
-cleaned before research use. Use keys you can revoke, and rotate every key after the run.
+email address and your plan and credit balance are recorded. Raw records stay private, and nothing
+removes a secret from them after the upload. Use keys you can revoke, and rotate every key after the run.
 
 Also not recorded, or recorded less:
 

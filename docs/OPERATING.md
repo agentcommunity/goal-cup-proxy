@@ -6,8 +6,8 @@ and how to release. A developer's path (build, gate, one capture) is in the [REA
 server's design and operator steps are in the [Worker README](../server/worker/README.md); its wire
 contract is [UPLOAD-API](UPLOAD-API.md).
 
-Never write a secret, a key value or a key file path into a doc, an issue, a log or a chat. This page
-names secrets only.
+Never write a secret, a key value or a real key file's path into a doc, an issue, a log or a chat; a
+pattern such as `~/.pad-keys/<key name>` names no key. This page names secrets only.
 
 ## Where things run
 
@@ -46,7 +46,8 @@ All times UTC.
 | Date | What |
 |---|---|
 | From 23 Oct until the day before the start window opens | Dry-run window (production, `goalcup-dryrun-2026`). Dry runs can start on any day. |
-| The day before the start window opens | Release 1.0.0 ([Releasing](#releasing)), then the owner deploys production ([Deploy](#deploy)), then the `EVENT_ID` switch, any time on that day ([EVENT_ID switch](../server/worker/README.md#event_id-switch)). The start window itself: [RULES](RULES.md#timeline). Releases may continue during the cup. |
+| Before the start window opens | The cup release, from `main` ([Releasing](#releasing)): connectors, the skill, the push block and every screen are compiled in, so whatever a participant must get merges before its tag. Then `MIN_COMPETITION_VERSION` is raised to it and production deployed ([steps](../server/worker/README.md#set-the-minimum-competition-version)). Releases may continue during the cup. |
+| The day before the start window opens | The `EVENT_ID` switch, any time on that day ([EVENT_ID switch](../server/worker/README.md#event_id-switch)). The start window itself: [RULES](RULES.md#timeline). |
 | Start window | Date and length: [RULES](RULES.md#timeline). |
 | 168 hours after each start | That run's deadline. The latest run ends 192 hours after the window opens. |
 
@@ -54,14 +55,15 @@ Before the window opens:
 
 1. The `goalcup-cup-2026` row in the website's `events` table has `start_window_opens` =
    the start window's opening and closing times from [RULES](RULES.md#timeline) (UTC).
-2. Production carries the 1.0 Worker ([Deploy](#deploy)) with `MIN_COMPETITION_VERSION` at `1.0.0`.
+2. The cup release is GitHub's latest release, and production carries the Worker from `main` ([Deploy](#deploy)) with `MIN_COMPETITION_VERSION` at the cup release.
 3. The `EVENT_ID` switch is done. Staging keeps its own event ids.
 4. The pad's release rows hold ([Releasing](#releasing)).
-5. `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, and one practice run
+5. RULES' [Timeline](RULES.md#timeline) names the cup release's tag date: no `<TAG DATE>` is left.
+6. `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, and one practice run
    against production started, sealed and fetched cleanly ([Fetch and check a run](#fetch-and-check-a-run)).
-6. Test runs are deleted ([Test runs and the pad](#test-runs-and-the-pad)) and the bucket lock rule still
+7. Test runs are deleted ([Test runs and the pad](#test-runs-and-the-pad)) and the bucket lock rule still
    covers `traces/goalcup-cup-2026/`.
-7. `MAINTENANCE` is `off`.
+8. `MAINTENANCE` is `off`.
 
 Emails go out at most 20 each 5-minute tick (240 an hour). A burst of 1,500 `started` mails at the window
 opening drains over about six hours. The limit is `NOTICES_PER_TICK` in `server/worker/src/mail.ts`.
@@ -78,14 +80,13 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy --env staging  # staging
 CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy                # production: top level, no --env
 ```
 
-**Staging (agents may).** Deploy with `--env staging` from the integration head. It carries
-`MIN_COMPETITION_VERSION = "1.0.0"` from its first deploy, and every pad run uploads to it.
+**Staging (agents may).** Deploy with `--env staging` from the integration head. It carries the same
+`MIN_COMPETITION_VERSION` as production (`test/config.test.ts` fails if they differ), and every pad run uploads to it.
 
-**Production (the owner, after the merge to `main`).** Once, in the order of
-[Deploying 1.0](../server/worker/README.md#deploying-10): check that no real run is open, publish the
-1.0.0 release, deploy with every deploy check (`wrangler.toml` holds the `1.0.0` floor in both blocks;
-`npx wrangler versions view <version-id>` must show it), only then delete the old `RECEIPT_SIGNING_KEY`
-secret, create the `goalcup-usage` bucket, and smoke with one practice run, sealed, fetched and checked.
+**Production (the owner, after the merge to `main`).** The first 1.0 deploy was done on 27 Nov 2026
+([Deploying 1.0](../server/worker/README.md#deploying-10)). Every later one is from `main` with
+every deploy check, and `npx wrangler versions view <version-id>` must show the `MIN_COMPETITION_VERSION`
+`wrangler.toml` holds.
 There is no rollback to the 0.7 Worker. A bad 1.0 Worker is held with `MAINTENANCE=on` and fixed forward
 ([Maintenance](../server/worker/README.md#maintenance-on-and-off); [Rollback](../server/worker/README.md#rollback),
 only to a 1.0 version).
@@ -280,6 +281,16 @@ or the client's own count to the deadline. Fix the server and the runs catch up.
 | Emails are late | At most 20 go out per 5-minute tick. The queue drains by itself; raise `NOTICES_PER_TICK` in `mail.ts` to speed it. Check `RESEND_API_KEY` and `NOTICE_FROM` are set. |
 | A secret leaked (Supabase, Resend, GitHub, Cloudflare) | Revoke it at its provider, create a new one, `npx wrangler secret put` it, deploy. Treat the old value as public. |
 
+**A bug in goalcup during the event.** The owner finds the open runs it hits by `tracer_version` on each run's
+newest row in `goal_cup_tracer.entries` (a read-only SELECT; no API shows it). Fix it on `main` and
+release as [Releasing](#releasing) says: a change under a `GUARDED` path in `scripts/pad/table` needs the
+[release rows](#release-rows-on-the-mac) again first, about 3 hours on the Mac. Then tell the
+affected participants by email and on the event page: run `goalcup seal` from another terminal,
+install the fixed build with the install line, then `goalcup continue` in the same project folder;
+the deadline stays. A harness whose connector has no `resume` starts a new conversation there and
+loses the agent's context, so say so. Raise `MIN_COMPETITION_VERSION` to the fixed release for new
+starts; it does nothing for open runs, because `continue` is not checked (D70).
+
 ## Releasing
 
 The version is written once, in the workspace `Cargo.toml`. In order:
@@ -299,6 +310,5 @@ The version is written once, in the workspace `Cargo.toml`. In order:
 5. Then the owner deploys the Worker ([Deploy](#deploy)). Raise `MIN_COMPETITION_VERSION` only after the
    release is published and `releases/latest` serves it.
 
-If you tested 0.7, install 1.0 fresh; 0.7 runs cannot be continued. (This line goes in the 1.0.0 release
-notes.) The binaries are unsigned and not notarized. Participants install with one command, given in
+The binaries are unsigned and not notarized. Participants install with one command, given in
 [packaging/README.md](../packaging/README.md).

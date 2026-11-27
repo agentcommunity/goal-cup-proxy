@@ -66,6 +66,11 @@ what it needs: [README](README.md#the-gate).
 - **Never commit** anything under the repository root's `/pad-out/` or `/harnesses/`, any
   `target/`, a key, or a real run's record.
   A committed fixture is masked and reviewed by eye.
+- **A release during the event continues what an earlier one started.** From the start window until
+  the last run closes, a release must read every state file an earlier Edition 01 release wrote
+  (`server.json`, `status.json`, `upload.json`, `setup.json`, `cursors.json`, `counts.jsonl`): a field
+  added to one is `Option` or
+  `#[serde(default)]`.
 - **Record raw, interpret later.** The recorder captures bytes. The verifier and the usage reader
   judge them. Do not put rule logic in the recorder (D3).
 

@@ -13,7 +13,7 @@ The build uses each default below until the owner answers.
    harness minus proxy and CA variables; this touches D61's "forwards no key" clause.
 3. Masking beyond option b. Default: no; only the run's `GH_TOKEN` is masked by exact value.
 4. Rules and judging. Default: yes to all three; a tier does not decide eligibility.
-5. Release order. Default: publish 1.0.0, then deploy production with the 1.0.0 floor.
+5. Release order. Answered 26 Nov: the cup release is tagged from `main`, then `MIN_COMPETITION_VERSION` is raised to it and production deployed ([OPERATING](docs/OPERATING.md#dates-and-checklist)).
 6. Run 1's prompt. Default: not committed; without the file, A1 runs the pad's `full` prompt.
 7. Hermes and per-call matching. Default: per call when `state.db` has usable times, else per session.
 8. Short answers and the build budget. Default: the readings and report lines PRD-00 gives.
