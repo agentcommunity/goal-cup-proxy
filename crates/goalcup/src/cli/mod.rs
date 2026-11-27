@@ -27,6 +27,9 @@ use std::{env, fs};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
+use crate::connector::LaunchPlan;
+use crate::connector::launch::fill;
+
 /// The hidden subcommand PRD-02's watchdog spawns as `goalcup recorder [--null]`; `main.rs`
 /// parses with these two names, so the spawn and the parser cannot drift.
 pub const RECORDER_SUBCOMMAND: &str = "recorder";
@@ -291,6 +294,27 @@ pub fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
 pub fn saved_harness(home: &Path) -> Option<String> {
     let v = read_json::<serde_json::Value>(&setup_json(home))?;
     Some(v.get("harness")?.as_str()?.to_owned())
+}
+
+/// Appends `plan.effective.no_prompts_args`, templates filled, to `plan.argv` when `setup.json`
+/// names `plan.connector.id` and holds `prompts_off: true` (D86), and gives None. Otherwise gives
+/// `text::no_prompts_left` when the connector has `no_prompts_args`, so the start screen says it.
+fn add_no_prompts_args(home: &Path, workspace: &Path, plan: &mut LaunchPlan) -> Option<String> {
+    let args = &plan.effective.no_prompts_args;
+    if args.is_empty() {
+        return None;
+    }
+    let v = read_json::<serde_json::Value>(&setup_json(home));
+    let yes = v.is_some_and(|v| {
+        v.get("harness").and_then(|h| h.as_str()) == Some(plan.connector.id.as_str())
+            && v.get("prompts_off") == Some(&serde_json::Value::Bool(true))
+    });
+    if !yes {
+        return Some(text::no_prompts_left(&plan.effective.name));
+    }
+    let filled = args.iter().map(|a| fill(a, &plan.home, workspace));
+    plan.argv.extend(filled);
+    None
 }
 
 /// This process's environment, the values that are valid text.

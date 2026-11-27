@@ -317,6 +317,7 @@ pub fn prepare(
             "version": is, "before": was}));
     }
     lines.extend(plan.effective.first_screen.clone());
+    lines.extend(super::add_no_prompts_args(home, project, &mut plan));
     lines.extend(first_message(
         &found.run_dir,
         prompted(&found.run_dir, &sj.entries),

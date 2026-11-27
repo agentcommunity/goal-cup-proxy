@@ -305,6 +305,7 @@ pub fn prepare(a: &Args, c: &Ctx, out: &mut dyn std::io::Write) -> Result<Ready,
     let (local_wall, deadline) = deadline_ms(opened.deadline);
     let mut lines = vec![text::run_kind(mode).to_owned()];
     lines.extend(plan.effective.first_screen.clone());
+    lines.extend(super::add_no_prompts_args(&c.home, &c.project, &mut plan));
     lines.extend(first_message(a, c, prompt.as_deref(), &opened.run)?);
     lines.extend(deadline.map(|ms| text::ends_line(ms / 1000, super::now())));
     lines.push(text::upload_to(c.server.host()));
