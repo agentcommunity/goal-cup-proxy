@@ -13,6 +13,11 @@ host_hints = [
   { file = "{home}/.config/opencode/*.json", key = "providers.*.settings.baseURL" },
   { file = "{home}/.config/opencode/*.jsonc", key = "providers.*.settings.baseURL" },
   { file = "{workspace}/opencode.json*", key = "providers.*.settings.baseURL" },
+  { file = "{workspace}/.opencode/opencode.json*", key = "providers.*.settings.baseURL" },
+  { file = "{home}/.config/opencode/*.json", key = "provider.*.options.baseURL" },
+  { file = "{home}/.config/opencode/*.jsonc", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/opencode.json*", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/.opencode/opencode.json*", key = "provider.*.options.baseURL" },
 ]
 secret_files = [
   "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/config.json",

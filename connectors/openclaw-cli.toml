@@ -17,6 +17,7 @@ refuse_if_set = [
     "OPENCLAW_PROXY_URL", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "OPENCLAW_PROFILE",
   ] },
 ]
+host_hints = [{ file = "{home}/.openclaw/openclaw.json", key = "models.providers.*.baseUrl" }]
 secret_files = [
   "{home}/.openclaw/.env", "{home}/.openclaw/openclaw.json",
   "{home}/.openclaw/agents/main/agent/openclaw-agent.sqlite", "{home}/.openclaw/state/openclaw.sqlite",

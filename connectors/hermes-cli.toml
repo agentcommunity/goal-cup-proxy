@@ -11,6 +11,8 @@ resume = ["--continue"]
 home = { HERMES_HOME = "{home}" }
 before = [["gateway", "stop", "-y"]]
 after = [["gateway", "stop", "-y"]]
+# Hermes loads {home}/.env over the environment (hermes_cli/env_loader.py, override=True).
+refuse_if_set = [{ file = "{home}/.env", keys = ["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy", "NO_PROXY", "no_proxy", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"] }]
 host_hints = [
   { file = "{home}/config.yaml", key = "model.base_url" },
   { file = "{home}/config.yaml", key = "providers.*.base_url" },

@@ -17,6 +17,7 @@ host_hints = [
   { file = "{workspace}/.kilocode/kilo.json*", key = "provider.*.options.baseURL" },
   { file = "{workspace}/.kilocode/opencode.json*", key = "provider.*.options.baseURL" },
 ]
+hint_env = ["OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"]
 secret_files = [
   "{home}/.local/share/kilo/auth.json", "{home}/.config/kilo/config.json", "{home}/.config/kilo/kilo.json",
   "{home}/.config/kilo/kilo.jsonc", "{home}/.config/kilo/opencode.json", "{home}/.config/kilo/opencode.jsonc",

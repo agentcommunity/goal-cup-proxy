@@ -57,6 +57,9 @@ fn one_hint_per_format_reaches_the_config_list() {
     let deep = "custom_providers:\n  - name: a\n    base_url: https://l2.example.com\n";
     let slash = "providers:\n  gw/eu~1:\n    base_url: https://s.example.com\n";
     let d = "# keys\nexport GW_BASE_URL=\"https://d.example.com/v1\"\n";
+    let o = "{ // OpenClaw writes JSON5\n \"models\": { \"providers\": { \"gw\": {\n \
+             \"baseUrl\": \"https://o.example.com/v1\", }, }, }, }\n";
+    let q = "{\"env\":{\"OPENAI_BASE_URL\":\"https://q.example.com/v1\"}}";
     let cases = [
         (CLAUDE, "settings.json", JSON, "gw.example.com"),
         ("kilo-cli", ".config/kilo/kilo.jsonc", c, "c.example.com"),
@@ -75,13 +78,43 @@ fn one_hint_per_format_reaches_the_config_list() {
         ("hermes-cli", "config.yaml", slash, "s.example.com"),
         ("hermes-cli", ".env", d, "d.example.com"),
         (CLAUDE, "unrelated.txt", "", "ev.example.com"),
+        (
+            "opencode-cli",
+            ".config/opencode/opencode.jsonc",
+            c,
+            "c.example.com",
+        ),
+        (
+            "openclaw-cli",
+            ".openclaw/openclaw.json",
+            o,
+            "o.example.com",
+        ),
+        ("qwen-cli", "settings.json", q, "q.example.com"),
+        ("qwen-cli", ".env", d, "d.example.com"),
+        ("opencode-cli", "unrelated.txt", "", "ev.example.com"),
+        ("kilo-cli", "unrelated.txt", "", "ev.example.com"),
+        ("qwen-cli", "unrelated.txt", "", "ev.example.com"),
+        (CLAUDE, "unrelated.txt", "", "gc.example.com"),
     ];
-    let vars = [("ANTHROPIC_BASE_URL", "https://ev.example.com")];
+    let vars = [
+        ("ANTHROPIC_BASE_URL", "https://ev.example.com"),
+        ("ANTHROPIC_GOOGLE_CLOUD_BASE_URL", "https://gc.example.com"),
+    ];
     for (id, file, text, host) in cases {
         let plan = plan(id, file, text, &vars).0;
         assert!(config(&plan, host), "{id} {file} {host}");
         assert!(!config(&plan, "no.example.com"), "{id} {file}");
     }
+    // OpenCode 2 reads a 1.x block in the workspace's .opencode folder.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("workspace/.opencode/opencode.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, c.replace("c.example", "w.example")).unwrap();
+    assert!(config(
+        &plan_in(dir.path(), "opencode-cli", &[]),
+        "w.example.com"
+    ));
 }
 
 #[test]
@@ -150,13 +183,33 @@ fn plain_http_an_ip_and_an_unnamed_variable_add_nothing_and_skips_are_logged() {
 
 #[test]
 fn a_refuse_if_set_hit_names_file_and_key_never_the_value() {
-    let json = "{\"env\":{\"HTTPS_PROXY\":\"http://fixture-proxy-value.example:8080\"}}";
-    let (plan, dir) = plan(CLAUDE, "settings.json", json, &[]);
-    let home = dir.path().join("goalcup/homes");
-    let file = home.join(CLAUDE).join("settings.json");
-    let key = "env.HTTPS_PROXY".to_string();
-    assert_eq!(plan.refusal, Some(Refusal::SettingSet { file, key }));
-    assert!(!format!("{:?}", plan.refusal).contains("fixture-proxy-value"));
+    let value = "http://fixture-proxy-value.example:8080";
+    for (id, file, text, key) in [
+        (
+            CLAUDE,
+            "settings.json",
+            format!("{{\"env\":{{\"HTTPS_PROXY\":\"{value}\"}}}}"),
+            "env.HTTPS_PROXY",
+        ),
+        (
+            "hermes-cli",
+            ".env",
+            format!("HTTPS_PROXY={value}\n"),
+            "HTTPS_PROXY",
+        ),
+    ] {
+        let (plan, dir) = plan(id, file, &text, &[]);
+        let file = dir.path().join("goalcup/homes").join(id).join(file);
+        assert_eq!(
+            plan.refusal,
+            Some(Refusal::SettingSet {
+                file,
+                key: key.into()
+            }),
+            "{id}"
+        );
+        assert!(!format!("{:?}", plan.refusal).contains("fixture-proxy-value"));
+    }
 }
 
 #[test]

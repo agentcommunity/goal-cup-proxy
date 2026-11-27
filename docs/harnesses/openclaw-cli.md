@@ -44,7 +44,7 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 - CA: `NODE_EXTRA_CA_CERTS` adds to the roots; `SSL_CERT_FILE` alone was ignored (measured). Node: yes, so the launch sets `NODE_USE_ENV_PROXY=1`. `HTTPS_PROXY` is honoured, and `NO_PROXY` too ([docs](https://docs.openclaw.ai/security/network-proxy)).
 - Its own proxy wins: `proxy.proxyUrl` beats `OPENCLAW_PROXY_URL`, and in a run both beat `HTTPS_PROXY` (measured). goalcup unsets `OPENCLAW_PROXY_URL` and refuses the start if `proxy.proxyUrl`, `env.OPENCLAW_PROXY_URL` or `env.vars.OPENCLAW_PROXY_URL` is set in `openclaw.json`, or any of `OPENCLAW_PROXY_URL`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_PROFILE` in `.env` or `~/.config/openclaw/gateway.env`. The refusal names file and key, never the value.
 - A hand-written `openclaw.json` is JSON5. One that does not parse as JSON is named in `unread`, so its proxy keys are not checked and the participant is told.
-- DeepSeek posts to `api.deepseek.com/chat/completions`; no model host is named in a file by default, so there are no host hints. An unknown model id was refused and the first session went to the gateway default (measured).
+- DeepSeek posts to `api.deepseek.com/chat/completions`; a custom provider names its host at `models.providers.<id>.baseUrl` in `openclaw.json`, which the connector hints (a file that does not parse as JSON with comments is named in `unread`). An unknown model id was refused and the first session went to the gateway default (measured).
 - Raw `net`, `tls` and `http2` sockets, native addons and non-OpenClaw child processes "may bypass" Node-level routing, and loopback goes direct ([docs](https://docs.openclaw.ai/security/network-proxy)).
 
 ## 7. Process model
