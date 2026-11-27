@@ -245,20 +245,28 @@ Mac, `wl-copy` or `xclip` on Linux, `clip.exe` under WSL2) and always in `first-
 run's folder; the screen gives the path. Answer the harness's own first screens, then **paste it
 once as your first message and press Enter**. Without `--prompt` the screen prints the push block and
 says your first message must start with it. The block looks like this; yours differs, and the
-`credential` line is one line:
+long `credential` line is one line:
 
 ```
   Push to https://github.com/<user>/<name>
-  The token is GH_TOKEN in .env.local in this folder. Never print it, and never write it into a file, a git setting or a remote address.
-  After git init, run:
+  The token is GH_TOKEN in .env.local in this folder. Never print it, never write it into a file, a git setting or a remote address, and never delete, move or overwrite .env.local.
+  Run, in this folder:
+    git init -b main
+    git branch -M main
     git config user.name "Goal Cup"
     git config user.email "goalcup@agentcommunity.org"
-    git config credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$(sed -n s/^GH_TOKEN=//p "/full/path/to/my-cup-run/.env.local")"; }; f'
+    git config --replace-all credential.https://github.com.helper ''
+    git config --add credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$(sed -n s/^GH_TOKEN=//p "/full/path/to/my-cup-run/.env.local")"; }; f'
     git remote add origin https://github.com/<user>/<name>.git
+  Push your work to main often (git push -u origin main): only main is judged, not other branches or pull requests.
 ```
 
-The block is how the agent learns the repository and how to push; `goalcup` writes nothing into
-your project folder, and the agent runs `git init` and those lines itself. Never paste the token into
+The block is how the agent learns the repository, the branch and how to push; `goalcup` writes
+nothing into your project folder, and the agent runs those lines itself. `git branch -M main`
+puts the folder on `main` even if it was already a repository on another branch. Its first push
+makes `main` the repository's default branch, the one that is judged. The empty `credential`
+line drops any helper your own git config names for github.com, so the agent's pushes over https
+use this token only. Never paste the token into
 your prompt. After the first message you may type only "keep going", when the agent has stopped
 ([RULES](RULES.md#one-prompt-then-only-keep-going)).
 

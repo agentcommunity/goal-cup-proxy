@@ -1,8 +1,10 @@
 //! PRD-10 section 8 (first message, push block, clipboard) and section 9 (sleep lock).
 
 use std::collections::BTreeMap;
+use std::io::Write as _;
 use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
+use std::process::{Command, Stdio};
 
 use goalcup::cli::{awake, push, text};
 
@@ -76,6 +78,84 @@ fn the_token_value_is_never_in_the_block_or_the_file() {
     let got = push::write_first_message(dir.path(), Some(&b), &text).unwrap();
     assert!(!got.contains(TOKEN) && !b.join("\n").contains(TOKEN));
     assert!(got.contains(".env.local"));
+}
+
+/// G110: the block's own commands make `main`, even in a folder already initialised on `master`
+/// (OpenClaw's own `git init`), and leave the one-repo token as the only github.com credential
+/// even when the participant's git config names a helper first. Run a second time, only
+/// `git remote add` fails.
+#[test]
+fn the_block_makes_main_and_pushes_with_the_token_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let (home, repo) = (dir.path().join("home"), dir.path().join("my run"));
+    for d in [&home, &repo] {
+        std::fs::create_dir(d).unwrap();
+    }
+    let global =
+        "[credential]\n\thelper = \"!f() { echo username=me; echo password=WRONG; }; f\"\n";
+    std::fs::write(home.join(".gitconfig"), global).unwrap();
+    std::fs::write(repo.join(".env.local"), format!("GH_TOKEN={TOKEN}\n")).unwrap();
+    // A private HOME, no system config, and no checkout above the tempdir is ever reached.
+    let run = |program: &str, args: &[&str], stdin: &str| {
+        let mut child = Command::new(program)
+            .args(args)
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", &home)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_CEILING_DIRECTORIES", dir.path())
+            .current_dir(&repo)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(stdin.as_bytes())
+            .unwrap();
+        child.wait_with_output().unwrap()
+    };
+    run(
+        "git",
+        &["-c", "init.defaultBranch=master", "init", "-q"],
+        "",
+    ); // as OpenClaw leaves it
+    let b = push::block(
+        "https://github.com/a/b",
+        "A",
+        "a@x.org",
+        ".env.local",
+        &repo.join(".env.local"),
+    );
+    let commands: Vec<&str> = b.iter().filter_map(|l| l.strip_prefix("  ")).collect();
+    for pass in 0..2 {
+        for c in &commands {
+            let ok = run("sh", &["-c", c], "").status.success();
+            assert!(
+                ok || (pass == 1 && c.starts_with("git remote add")),
+                "pass {pass}: {c}"
+            );
+        }
+    }
+    let fill = run(
+        "git",
+        &["credential", "fill"],
+        "protocol=https\nhost=github.com\npath=a/b.git\n\n",
+    );
+    let got = String::from_utf8_lossy(&fill.stdout);
+    assert!(
+        got.contains(&format!("password={TOKEN}")) && !got.contains("WRONG"),
+        "{got}"
+    );
+    let head = run("git", &["symbolic-ref", "HEAD"], "");
+    assert_eq!(
+        String::from_utf8_lossy(&head.stdout).trim(),
+        "refs/heads/main"
+    );
 }
 
 #[test]

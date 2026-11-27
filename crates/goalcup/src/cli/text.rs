@@ -1035,7 +1035,7 @@ fn advice(practice: bool) -> &'static str {
     if practice {
         "This is a practice run: it needs no repository, so there is nothing to push."
     } else {
-        "Push your work often; work not pushed when the run stops is lost."
+        "Push your work to main often: work not pushed to main when the run stops is not judged."
     }
 }
 
