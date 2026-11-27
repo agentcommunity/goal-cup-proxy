@@ -182,8 +182,11 @@ Do the steps in this order: a token for one repository needs the repository to e
 2. **Make a token for it.** On GitHub, Settings, Developer settings, Fine-grained personal access
    tokens, Generate new token:
    - Repository access: **only select repositories**, and pick that one repository.
-   - Repository permissions, **Contents: Read and write**. Read-only fails the push with a 403.
-   - Expiration: **30 days**.
+   - Repository permissions, **Contents: Read and write** and **Workflows: Read and write**.
+     Read-only Contents fails the push with a 403. Without Workflows, GitHub refuses a push that
+     adds or changes a file in `.github/workflows/`, and every later push that still carries it.
+   - Expiration: **30 days**. The date GitHub shows must be after your start plus 7 days, or the
+     token stops working during the run, and you may not replace it then.
 
    Copy it (it starts `github_pat_`). The agent pushes with this token, and it reaches that one
    repository only. The agent still runs as you and can read what your programs can read, so keep no
@@ -212,7 +215,9 @@ Do the steps in this order: a token for one repository needs the repository to e
 
    `pbpaste` is the Mac clipboard; on Linux use `xclip -o -selection clipboard` (or `wl-paste`). Under
    WSL2 the Windows clipboard adds a carriage return, which is refused, so use
-   `"$(powershell.exe Get-Clipboard | tr -d '\r')"` in its place. The line must be exactly
+   `"$(powershell.exe Get-Clipboard | tr -d '\r')"` in its place. Over SSH, or with none of these
+   tools, run `(umask 077; read -rs t; printf 'GH_TOKEN=%s\n' "$t" > .env.local)` instead, paste the
+   token (it does not show) and press Enter. The line must be exactly
    `GH_TOKEN=<token>`: no `export`, no quotes, no spaces. Have it in the file before you start: the
    recorder hides that exact value everywhere, and a token added later is covered by its shape only.
    Keep the folder out of any Git repository, off a Windows drive under WSL2, and out of Desktop,
