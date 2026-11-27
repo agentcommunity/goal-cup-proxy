@@ -34,8 +34,7 @@ The build uses each default below until the owner answers.
 
 ## Known issues
 
-- Linux x86_64 and macOS arm64 (owner's Mac, 3 Nov) are tested. Linux arm64 is built by the
-  release workflow, not tested. macOS Intel is not supported. Windows (WSL2) is untested.
+- Platforms, and what has been tested on each: [README](README.md#platforms).
 - Unmasked memory (held bytes, the run CA key) can still reach disk through swap on Linux
   ([PRD-00](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/plans/2026-10-30-v1.0/PRD-00-index.md#architecture)).
 - The `zstd` command line tool may stop short on a live entry; read one with `goalcup-verify dump`
