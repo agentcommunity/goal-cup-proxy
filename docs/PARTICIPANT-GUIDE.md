@@ -246,7 +246,7 @@ host list comes from a file (not verified), and a sleep warning if needed. The l
 
 The harness opens in the project folder. `goalcup` builds your **first message**: the push block,
 a blank line, then your prompt. It is on your clipboard when a tool for that exists (`pbcopy` on a
-Mac, `wl-copy` or `xclip` on Linux, `clip.exe` under WSL2) and always in `first-message.txt` in the
+Mac, `wl-copy` or `xclip` on Linux and on WSL2 with WSLg) and always in `first-message.txt` in the
 run's folder; the screen gives the path. Answer the harness's own first screens, then **paste it
 once as your first message and press Enter**. Without `--prompt` the screen prints the push block and
 says your first message must start with it. The block looks like this; yours differs, and the

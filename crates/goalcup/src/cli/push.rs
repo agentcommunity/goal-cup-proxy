@@ -101,8 +101,6 @@ pub mod clipboard {
         "XAUTHORITY",
         "WAYLAND_DISPLAY",
         "XDG_RUNTIME_DIR",
-        "WSL_DISTRO_NAME",
-        "WSL_INTEROP",
     ];
 
     fn tool(vars: &BTreeMap<String, String>) -> Option<(std::path::PathBuf, Vec<&'static str>)> {
@@ -110,11 +108,6 @@ pub mod clipboard {
         let set = |v: &str| vars.get(v).is_some_and(|x| !x.is_empty());
         if cfg!(target_os = "macos") {
             return found("pbcopy").map(|p| (p, vec![]));
-        }
-        if super::super::folder::wsl_version().is_some()
-            && let Some(p) = found("clip.exe")
-        {
-            return Some((p, vec![]));
         }
         if set("WAYLAND_DISPLAY")
             && let Some(p) = found("wl-copy")
