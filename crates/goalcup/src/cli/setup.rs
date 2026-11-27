@@ -170,6 +170,9 @@ fn write_home(
         return Ok(Some(text::not_written(&file)));
     }
     put(&text::settings_set(&c.name, &plan.home, update, prompts));
+    if prompts_off && !rows.no_prompts_args.is_empty() {
+        put(&text::no_prompts_flag(&c.name));
+    }
     Ok(plan.refusal.as_ref().map(text::refusal))
 }
 

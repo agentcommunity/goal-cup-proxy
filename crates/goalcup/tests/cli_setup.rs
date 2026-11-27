@@ -351,6 +351,7 @@ fn the_no_prompts_answer_is_kept_for_launch_arguments() {
     let (out, all) = setup(&home, &fake.path(), &["--harness", &file, "--yes"]);
     assert_eq!(out.status.code(), Some(0), "{all}");
     assert_eq!(saved(&home)["prompts_off"], Value::Bool(true), "{all}");
+    assert!(all.contains(&text::no_prompts_flag("Tester")), "{all}");
     // The flag is not in the home, so the home line claims no approval setting there.
     let iso = isolated_home(&home.goalcup_home(), "tester");
     assert!(

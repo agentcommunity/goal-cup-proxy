@@ -71,7 +71,8 @@ It starts no run and needs no GitHub. Run it again whenever it names something t
    that stops to ask, it asks one question: whether to set it to never stop and ask for approval.
    Say yes: nobody may answer a prompt during the run, and a harness that waits for you waits until
    the deadline. Where the harness has a setting, setup writes it in that home; where it has only a
-   launch flag (Gemini CLI, Crush, OpenCode 2), `goalcup start` and `goalcup continue` add the flag.
+   launch flag (Gemini CLI, Crush, OpenCode 2), `goalcup start` and `goalcup continue` add the flag
+   for the harness you set up most recently.
    A line then says what setup set in that home, and where. With `--yes` the question is skipped
    and the answer is yes, and setup asks and opens nothing else. If you say no, run `goalcup setup`
    again and answer Y before your run.

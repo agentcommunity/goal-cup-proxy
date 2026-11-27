@@ -297,8 +297,8 @@ pub fn saved_harness(home: &Path) -> Option<String> {
 }
 
 /// Appends `plan.effective.no_prompts_args`, templates filled, to `plan.argv` when `setup.json`
-/// names `plan.connector.id` and holds `prompts_off: true` (D86), and gives None. Otherwise gives
-/// `text::no_prompts_left` when the connector has `no_prompts_args`, so the start screen says it.
+/// names `plan.connector.id` and holds `prompts_off: true` (D86). Records whether the flag was added
+/// and returns the corresponding start screen line.
 fn add_no_prompts_args(home: &Path, workspace: &Path, plan: &mut LaunchPlan) -> Option<String> {
     let args = &plan.effective.no_prompts_args;
     if args.is_empty() {
@@ -309,12 +309,15 @@ fn add_no_prompts_args(home: &Path, workspace: &Path, plan: &mut LaunchPlan) -> 
         v.get("harness").and_then(|h| h.as_str()) == Some(plan.connector.id.as_str())
             && v.get("prompts_off") == Some(&serde_json::Value::Bool(true))
     });
+    plan.notes.push(serde_json::json!({
+        "ev": "note", "what": "no_prompts_args", "added": yes,
+    }));
     if !yes {
         return Some(text::no_prompts_left(&plan.effective.name));
     }
     let filled = args.iter().map(|a| fill(a, &plan.home, workspace));
     plan.argv.extend(filled);
-    None
+    Some(text::no_prompts_flag(&plan.effective.name))
 }
 
 /// This process's environment, the values that are valid text.

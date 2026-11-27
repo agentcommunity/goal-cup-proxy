@@ -32,6 +32,7 @@ With a terminal and no `--yes`, it:
 3. Writes the connector's `update_off` rows.
 4. Asks one question when the connector has `no_prompts` rows or `no_prompts_args`; on yes it writes the rows, and `goalcup start` and `continue` add the arguments.
 5. Saves the harness id, the rows written and the answer (`prompts_off`) in `$GOALCUP_HOME/setup.json`.
+   A launch-flag answer applies to the harness you set up most recently.
 6. Prints one warning line each for: sleep lock, server unreachable, `git` missing, the WSL folder.
 
 With `--yes` it writes both row lists and opens nothing. Without a terminal and without `--yes` it
