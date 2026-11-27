@@ -1,7 +1,7 @@
 //! Point 7 and the AGENTS.md hard rule: no harness names in core code. A harness and a model host
 //! are data (`connectors/`), so no string literal in `crates/goalcup/src` or
 //! `crates/goalcup-format/src` holds a connector id (the stem of each flat `connectors/*.toml`), a
-//! connector's `program` (`codex`, `claude`, ...) or a host from `connectors/model-hosts.toml`, all
+//! connector's `program` (`codex`, `claude`, ...) or a host from `connectors/model-hosts.toml` outside its `expected` array, all
 //! matched case-insensitively as whole tokens. The lists are read at test time, so a new connector
 //! or host is covered with no edit here. Comments and identifiers are not scanned.
 //!
@@ -41,7 +41,12 @@ fn banned(root: &Path) -> Vec<String> {
         }
     }
     let hosts = std::fs::read_to_string(root.join("connectors/model-hosts.toml")).expect("hosts");
-    for line in hosts.lines().map(|l| l.split('#').next().unwrap()) {
+    // Expected hosts (GitHub, registries) are not harness or model names, and core links github.com.
+    for line in hosts
+        .lines()
+        .take_while(|l| !l.starts_with("expected"))
+        .map(|l| l.split('#').next().unwrap())
+    {
         for pattern in line.split('"').skip(1).step_by(2) {
             let labels: Vec<_> = pattern.split('.').collect();
             for fixed in labels

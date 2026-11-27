@@ -21,15 +21,15 @@ Source words: "docs" is [docs.github.com/copilot](https://docs.github.com/en/cop
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Config dir | `~/.copilot` | `~/.copilot` | unknown |
-| Session store | `session-state/<id>/events.jsonl`; `session-store.db` | same | unknown |
+| Session store | `session-state/<id>/events.jsonl`; `session-store.db`, not copied | same | unknown |
 | Logs / cache | `logs/process-{timestamp}-{pid}.log`; `~/.cache/copilot/pkg/` holds the unpacked package | same | unknown |
 | Env vars that move these | `COPILOT_HOME` | `COPILOT_HOME` | `COPILOT_HOME` |
 
-All from the [config directory reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference), except the package cache, which is from the package (`COPILOT_CACHE_HOME` moves it; the connector does not set it). `settings.json` holds personal settings, `config.json` internal state (and the sign-in token where no keyring exists), `providers.json` the bring-your-own-key registry with keys in plain text. `session-store.db` is a SQLite index the CLI re-creates if deleted.
+All from the [config directory reference](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference), except the package cache, which is from the package (`COPILOT_CACHE_HOME` moves it; the connector does not set it). `settings.json` holds personal settings, `config.json` internal state (and the sign-in token where no keyring exists), `providers.json` the bring-your-own-key registry with keys in plain text. `session-store.db` is a SQLite index the CLI re-creates if deleted. It indexes turn text for search across sessions, so the connector does not copy it: masking cannot see text out of context, the reason Hermes's `state.db` is not copied either.
 
 ## 4. Session format and identity
 
-- One folder per session, `session-state/<id>/`, with an append-only `events.jsonl` that supports `--continue` ([docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)). The connector reads every `events.jsonl` below it, and copies `session-store.db*` at the end.
+- One folder per session, `session-state/<id>/`, with an append-only `events.jsonl` that supports `--continue` ([docs](https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-config-dir-reference)). The connector reads every `events.jsonl` below it.
 - Subagents have their own subagent session (changelog 1.0.81). Whether that is a separate folder or lines inside the parent's file: unknown. `goalcup-verify` has no Copilot reader (`reads_native` in `usage/hints.rs` lists none), so subagents are not linked and `usage` reports no native leg.
 
 ## 5. Auth

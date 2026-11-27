@@ -1,4 +1,5 @@
 # OpenClaw; facts and the known workspace limit: docs/harnesses/openclaw-cli.md.
+# No database rows: both SQLite files hold OpenClaw's auth profiles, which masking cannot see (facts sheet, section 5).
 id = "openclaw-cli"
 name = "OpenClaw"
 program = "openclaw"
@@ -16,8 +17,9 @@ refuse_if_set = [
     "OPENCLAW_PROXY_URL", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "OPENCLAW_PROFILE",
   ] },
 ]
-secret_files = ["{home}/.openclaw/.env", "{home}/.openclaw/openclaw.json"]
-native = [
-  { name = "agents", root = "{home}/.openclaw/agents", pattern = "*/agent/openclaw-agent.sqlite*", form = "final" },
-  { name = "state", root = "{home}/.openclaw/state", pattern = "openclaw.sqlite*", form = "final" },
+host_hints = [{ file = "{home}/.openclaw/openclaw.json", key = "models.providers.*.baseUrl" }]
+secret_files = [
+  "{home}/.openclaw/.env", "{home}/.openclaw/openclaw.json",
+  "{home}/.openclaw/agents/main/agent/openclaw-agent.sqlite", "{home}/.openclaw/state/openclaw.sqlite",
 ]
+first_screen = "Before your prompt: if an OpenClaw Gateway runs on this computer (openclaw gateway status), stop it with openclaw gateway stop; one started outside the run calls models unrecorded. On a new run, type /new first so OpenClaw does not carry on an earlier run's conversation; after goalcup continue, do not."

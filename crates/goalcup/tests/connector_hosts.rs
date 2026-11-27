@@ -5,7 +5,7 @@
 use std::collections::BTreeMap;
 use std::time::SystemTime;
 
-use goalcup::connector::{self, Decision, Env, HostList, Kind, Source};
+use goalcup::connector::{self, Decision, Env, HostList, Kind, Source, builtin};
 
 fn list(text: &str) -> HostList {
     HostList::from_file(text.as_bytes(), "hosts.toml").unwrap()
@@ -113,4 +113,38 @@ fn expected_hosts_are_tunnelled_not_decrypted_and_the_array_is_optional() {
     assert!(!hosts.is_expected("api.example.com"));
     // A participant --hosts copy without the array still loads.
     assert!(!list("provider = [\"api.example.com\"]\n").is_expected("tel.example.com"));
+}
+
+/// The shared list decrypts the catalog, coding-plan and cloud routes participants pick, and
+/// marks the hosts the agent's own tools reach (git, npm, pip, cargo) as expected tunnels.
+#[test]
+fn the_shared_list_names_catalog_hosts_and_expects_tool_hosts() {
+    let hosts = HostList::from_file(builtin::HOSTS.as_bytes(), "model-hosts.toml").unwrap();
+    for name in [
+        "coding-intl.dashscope.aliyuncs.com",
+        "token-plan.maas.qwencloudapi.com",
+        "aws-external-anthropic.us-east-1.api.aws",
+        "api.qwen.ai",
+    ] {
+        assert!(
+            matches!(
+                hosts.decide(name),
+                Decision::Listed {
+                    source: Source::Shared,
+                    ..
+                }
+            ),
+            "{name}"
+        );
+    }
+    for name in [
+        "github.com",
+        "raw.githubusercontent.com",
+        "registry.npmjs.org",
+        "files.pythonhosted.org",
+    ] {
+        assert!(hosts.is_expected(name), "{name}");
+    }
+    // A model host under a GitHub domain stays decrypted and recorded, never hidden as expected.
+    assert!(!hosts.is_expected("copilot-proxy.githubusercontent.com"));
 }

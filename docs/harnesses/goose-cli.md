@@ -8,9 +8,9 @@ Source words: "docs" is [goose-docs.ai](https://goose-docs.ai/docs/guides/enviro
 
 ## 1. Run one prompt, in chat mode first
 
-- `goose session` starts the chat; the connector's `args` is `["session"]`. `goose session --resume` resumes the previous session ([docs](https://goose-docs.ai/docs/guides/goose-cli-commands)); the connector's `resume` is `["--resume"]`, and source takes the most recently used one.
+- A bare `goose` starts the chat. On a home with no config file it first runs the provider wizard and then closes, while `goose session` on such a home only prints "No provider configured. Run 'goose configure' first." and exits 1 (source, v1.57.0 `cli.rs`, `session/builder.rs`). So the connector's `args` are empty. `goose session --resume` resumes the previous session ([docs](https://goose-docs.ai/docs/guides/goose-cli-commands)); the connector's `resume` is `["session", "--resume"]`, and source takes the most recently used one.
 - `goose run -t "<prompt>"` is the one-shot form; it is not chat mode and is not used. `--no-session` on either form stores no session file, and then there is nothing for the native row to read (docs).
-- A new home asks about usage data or a provider before the prompt. The connector's `first_screen` line tells the participant to answer then. How to quit: unknown.
+- A new home asks about usage data, then sets up a provider, then Goose closes. The connector's `first_screen` line tells the participant to continue the run, then type the prompt. How to quit: unknown.
 
 ## 2. Install and record a version
 
@@ -59,6 +59,7 @@ The environment-variables page gives `~/Library/Application Support/Block/goose/
 ## 9. Quirks and open questions
 
 - The CLI does not update itself; `goose update` is manual ([docs](https://goose-docs.ai/docs/guides/updating-goose)). The connector sets no update switch.
+- A home with a `config/config.yaml` but no provider gets no wizard; the usage answer alone writes the file. Run `GOOSE_PATH_ROOT="<the home goalcup setup printed>" goose configure` once, then start again.
 - Unknown: the macOS root (section 3), how the session id appears, Windows behaviour of `GOOSE_PATH_ROOT`.
 
 ## Run without permission prompts

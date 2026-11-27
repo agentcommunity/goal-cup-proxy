@@ -400,8 +400,8 @@ static SHAPES: [Shape; 32] = [
     ),
     prefixed(
         "aws_access_key",
-        r"AKIA[0-9A-Z]{16}",
-        &[b"A", b"K", b"I", b"A"],
+        r"A[KS]IA[0-9A-Z]{16}",
+        &[b"A", b"KS", b"I", b"A"],
         aws_value,
         16,
         Some(16),
@@ -2481,6 +2481,7 @@ mod tests {
         b"proj-",
         b"ghp_",
         b"AKIA",
+        b"ASIA",
         b"bearer",
         b"Bearer",
         b"eyJ",

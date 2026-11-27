@@ -78,7 +78,7 @@ It starts no run and needs no GitHub. Run it again whenever it names something t
    reached, `git` is missing, or the WSL problem above. Then the paragraph of
    [section 9](#9-what-is-recorded-and-what-is-not).
 
-A model host `goalcup` does not know, such as a gateway of your own:
+A model service `goalcup` does not know (your own gateway, or a provider not on the list):
 
 ```sh
 goalcup setup --record-host llm.example.com
@@ -141,7 +141,7 @@ provider's usage page.
 
 **Tools on PATH.** The harness gets the environment of the terminal you run `goalcup start` in,
 `PATH` included, minus proxy and certificate variables, plus the variables that move its own config
-and data into its Goal Cup home. Install what the agent needs (for example `rg`) first. In a practice run, ask the agent to run `goalcup time-left` to see it works.
+and data into its Goal Cup home. Install what the agent needs (for example `rg`) first. In a practice run, ask the agent to run `goalcup time-left` to see it works. Claude Code and Gemini CLI do not connect to your editor during the run, even in its terminal; typing `/ide` in Claude Code connects it, and that counts as typing.
 
 **First-run screens.** Before your prompt a harness may show its own screens (a sign-in, a
 trust-this-folder question, a wizard). Answering them is allowed; it is not a message to the agent.
@@ -440,7 +440,7 @@ prefix, login headers, cookies, passwords in URLs, private keys, login tokens, v
 `api_key`, `secret`, `token` or `password`, and your project's GitHub token. A hidden value is
 replaced by stars of the same length. It cannot catch every secret. These can still be recorded: a
 key the model repeats back in its reply, a key written right after a letter, a digit or `_`, a short
-password, and a value with no known shape (for example a line of `cat .env` whose name is not one of
+password, an AWS secret access key that is not in your environment or your project's `.env` files, most of an AWS session token, and a value with no known shape (for example a line of `cat .env` whose name is not one of
 those). For a harness that keeps a database, the database is read whole and can hold the same. Your
 email address and your plan and credit balance are recorded. Raw records stay private and are
 cleaned before research use. Use keys you can revoke, and rotate every key after the run.
@@ -454,6 +454,7 @@ Also not recorded, or recorded less:
 - **Harnesses that ignore the proxy** are "not supported": session files and connections only.
 - **Wire only.** If a harness starts another harness as a subagent, that one's model requests are
   recorded and its session files are not.
+- **MCP servers Codex starts** get a cleared environment without the proxy, so a model call one of them makes is not recorded; the [Codex sheet](harnesses/codex-cli.md) says how to pass the proxy to one.
 - **A model server on this computer** (Ollama, LM Studio) is reached past the proxy and not
   recorded. The status block names it.
 - **An HTTP/2 feature goalcup cannot follow** is passed on unharmed and named as a gap. For an
@@ -463,7 +464,7 @@ Also not recorded, or recorded less:
   passes through unread and is named on the end screen. Company proxy networks are not supported
   ([section 1](#1-what-you-need)).
 - **A token used as the user name of a URL with no password** may be recorded.
-- **SQLite harnesses** keep their data in a database; it is copied once, at the seal.
+- **SQLite harnesses** keep their data in a database; it is copied whole about once an hour while it changes, and at every seal. OpenCode's and OpenClaw's databases are not copied, because they hold your sign-in, and neither is Copilot's search index: their model calls are recorded.
 - **On Linux**, memory `goalcup` holds can reach swap that is not encrypted. It is the one place raw
   bytes can leave memory. Core dumps are switched off.
 

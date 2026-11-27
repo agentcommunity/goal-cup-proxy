@@ -23,7 +23,7 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Config dir | `~/.openclaw/openclaw.json` (docs) | `$HOME/.openclaw/openclaw.json`, JSON5 (measured) | unknown |
-| Session store | unknown | `agents/<agent>/agent/openclaw-agent.sqlite` and `state/openclaw.sqlite` under `.openclaw`; no JSONL (measured) | unknown |
+| Session store | unknown | `agents/<agent>/agent/openclaw-agent.sqlite` and `state/openclaw.sqlite` under `.openclaw`; no JSONL (measured); neither is copied (section 4) | unknown |
 | Logs / cache | unknown | `/tmp/openclaw/openclaw-YYYY-MM-DD.log`, outside the home (measured) | unknown |
 | Env vars that move these | | `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_PROFILE` | |
 
@@ -31,31 +31,31 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 
 ## 4. Session format and identity
 
-- One SQLite file per agent plus one shared state file, each with `-wal` and `-shm`; the connector copies both rows at the end as a final set. Transcript rows are in the `transcript_events` table (measured). Session ids are UUIDs, in log lines as `sessionId=<uuid>`.
+- One SQLite file per agent plus one shared state file, each with `-wal` and `-shm`; The connector copies neither. Both hold OpenClaw's auth profiles as plain JSON (`auth_profile_store.store_json` in the agent database, `authProfiles.store` in the state database; 2026.10.9 package, read 26 Nov 2026), and no mask rule names their `key`, `access` and `refresh` fields. Model calls are recorded on the wire. Transcript rows are in the `transcript_events` table (measured). Session ids are UUIDs, in log lines as `sessionId=<uuid>`.
 - Subagents are background runs in their own sessions, keyed `agent:<agentId>:subagent:<uuid>` ([docs](https://docs.openclaw.ai/tools/subagents)). Defaults: 8 concurrent runs and 5 children per session ([docs](https://docs.openclaw.ai/tools/subagents/operations)); these are OpenClaw's caps, not ours.
 
 ## 5. Auth
 
-- Provider keys sit in `$HOME/.openclaw/.env` (for example `DEEPSEEK_API_KEY=`); the file works with no environment variable (measured). Auth profiles are in the agent database.
+- Provider keys sit in `$HOME/.openclaw/.env` (for example `DEEPSEEK_API_KEY=`); the file works with no environment variable (measured). Auth profiles, API keys and OAuth tokens included, are in both databases ([docs](https://docs.openclaw.ai/concepts/oauth), read 26 Nov 2026), so the connector lists them as secret files and copies neither.
 - A variable that moves config and login together: yes, `OPENCLAW_HOME`. The connector sets it, so sign-in and keys stay in the isolated home.
 
 ## 6. Network
 
 - CA: `NODE_EXTRA_CA_CERTS` adds to the roots; `SSL_CERT_FILE` alone was ignored (measured). Node: yes, so the launch sets `NODE_USE_ENV_PROXY=1`. `HTTPS_PROXY` is honoured, and `NO_PROXY` too ([docs](https://docs.openclaw.ai/security/network-proxy)).
 - Its own proxy wins: `proxy.proxyUrl` beats `OPENCLAW_PROXY_URL`, and in a run both beat `HTTPS_PROXY` (measured). goalcup unsets `OPENCLAW_PROXY_URL` and refuses the start if `proxy.proxyUrl`, `env.OPENCLAW_PROXY_URL` or `env.vars.OPENCLAW_PROXY_URL` is set in `openclaw.json`, or any of `OPENCLAW_PROXY_URL`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_PROFILE` in `.env` or `~/.config/openclaw/gateway.env`. The refusal names file and key, never the value.
-- A hand-written `openclaw.json` is JSON5. One that does not parse as JSON is named in `unread`, so its proxy keys are not checked and the participant is told.
-- DeepSeek posts to `api.deepseek.com/chat/completions`; no model host is named in a file by default, so there are no host hints. An unknown model id was refused and the first session went to the gateway default (measured).
+- A hand-written `openclaw.json` is JSON5. goalcup reads it as JSON with comments and trailing commas; one with unquoted keys or single quotes does not parse and is skipped, so its proxy keys are not checked and no start line says so.
+- DeepSeek posts to `api.deepseek.com/chat/completions`; a custom provider names its host at `models.providers.<id>.baseUrl` in `openclaw.json`, which the connector hints when the file parses as JSON with comments. A host in a file with unquoted keys or single quotes is not hinted: add it with `goalcup setup --record-host`. An unknown model id was refused and the first session went to the gateway default (measured).
 - Raw `net`, `tls` and `http2` sockets, native addons and non-OpenClaw child processes "may bypass" Node-level routing, and loopback goes direct ([docs](https://docs.openclaw.ai/security/network-proxy)).
 
 ## 7. Process model
 
 - `chat` runs the agent inside the CLI process, with no Gateway. Local mode "refuses to start while a Gateway or another embedded writer owns that state" ([docs](https://docs.openclaw.ai/cli/tui)).
-- The Gateway daemon is not started or stopped by goalcup. `openclaw gateway stop` acts on the account's native service (a systemd unit, a launchd agent), which `OPENCLAW_HOME` does not scope ([docs](https://docs.openclaw.ai/cli/gateway/service), [environment](https://docs.openclaw.ai/help/environment)). The connector has no `before` or `after`.
+- The Gateway daemon is not started or stopped by goalcup. `openclaw gateway stop` acts on the account's native service (a systemd unit, a launchd agent), which `OPENCLAW_HOME` does not scope ([docs](https://docs.openclaw.ai/cli/gateway/service), [environment](https://docs.openclaw.ai/help/environment)). The connector has no `before` or `after`. The connector's `first_screen` line asks the participant to stop a running Gateway, and to type `/new` at the start of a new run, because `chat` reattaches the rolling `main` session ([docs](https://docs.openclaw.ai/concepts/session), read 26 Nov 2026).
 
 ## 8. Things Goal Cup cannot isolate
 
 - A value the model restates can stay unmasked (stated loss for 1.0): OpenClaw's model restated a git-remote password in its own reasoning content and then resent that in every later request; the masker's `url_password` shape only matches inside `user:pw@`, and the bare copy is not an exact-value source, so it is not caught (MAC-LEARNINGS.md row 7a on the `archive` branch).
-- Subagents not recorded on the wire when they run in a Gateway started outside goalcup: that daemon keeps its own environment, so its model calls skip the run's proxy. In `chat` a spawn likely fails or reaches such a Gateway (source, unverified by run).
+- Subagents not recorded on the wire when they run in a Gateway started outside goalcup: that daemon keeps its own environment, so its model calls skip the run's proxy. In `chat` a spawn likely fails or reaches such a Gateway (source, unverified by run). The `first_screen` line says so.
 - Logs under `/tmp/openclaw`, shared by every home.
 - The managed browser and raw sockets (section 6).
 

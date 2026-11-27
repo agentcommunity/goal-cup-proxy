@@ -1,4 +1,4 @@
-# OpenCode 2.2.2 (npm @opencode/cli), checked against opencode.ai/v2/docs (cli, config, providers) and the 2.2.2 package.
+# The keys OpenCode 2.x gets from opencode-cli, compared by opencode_fold_keeps_each_version_s_keys.
 # --standalone runs a private server instead of the shared background service, which keeps its own environment.
 # Approvals stay on: OpenCode 2 has no settings row for them (see docs/harnesses/opencode-cli.md).
 id = "opencode2-cli"
@@ -13,12 +13,17 @@ host_hints = [
   { file = "{home}/.config/opencode/*.json", key = "providers.*.settings.baseURL" },
   { file = "{home}/.config/opencode/*.jsonc", key = "providers.*.settings.baseURL" },
   { file = "{workspace}/opencode.json*", key = "providers.*.settings.baseURL" },
+  { file = "{workspace}/.opencode/opencode.json*", key = "providers.*.settings.baseURL" },
+  { file = "{home}/.config/opencode/*.json", key = "provider.*.options.baseURL" },
+  { file = "{home}/.config/opencode/*.jsonc", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/opencode.json*", key = "provider.*.options.baseURL" },
+  { file = "{workspace}/.opencode/opencode.json*", key = "provider.*.options.baseURL" },
 ]
 secret_files = [
-  "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/opencode.json",
-  "{home}/.config/opencode/opencode.jsonc",
+  "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/config.json",
+  "{home}/.config/opencode/opencode.json", "{home}/.config/opencode/opencode.jsonc",
+  "{home}/.local/share/opencode/opencode.db",
 ]
-native = [{ name = "db", root = "{home}/.local/share/opencode", pattern = "opencode*.db*", form = "final" }]
 
 [usage]
 thread = ["x-opencode-session-id", "x-session-id"]

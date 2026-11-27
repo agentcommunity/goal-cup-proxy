@@ -14,7 +14,11 @@ refuse_if_set = [
 host_hints = [
   { file = "{home}/settings.json", key = "modelProviders.*.*.baseUrl" },
   { file = "{workspace}/.qwen/settings.json", key = "modelProviders.*.*.baseUrl" },
+  { file = "{home}/settings.json", key = "env.*_BASE_URL" },
+  { file = "{workspace}/.qwen/settings.json", key = "env.*_BASE_URL" },
+  { file = "{home}/.env", key = "*_BASE_URL" },
 ]
+hint_env = ["OPENAI_BASE_URL", "ANTHROPIC_BASE_URL"]
 secret_files = ["{home}/settings.json", "{home}/.env"]
 native = [
   { name = "meta", root = "{home}/projects", pattern = "**/*.meta.json", form = "snapshot" },

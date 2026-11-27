@@ -42,7 +42,7 @@ The connector sets the four XDG variables under the isolated home and leaves `HO
 - Proxy: `HTTPS_PROXY`. Bun's `fetch` reads it, as measured for the OpenCode fork (OpenCode sheet); not measured for Kilo. The TUI talks to its own local server, so loopback must stay out of the proxy (`NO_PROXY`), as for OpenCode.
 - CA: the binary is built with `--use-system-ca`, so it trusts the OS store; `NODE_EXTRA_CA_CERTS` should add to it (source; measured for OpenCode, not Kilo). The effect of `SSL_CERT_FILE` with that flag is unverified.
 - Hosts: the provider's own (for example `api.deepseek.com`), Kilo's gateway (`api.kilo.ai`, `ai-gateway.kilo.ai`) or Vercel AI Gateway (`ai-gateway.vercel.sh`) set as a provider's `options.baseURL` ([Vercel's Kilo guide](https://vercel.com/docs/ai-gateway/coding-agents/kilo-code)). `models.dev` (model catalog), the npm registry and `us.i.posthog.com` (telemetry, on by default; `KILO_TELEMETRY_LEVEL=off` stops it) pass as tunnels (source). Remote sessions use a WebSocket, only with a Kilo login (source).
-- Model address: `provider.*.options.baseURL` in the config files in section 7; the connector hints them. goalcup never sets it.
+- Model address: `provider.*.options.baseURL` in the config files in section 7; the connector hints them. goalcup never sets it. `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` in the shell, the AI SDK's fallbacks when no baseURL is set, are hinted too.
 - On an unknown model id, Kilo may fall back to a paid gateway model, and the default title model may be paid (shown for OpenCode; unverified for Kilo).
 
 ## 7. Config files and which one wins

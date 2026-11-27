@@ -692,11 +692,10 @@ pub fn run(args: Vec<OsString>) -> ExitCode {
 
 fn read_one(a: &Args, e: &crate::input::Entry) -> Result<(), String> {
     let dir = e.dir.display();
-    let rd = crate::input::open(e).map_err(|x| format!("{dir}: {x}"))?;
+    let mut rd = crate::input::open(e).map_err(|x| format!("{dir}: {x}"))?;
     let (mut calls, mut n, mut broke) = (Calls::new(), 0, false);
-    // A torn tail is not an error (`tail().truncated`): an `Err` is a decode failure, and the
-    // read stops there.
-    for it in rd {
+    // An `Err` is a decode failure, and the read stops there.
+    for it in rd.by_ref() {
         let Ok(it) = it else {
             broke = true;
             break;
@@ -704,6 +703,10 @@ fn read_one(a: &Args, e: &crate::input::Entry) -> Result<(), String> {
         calls.push(&it.rec);
         n += 1;
     }
+    // A torn tail in an open frame is what a crash leaves; in a closed frame it is damage, and
+    // the records after it are lost (`check`'s `torn_tail`).
+    let tail = rd.tail();
+    broke |= tail.truncated.is_some() && !tail.open_frame;
     if n == 0 {
         return Err(format!("no record could be read in {dir}"));
     }

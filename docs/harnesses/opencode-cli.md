@@ -23,27 +23,27 @@ Source words: "docs" is [opencode.ai/docs](https://opencode.ai/docs/cli/) for 1.
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Config dir | unknown | `$HOME/.config/opencode/opencode.json` or `.jsonc` ([docs](https://opencode.ai/v2/docs/config)) | unknown |
-| Session store | unknown | `$HOME/.local/share/opencode/opencode.db`, SQLite (measured, 1.x) | unknown |
+| Session store | unknown | `$HOME/.local/share/opencode/opencode.db`, SQLite (measured, 1.x); not copied (below) | unknown |
 | Logs / cache | unknown | `.local/share/opencode/log/`, `.cache/opencode/`, `.local/state/opencode/` (measured); `/tmp/opencode` | unknown |
 | Env vars that move these | | `XDG_*`; `OPENCODE_DB` moves the database; `OPENCODE_CONFIG` the file ([docs](https://opencode.ai/docs/cli/)) | |
 
-Both connectors set the four XDG folders under the isolated home and read `opencode*.db*` there as a final copy. A 2.x database at the same path is taken from a third-party write-up and unverified.
+Both versions set the four XDG folders under the isolated home. `opencode.db` is not copied. OpenCode 2 keeps saved API keys and OAuth tokens in it ([docs](https://opencode.ai/v2/docs/cli/providers), read 26 Nov 2026), and the 1.x database has an `account` table with console tokens (1.19.5 source). Threads and subagents come from the wire (section 4).
 
 ## 4. Session format and identity
 
 - One SQLite database for every session (tables `session`, `message`, `part`, `event`, `credential` and more). No JSON session files (measured, 1.x). Session ids look like `ses_<26 chars>`.
-- Subagents are child sessions in the same database with a parent id (1.x source, `task.ts`). They run in the same process, so they inherit the proxy and CA ([docs](https://opencode.ai/docs/agents/): General and Explore, through the Task tool or an `@` mention). `goalcup-verify` does not read the database copy; both connectors' requests carry `x-opencode-session-id`/`x-session-id` and `x-opencode-parent-session-id`/`x-parent-session-id` headers (`WIRE_IDS` in `usage/hints.rs`), so threads and subagent links come from the wire alone. Unmeasured on a real run.
+- Subagents are child sessions in the same database with a parent id (1.x source, `task.ts`). They run in the same process, so they inherit the proxy and CA ([docs](https://opencode.ai/docs/agents/): General and Explore, through the Task tool or an `@` mention). The database is not copied; both connectors' requests carry `x-opencode-session-id`/`x-session-id` and `x-opencode-parent-session-id`/`x-parent-session-id` headers (`WIRE_IDS` in `usage/hints.rs`), so threads and subagent links come from the wire alone. Unmeasured on a real run.
 
 ## 5. Auth
 
-- `/connect` or `opencode auth login` stores a key in `$HOME/.local/share/opencode/auth.json`; a key may also come from the environment or from config (`apiKey`). A key in `auth.json` works with no environment variable (measured).
+- 1.x: `/connect` or `opencode auth login` stores a key in `$HOME/.local/share/opencode/auth.json` (measured). 2.x: saved keys and OAuth tokens live in `opencode.db`, and `auth.json` is only imported once ([docs](https://opencode.ai/v2/docs/cli/providers)). A key may also come from the environment or from config (`apiKey`).
 - A variable that moves config and login together: no. `OPENCODE_CONFIG_DIR` moves config only; `auth.json` follows `XDG_DATA_HOME`, so the connectors set the XDG folders.
 
 ## 6. Network
 
 - CA: `NODE_EXTRA_CA_CERTS` adds to the roots, "for both proxy connections and direct API access" ([docs](https://opencode.ai/docs/network/)); `SSL_CERT_FILE` alone also worked (measured). Bun-compiled binary, so `NODE_USE_ENV_PROXY` is not needed; `HTTPS_PROXY` is honoured on its own.
 - `NO_PROXY=localhost,127.0.0.1` is required: the TUI talks to a local HTTP server and "you must bypass the proxy for this connection to prevent routing loops" ([docs](https://opencode.ai/docs/network/)). goalcup passes it.
-- Where the model host is named: 1.x `provider.*.options.baseURL`, 2.x `providers.*.settings.baseURL` ([docs](https://opencode.ai/v2/docs/providers)), in the global config, the workspace `opencode.json` or `.opencode/`. The connectors read those keys as host hints. With none set, a provider takes its URL from the catalog and its host must be on the shared list.
+- Where the model host is named: 1.x `provider.*.options.baseURL`, 2.x `providers.*.settings.baseURL` ([docs](https://opencode.ai/v2/docs/providers)), in the global config, the workspace `opencode.json` or `.opencode/`. The connectors read those keys as host hints. OpenCode 2 still reads a 1.x block ([migrate-v1](https://opencode.ai/v2/docs/migrate-v1), read 26 Nov 2026), so both versions read both keys in all four places. `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`, the AI SDK's fallbacks, are hinted too. With none set, a provider takes its URL from the catalog and its host must be on the shared list.
 - DeepSeek is a native provider and posts to `api.deepseek.com/chat/completions` (measured). `opencode.ai` is listed as a gateway host and also serves the console page where a key is copied. `models.opencode.ai` and `registry.npmjs.org` are tunnels.
 - An unknown model id silently fell back to a paid gateway model, and the default small model is a paid gateway model too (measured). Set a valid `model` and `small_model`.
 

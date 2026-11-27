@@ -7,8 +7,6 @@ env = { COPILOT_AUTO_UPDATE = "false" }
 host_hints = [{ file = "{home}/providers.json", key = "providers.*.baseUrl" }]
 hint_env = ["COPILOT_PROVIDER_BASE_URL"]
 secret_files = ["{home}/config.json", "{home}/providers.json"]
-native = [
-  { name = "sessions", root = "{home}/session-state", pattern = "**/events.jsonl" },
-  { name = "store", root = "{home}", pattern = "session-store.db*", form = "final" },
-]
+# No session-store.db row: it is a search index, which can hold text out of context (facts sheet, section 3).
+native = [{ name = "sessions", root = "{home}/session-state", pattern = "**/events.jsonl" }]
 no_prompts = [{ file = "{home}/settings.json", key = "defaultPermissionMode", value = "allow-all" }]

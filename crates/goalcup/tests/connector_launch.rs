@@ -566,3 +566,55 @@ fn an_address_left_without_the_certificate_is_told() {
     std::fs::write(home.join("config.yaml"), "").unwrap();
     assert!(finished("hermes-cli", &e, d).trust_notes.is_empty());
 }
+
+/// Claude Code and Gemini CLI never join the participant's editor: Claude Code's auto-connect and
+/// extension install are off whatever the terminal exports, and Gemini's `ide` settings are
+/// written off at every start, undoing a yes given to its nudge.
+#[test]
+fn no_launch_joins_the_participants_editor() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let e = env(
+        d,
+        &[
+            ("CLAUDE_CODE_AUTO_CONNECT_IDE", "true"),
+            ("CLAUDE_CODE_SSE_PORT", "45678"),
+        ],
+    );
+    let v = finished("claude-code-cli", &e, d).env;
+    assert_eq!(v["CLAUDE_CODE_AUTO_CONNECT_IDE"], "false");
+    assert_eq!(v["CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL"], "1");
+    let settings = d.join("goalcup/homes/gemini-cli/.gemini/settings.json");
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    std::fs::write(&settings, r#"{"ide":{"enabled":true},"model":"m"}"#).unwrap();
+    drop(finished("gemini-cli", &e, d));
+    let s: serde_json::Value = serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+    assert_eq!(
+        (&s["ide"]["enabled"], &s["ide"]["hasSeenNudge"], &s["model"]),
+        (&false.into(), &true.into(), &"m".into())
+    );
+}
+
+/// Each start and continue uses the harness's documented form. A bare `goose` sets up a new home,
+/// and `session --resume` reopens its last session. Hermes resumes the newest session of the
+/// workspace, not a terminal's breadcrumb, and stays in the run's folder. Droid's `--resume` takes
+/// the last one.
+#[test]
+fn a_continue_uses_each_harness_s_documented_resume_form() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    for (id, start, resume) in [
+        ("goose-cli", vec![], vec!["session", "--resume"]),
+        (
+            "hermes-cli",
+            vec!["chat"],
+            vec!["chat", "--resume", "latest", "--no-restore-cwd"],
+        ),
+        ("droid-cli", vec![], vec!["--resume"]),
+    ] {
+        let mut e = env(d, &[]);
+        assert_eq!(finished(id, &e, d).argv, start, "{id} start");
+        e.resume = true;
+        assert_eq!(finished(id, &e, d).argv, resume, "{id} continue");
+    }
+}

@@ -565,7 +565,8 @@ per row. `<name>` is the entry id when it is letters and digits, else the entry'
 run folder is read entry by entry: one that cannot be read gets a line on standard error naming its
 folder, and the rest go on. Exit 0 when any entry gave output, else 3, also for a wrong command
 line. A decode error part way through still gives a summary of what came before, with `read_error`
-true and a line on standard error; a torn tail is no error.
+true and a line on standard error, as does a closed frame that ends inside a record; a torn tail in
+an open frame is no error.
 
 | Summary key | Holds |
 |---|---|

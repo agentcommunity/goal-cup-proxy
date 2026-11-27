@@ -149,7 +149,7 @@ fn keys(c: &Connector) -> String {
     )
 }
 
-/// The one OpenCode connector gives each version the keys its own 1.0 connector had.
+/// The one OpenCode connector gives each version the keys in its fixture.
 #[test]
 fn opencode_fold_keeps_each_version_s_keys() {
     let fixture = |f: &str| {

@@ -17,7 +17,12 @@ host_hints = [
 hint_env = ["GOOGLE_GEMINI_BASE_URL", "CODE_ASSIST_ENDPOINT"]
 secret_files = ["{home}/.gemini/.env", "{home}/.gemini/oauth_creds.json"]
 native = [{ name = "chats", root = "{home}/.gemini/tmp", pattern = "**/chats/**/*.jsonl" }]
-update_off = [{ file = "{home}/.gemini/settings.json", key = "general.enableAutoUpdate", value = "false" }]
+# The ide rows keep Gemini off the participant's editor: its nudge never shows, and a yes to it is undone at every start.
+update_off = [
+  { file = "{home}/.gemini/settings.json", key = "general.enableAutoUpdate", value = "false" },
+  { file = "{home}/.gemini/settings.json", key = "ide.enabled", value = "false" },
+  { file = "{home}/.gemini/settings.json", key = "ide.hasSeenNudge", value = "true" },
+]
 
 [usage]
 readers = [{ row = "chats", file = "*.jsonl", reader = "gemini-chat" }]

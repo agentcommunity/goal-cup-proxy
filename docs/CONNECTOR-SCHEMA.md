@@ -31,14 +31,14 @@ is the participant's project folder.
 | `refuse_if_set` | list of `{file, keys}` | `[]` | A value at any of `keys` in `file` refuses the start, naming the file and key, never the value. `null`, `""`, `[]` and `{}` are unset; `false` is a value |
 | `host_hints` | list of `{file, key}` | `[]` | Config file keys whose `https` URL values add the host to the `config` list. A value at this computer or on a private network (a loopback, private or link-local address, a `localhost` name, or a name that resolves only here) gives a `local_model` note instead; any other string value that adds nothing is a log line naming the file and key |
 | `hint_env` | string list | `[]` | Participant variables read as `host_hints` values are. Only the names listed |
-| `secret_files` | string list | `[]` | The harness's own key files. The default build reads none of them for masking |
+| `secret_files` | string list | `[]` | The harness's own key files, a database that holds keys included. The default build reads none of them for masking, and no `native` row may take one |
 | `before`, `after` | list of string lists | `[]` | Arguments without the program: the watchdog runs `program` followed by each, before launch and after the harness exits |
 | `native` | list of `{name, root, pattern, form, warn_missing}` | `form = "append"`, `warn_missing = true` | Session-file rows; `name` is unique in the connector. `root` starts with `{home}` or `{workspace}`; `pattern` is relative to it, `/`-separated, with no `.`, `..`, empty component, brace or NUL, and `**` only as a whole component. A pattern ending in `**` is refused. `form` is `append` (read as it grows), `snapshot` (read whole when it changes) or `final` (a database, copied as a set). `warn_missing = false` silences the "no session file yet" line for a row that may stay empty. The first row that matches a file reads it |
 | `mask` | list of `{kind, json_field, value}` or `{kind, header_prefix}` | `[]` | Connector mask rules, one form per rule. `kind` matches `^[a-z][a-z0-9_]{0,47}$` and names every marker the rule writes. `json_field` matches `^[A-Za-z0-9_-]{1,64}$` and masks `"field": value`, with `value` either `string` (a non-empty string without escapes) or `scalar` (such a string, else a bare token such as a number). `header_prefix` matches `^[a-z][a-z0-9-]{0,63}$` and masks the value of every header whose name is the prefix followed by `[a-z0-9-]+` |
 | `end_note` | string | none | One plain line the end screen shows for this harness, for example how its subagents are shown |
 | `first_screen` | string | none | One line printed just before the harness opens: a first-run question to expect |
 | `no_prompts` | list of `{file, key, value}` | `[]` | Settings `goalcup setup` writes into the isolated home after its one question, so the harness never stops to ask approval |
-| `update_off` | list of `{file, key, value}` | `[]` | An auto-update switch that exists only as a setting. Written into the isolated home with no question, again at every `goalcup start` and `continue`. Where an env switch exists, it goes in `env` |
+| `update_off` | list of `{file, key, value}` | `[]` | A setting written with no question: an auto-update switch that exists only as a setting, or one that keeps the harness off the participant's editor (Gemini CLI's `ide.enabled`). Written into the isolated home again at every `goalcup start` and `continue`. Where an env switch exists, it goes in `env` |
 | `ca_settings` | table `{file, entries, uses, add, key, value, fallback}` | none | Trust per model address, written at every `goalcup start` and `continue`, never by setup. Each `https` address in `file` (not local) gets `key = value` beside it: at each `entries` key (one `*` part for the entry; an entry already holding another CA value keeps it), and for each other address at a `uses` key on a new entry, `add` with its `*` as `goalcup-trust-<address>`. When `file` names no address, the new entries are for the `fallback` addresses: each `https` on a shared-list host (Hermes: its nine built-in routes). The participant's own addresses come first; `fallback` is used only when `file` names none. `value` is never an address |
 | `skills_dir` | template | none | Where the goal-cup skill is installed, under `{home}`. Absent: no skill is installed |
 
@@ -143,7 +143,7 @@ optional, and no other key. `provider`, `gateway` and `vendor` hold the hosts, t
 each host's `kind`; `never` holds hosts never decrypted, whatever another list says; `pinned` holds
 names or patterns of hosts known to pin their certificate, which marks a listed host pinned (a
 `pinned` name in no other array is listed with kind `other`); `expected` holds non-model hosts a
-harness opens on purpose, tunnelled unrecorded and flagged as expected. goalcup's own server
+harness or the agent's own tools open on purpose (telemetry, GitHub, package registries), tunnelled unrecorded and flagged as expected. goalcup's own server
 (`agentcommunity.org` and its subdomains, any name holding `goalcup`, and the server a run uploads
 to) is `never` in code. A pattern is an exact name, `*.a.b` (one or more labels before `a.b`), or one
 `*` inside one label with at least two labels after it. A name outside `never` that fails the host
@@ -181,6 +181,6 @@ program = "copilot"
 home = { COPILOT_HOME = "{home}" }
 env = { COPILOT_AUTO_UPDATE = "false" }
 host_hints = [{ file = "{home}/providers.json", key = "providers.*.baseUrl" }]
-native = [{ name = "store", root = "{home}", pattern = "session-store.db*", form = "final" }]
+native = [{ name = "sessions", root = "{home}/session-state", pattern = "**/events.jsonl" }]
 no_prompts = [{ file = "{home}/settings.json", key = "defaultPermissionMode", value = "allow-all" }]
 ```
