@@ -145,4 +145,6 @@ fn the_shared_list_names_catalog_hosts_and_expects_tool_hosts() {
     ] {
         assert!(hosts.is_expected(name), "{name}");
     }
+    // A model host under a GitHub domain stays decrypted and recorded, never hidden as expected.
+    assert!(!hosts.is_expected("copilot-proxy.githubusercontent.com"));
 }

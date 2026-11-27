@@ -49,6 +49,8 @@ pinned = []
 # Then the hosts the agent's own git, npm, pip, cargo and go reach through the proxy; none is a model service.
 expected = [
   "ab.chatgpt.com", "http-intake.logs.us5.datadoghq.com", "browser-intake-us5-datadoghq.com",
-  "github.com", "codeload.github.com", "*.githubusercontent.com", "registry.npmjs.org", "registry.yarnpkg.com",
+  "github.com", "api.github.com", "codeload.github.com", "raw.githubusercontent.com",
+  # Named one by one: *.githubusercontent.com would also hide copilot-proxy.githubusercontent.com, a model host.
+  "objects.githubusercontent.com", "release-assets.githubusercontent.com", "registry.npmjs.org", "registry.yarnpkg.com",
   "pypi.org", "files.pythonhosted.org", "index.crates.io", "static.crates.io", "proxy.golang.org",
 ]
