@@ -76,10 +76,12 @@ The latest possible run ends 192 hours after the window opens.
   count, and they are deleted from the server afterwards.
 - Your run needs its own prompt, root agent and empty repository.
 - **One harness per run.** Your agent may spawn subagents of its own harness. It must not start a
-  different harness (a Codex agent starting Claude Code, under any name), because the cup compares
-  harnesses and models, not assemblies of them. Goal Cup Proxy does not stop it. If the second
-  harness uses the proxy, its requests to listed model hosts are recorded but its session files are not. The review
-  looks for it in the recorded traffic, and a run found doing it is disqualified.
+  different harness. For example, a Codex agent may not start Claude Code under another name.
+  A home-made loop built on an SDK counts as one harness ([Your own agent loop](#harness-support)).
+  The cup compares individual harnesses and models. Goal Cup Proxy lets a second harness run.
+  If it uses the proxy, the recorder captures its requests to listed model hosts. Session files
+  come from the selected harness. Reviewers look for a second harness in the recorded traffic
+  and disqualify runs where they find one.
 - Work created during one run (a replaced run included) may not be used to seed another run.
 
 ## One prompt, then only "keep going"
@@ -384,11 +386,22 @@ harness rather than a subagent). Goal Cup Proxy cannot block this. If the review
 outside agent did work that ended up in your code, the run is banned. This includes Qwen Code's
 built-in `claude-code` and `codex` subagents, which start another harness.
 
-Fifteen harnesses ship with the participant build, and a competition run uses only those connectors:
+The connectors in the harness table ship with the participant build, and a competition run uses
+only those connectors:
 `goalcup start` refuses `--connector` and `--hosts` in a competition run. The one harness table,
 with the connector id, how each harness is signed in and what goalcup cannot record or stop, is
 [docs/harnesses/README.md](harnesses/README.md); it is not copied here. That table also says which
 harnesses the test pad has verified. A tier does not decide whether you may take part.
+
+**Your own agent loop.** A loop you wrote yourself competes as the harness `homemade`, on your
+`PATH` as `homemade-agent` ([what it must do](harnesses/homemade-cli.md)). It is for home-made loops
+only: a product someone else publishes needs its own connector. The loop's source must be public,
+at the latest at the end of the event. The first line of `homemade-agent --version` must name the
+loop, its version and the commit it runs, and link its public source. Do not change the loop during
+the run. The record keeps that line; a home-made run whose record lacks it is reviewed by hand. The
+loop may be built on any SDK, including ones that run Claude Code or Codex underneath (the Claude
+Agent SDK, the Codex SDK): it is still your loop and one harness. A wrapper that only starts a
+product is that product. One harness per run holds otherwise: your loop starts no second harness.
 
 Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md).
 A merged connector ships in the next release; for Edition 01 it counts only if merged before the cup

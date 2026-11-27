@@ -177,7 +177,9 @@ incomplete and never clean. Goal Cup Proxy's job is to keep recording and to say
 Subagents of the same harness are allowed. Running another harness as a subagent is not: the event
 compares harnesses. The rule is checked by reviewing the recorded traffic. Goal Cup Proxy never stops a
 second harness and never reads one as an error. A provider hostname or a missing decoder alone does
-not prove a second harness: record the unknown identity and say it is unknown.
+not prove a second harness: record the unknown identity and say it is unknown. A home-made loop
+(`homemade`) built on an SDK that runs Claude Code or Codex underneath is one harness, the loop
+(owner, 27 Nov 2026; RULES Harness support).
 
 ## D11. The seal records the workspace.
 
