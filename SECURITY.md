@@ -66,7 +66,7 @@ matters to you, use encrypted swap or none.
 |---|---|
 | Other local accounts | Blocked by loopback and 0600/0700 files. |
 | Web pages | The only listener is the loopback proxy. There is no control API to reach. |
-| Same-user processes, including the agent under test | **Inside the boundary.** They can read the run folder and the run CA key while the entry is open. Detection is after the fact, from what the record shows. |
+| Same-user processes, including the agent under test | **Inside the boundary.** They can read the run folder and the run CA key while the entry is open, and the run credential, so they can also upload to the run. Detection is after the fact, from what the record shows. |
 | Network | The proxy validates upstream TLS. Only the hosts on the host list are decrypted. Everything else, sign-in hosts included, tunnels unread. |
 | The Goal Cup server | Holds the copy organizers trust. Nothing in a record is signed, so organizers rely on the server's copy and its `received_at` times, not on files on your machine. |
 | Connector authors | **Trusted data.** See below. |
@@ -96,6 +96,9 @@ that the participant followed the rules. Anything that behaves worse than stated
   alone, and its coverage line says so.
 - **The label is a hint.** `label` (`wire_and_native`, `wire_only`, `native_only`, `none`) names
   which sources of evidence a record has. Judges start from it. It is not a judgement.
+- **A self-built goalcup looks like the release.** The `start` event names only the version, and the
+  server checks only the version number the client sends when it opens a run, so a patched goalcup
+  can write a record that passes. [RULES](docs/RULES.md#goal-cup-proxy-auth-and-privacy) require the official build.
 - **Local files can change before upload.** The record is synced at most every 5 seconds and
   uploaded as it grows. A same-user process can rewrite the local files in that window. After
   upload, the server's copy is what counts.
