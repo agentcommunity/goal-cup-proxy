@@ -11,7 +11,7 @@ Source words: "docs" is [hermes-agent.nousresearch.com/docs](https://hermes-agen
 
 - `hermes chat` opens the classic terminal chat (a bare `hermes` does the same). The Ink screen needs `--tui`, `HERMES_TUI=1` or `display.interface: tui`; the connector passes none ([docs](https://hermes-agent.nousresearch.com/docs/reference/cli-commands)). The participant types at the prompt; `/exit`, `/quit` or Ctrl-D at an empty prompt quits with exit 0 (measured).
 - A home with no provider prints "It looks like Hermes isn't configured yet" and asks `Run setup now? [Y/n]` The trust entries above do not count as setup: the check reads the `model` section and keys, not `providers` (source). The wizard picks the provider and model and then Hermes closes without opening a chat (source). The connector's `first_screen` line tells the participant to answer it before typing a prompt.
-- `hermes chat --continue` (`-c`) resumes the most recent session (docs). With no earlier session it prints "No previous CLI session found to continue." and exits 1 (measured). The connector's `resume` is `["--continue"]`.
+- `hermes chat --resume latest` resumes the newest session of the workspace (git root, else the folder), else the newest in the home. It never reads the terminal breadcrumb that a bare `--continue` (`-c`) prefers, which can name a practice session from the same terminal (source, v0.22.5 `hermes_cli/main.py`; same in v0.23.4). `--no-restore-cwd` keeps Hermes in the run's folder. With no earlier session it exits 1 (source; measured for `--continue`). The connector's `resume` is `["--resume", "latest", "--no-restore-cwd"]`.
 - `hermes chat --oneshot -q "<prompt>"` is the one-shot form and is not used. Hermes `--safe-mode`, `HERMES_SAFE_MODE=1` and `--ignore-user-config` switch capture off ([RULES](../RULES.md)). Hermes reads `-p`/`--profile` from the raw arguments before parsing and switches `HERMES_HOME` (source).
 
 ## 2. Install and record a version
@@ -71,7 +71,7 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 
 - `agent.max_turns` defaults to 90 steps; Hermes then waits at the prompt. Raise it in `config.yaml` before a long run ([HARNESS-SETUP](../HARNESS-SETUP.md#hermes)).
 - The first start downloads a command scanner from GitHub unless `security.tirith_enabled: false`; with the network refused it prints a warning (measured on 0.19.0).
-- Open: whether Hermes's Anthropic, Gemini-native, Bedrock and Vertex adapters use the process-wide trust setting; delegation, `SSL_CERT_FILE` with a full bundle, and `hermes chat --continue` after a home switch, all on 0.22.5; the Linux and Windows paths; whether delegation task logs hold text outside masking shapes: not measured; failure exit codes.
+- Open: whether Hermes's Anthropic, Gemini-native, Bedrock and Vertex adapters use the process-wide trust setting; delegation, `SSL_CERT_FILE` with a full bundle, and `hermes chat --resume latest` after a home switch, all on 0.22.5; the Linux and Windows paths; whether delegation task logs hold text outside masking shapes: not measured; failure exit codes.
 
 ## Run without permission prompts
 

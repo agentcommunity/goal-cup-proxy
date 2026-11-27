@@ -9,7 +9,7 @@ Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configur
 ## 1. Run one prompt, in chat mode first
 
 - `droid` with no argument starts the interactive REPL ([docs](https://docs.factory.com/cli/configuration/cli-reference)).
-- `droid --resume` (alias `-r`) reopens the last modified session; the connector's `resume` is `["--resume", "--last"]`. Whether `--last` is accepted by `0.251.0` is unknown (the docs show `--resume [sessionId]` only).
+- `droid --resume` (alias `-r`) with no session id reopens the last modified session ([docs](https://docs.factory.com/reference/cli-reference), read 26 Nov 2026); the connector's `resume` is `["--resume"]`.
 - `droid exec` is the non-interactive form. It needs `FACTORY_API_KEY` and is not used.
 - With no stored sign-in, Droid opens a browser sign-in. The connector's `first_screen` line tells the participant to sign in before typing a prompt.
 
@@ -64,7 +64,7 @@ Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configur
 
 ## 9. Quirks and open questions
 
-- Unknown: subagent file layout, the Windows session paths, whether `--resume --last` is valid, and whether a second Droid already running holds the daemon for the whole account.
+- Unknown: subagent file layout, the Windows session paths, and whether a second Droid already running holds the daemon for the whole account.
 - No Factory account was available this cycle, so no run exists: Droid was never run through the proxy, and everything about its behaviour is read, not measured.
 
 ## Run without permission prompts

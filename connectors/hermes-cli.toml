@@ -7,7 +7,9 @@ end_note = "Subagents are shown by their task logs, not tied to individual calls
 program = "hermes"
 checked = "0.22.5"
 args = ["chat"]
-resume = ["--continue"]
+# --resume latest: the newest session of the workspace, then of the home. A bare --continue prefers this
+# terminal's breadcrumb, which can be a practice session (v0.22.5 hermes_cli/main.py; same in v0.23.4).
+resume = ["--resume", "latest", "--no-restore-cwd"]
 home = { HERMES_HOME = "{home}" }
 before = [["gateway", "stop", "-y"]]
 after = [["gateway", "stop", "-y"]]

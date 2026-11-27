@@ -1,13 +1,12 @@
 # Goose, checked against goose-docs.ai (guides: environment-variables, goose-cli-commands, config-files,
 # sessions; getting-started/providers) and the release binary run in a build box. GOOSE_PATH_ROOT moves
 # config/, data/ and state/ under {home} and nothing else (box test), so other tools keep their XDG folders.
-# `session --resume` takes the most recently used session; GOOSE_MODE defaults to auto, so no approval setting.
+# A bare `goose` runs the provider wizard on a new home and closes (`goose session` only exits "No provider configured", v1.57.0 cli.rs); `session --resume` takes the most recently used session; GOOSE_MODE defaults to auto, so no approval setting.
 id = "goose-cli"
 name = "Goose"
 program = "goose"
 checked = "1.57.0"
-args = ["session"]
-resume = ["--resume"]
+resume = ["session", "--resume"]
 home = { GOOSE_PATH_ROOT = "{home}" }
 ca_env = ["GOOSE_CA_CERT_PATH"]
 host_hints = [
@@ -25,7 +24,7 @@ hint_env = [
 ]
 secret_files = ["{home}/config/secrets.yaml"]
 native = [{ name = "sessions", root = "{home}/data/sessions", pattern = "sessions.db*", form = "final" }]
-first_screen = "If Goose asks about usage data or a provider, answer now, before you type your prompt."
+first_screen = "On a new home Goose asks about usage data, then sets up a provider and closes. Continue the run, then type your prompt."
 
 [usage]
 # Goose (session_manager.rs): sessions(id, parent_session_id); its agent-session-id header is the id itself.

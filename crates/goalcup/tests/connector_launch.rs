@@ -594,3 +594,27 @@ fn no_launch_joins_the_participants_editor() {
         (&false.into(), &true.into(), &"m".into())
     );
 }
+
+/// Each start and continue uses the harness's documented form. A bare `goose` sets up a new home,
+/// and `session --resume` reopens its last session. Hermes resumes the newest session of the
+/// workspace, not a terminal's breadcrumb, and stays in the run's folder. Droid's `--resume` takes
+/// the last one.
+#[test]
+fn a_continue_uses_each_harness_s_documented_resume_form() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    for (id, start, resume) in [
+        ("goose-cli", vec![], vec!["session", "--resume"]),
+        (
+            "hermes-cli",
+            vec!["chat"],
+            vec!["chat", "--resume", "latest", "--no-restore-cwd"],
+        ),
+        ("droid-cli", vec![], vec!["--resume"]),
+    ] {
+        let mut e = env(d, &[]);
+        assert_eq!(finished(id, &e, d).argv, start, "{id} start");
+        e.resume = true;
+        assert_eq!(finished(id, &e, d).argv, resume, "{id} continue");
+    }
+}

@@ -5,7 +5,7 @@ id = "droid-cli"
 name = "Factory Droid"
 program = "droid"
 checked = "0.251.0"
-resume = ["--resume", "--last"]
+resume = ["--resume"]
 home = { FACTORY_HOME_OVERRIDE = "{home}" }
 env = { FACTORY_DROID_AUTO_UPDATE_ENABLED = "false" }
 ca_env = ["FACTORY_EXTRA_CA_CERTS"]
