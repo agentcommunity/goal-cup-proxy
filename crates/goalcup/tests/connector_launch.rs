@@ -671,3 +671,17 @@ fn git_never_asks_on_the_screen_and_the_login_passes() {
         assert_eq!(v[name], value, "{name}");
     }
 }
+
+/// OpenClaw's agent works in the participant's project folder, not in a workspace inside its
+/// isolated home, even when the participant exported another one (G27).
+#[test]
+fn openclaw_works_in_the_project() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let e = env(d, &[("OPENCLAW_WORKSPACE_DIR", "/elsewhere")]);
+    let plan = finished("openclaw-cli", &e, d);
+    assert_eq!(
+        plan.env["OPENCLAW_WORKSPACE_DIR"],
+        e.workspace.to_string_lossy()
+    );
+}

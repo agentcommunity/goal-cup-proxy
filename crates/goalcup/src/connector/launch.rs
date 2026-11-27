@@ -88,7 +88,7 @@ pub(crate) fn fill(s: &str, home: &Path, workspace: &Path) -> String {
 }
 
 /// The harness environment before the port and the CA paths: steps 1, 3, 4 and 6. `plan` creates
-/// the `home` folders.
+/// the `home` folders. `env` values fill `{home}` and `{workspace}` too.
 pub(crate) fn build_env(c: &Connector, env: &Env, home: &Path) -> BTreeMap<String, String> {
     let mut vars = env.vars.clone();
     let unset = c.unset.iter().map(String::as_str);
@@ -104,7 +104,7 @@ pub(crate) fn build_env(c: &Connector, env: &Env, home: &Path) -> BTreeMap<Strin
         vars.insert(name.clone(), fill(template, home, &env.workspace));
     }
     for (name, value) in &c.env {
-        vars.insert(name.clone(), value.clone());
+        vars.insert(name.clone(), fill(value, home, &env.workspace));
     }
     vars
 }

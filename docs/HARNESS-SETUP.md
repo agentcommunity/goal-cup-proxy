@@ -58,7 +58,7 @@ The harness's environment is the participant's, with:
 | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` | `bundle.pem`: the run CA, then the OS roots |
 | each name in the connector's `ca_env` | the run CA, `run-ca.pem` |
 | each key of the connector's `home` | its template under the private home |
-| each key of the connector's `env` | its fixed value (auto-update switches and the like) |
+| each key of the connector's `env` | its value, `{home}` and `{workspace}` filled (auto-update switches and the like) |
 
 Both CA files are in the part's folder. Removed first: `HTTPS_PROXY`,
 `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` (both cases), `NODE_EXTRA_CA_CERTS`, `SSL_CERT_FILE`,
