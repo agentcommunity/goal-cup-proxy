@@ -1048,6 +1048,45 @@ class StartRefusal(unittest.TestCase):
             self.assertEqual(r.st["end_screen_requests"], want, screen)
 
 
+class SetupStep(unittest.TestCase):
+    """pad-run: goalcup setup gets the run's connector file; a failed goalcup call shows goalcup's own last line."""
+
+    def failed_setup(self, stderr, **settings):  # a run folder as pad stages it; goalcup setup exits 1
+        run = self.enterContext(tempfile.TemporaryDirectory())
+        s = dict({"harness_id": "hermes-cli", "harness": {"version_cmd": "hermes --version"}, "version": "0.22.6",
+                  "key_files": []}, **settings)
+        for name, doc in (("settings.json", s), ("state.json", {})):
+            with open(os.path.join(run, name), "w") as f:
+                json.dump(doc, f)
+        with open(os.path.join(run, "prompt-source.txt"), "w") as f:
+            f.write("task")
+        os.mkdir(os.path.join(run, "keys"))
+        for name in s["key_files"]:  # setup reads each into `known` before it calls goalcup
+            with open(os.path.join(run, "keys", name), "w") as f:
+                f.write(SENTINEL + "\n")
+        r, calls = padrun.Run(run, "setup"), []
+        def fake(argv, **kw):
+            calls.append(argv)
+            out = "Hermes 0.22.6\n" if argv[0] == "bash" else ""
+            return subprocess.CompletedProcess(argv, 0 if argv[0] == "bash" else 1, out, "" if argv[0] == "bash" else stderr)
+        with mock.patch.object(padrun, "sh", fake), mock.patch.object(padrun, "tool", lambda n: "/x/goalcup"), \
+                self.assertRaises(padrun.Step) as got:
+            r.setup(None)
+        return r, calls[-1], got.exception.args
+
+    def test_setup_gives_goalcup_the_run_s_connector_file(self):  # G1: a new id is not built in; an edited copy's no_prompts rows
+        r, argv, _ = self.failed_setup("", connector="connector.toml")
+        self.assertEqual(argv[1:4], ["setup", "--harness", r.path("connector.toml")])
+        _, argv, _ = self.failed_setup("")
+        self.assertEqual(argv[1:4], ["setup", "--harness", "hermes-cli"])  # no file: the built-in id, as before
+
+    def test_a_failed_goalcup_call_shows_its_last_line_masked(self):  # G70; point 4
+        result, saw = self.failed_setup("goalcup: a warning\ngoalcup: refused %s\n" % SENTINEL, key_files=["k"])[2]
+        self.assertEqual(result, "FAIL")
+        self.assertIn("goalcup: refused", saw)  # the last line, not the warning
+        self.assertNotIn(SENTINEL, saw)
+
+
 class PasteAndMask(unittest.TestCase):
     """RIG-8: paste waits for status.json to say recording. RIG-9: fetch credentials are never shown or written."""
 

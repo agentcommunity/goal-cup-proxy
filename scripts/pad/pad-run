@@ -86,6 +86,12 @@ def replace_known(text, values):
     return text, count
 
 
+def shown(text, known):
+    """The last non-empty line of goalcup's output as a step line: known values replaced, no control characters, 200 at most."""
+    last = ([ln.strip() for ln in text.splitlines() if ln.strip()] or [""])[-1]
+    return re.sub(r"[\x00-\x1f\x7f]", "", replace_known(last, known)[0])[:200]
+
+
 def exec_env(environ, names=()):
     """Section 3.1: from /proc/<pid>/environ bytes, only the proxy and CA names, HOME, PATH and the time-left file
     (PRD-10 acceptance 7), and `names` (settings' ca_env and the connector's home names); never a key."""
@@ -350,10 +356,12 @@ class Run:
         saw = "%s %s%s, project and plants" % (s["harness_id"], version, " (pinned)" if version == s["version"] else " (pad file: %s)" % s["version"])
         if not tool("goalcup"):
             raise Step("skip", saw + "; " + NO_BUILD)
-        r = sh([tool("goalcup"), "setup", "--harness", s["harness_id"], "--yes"], env=self.env)
+        harness = self.path(s["connector"]) if s.get("connector") else s["harness_id"]  # a path: goalcup loads the run's file (a new id, an edited copy)
+        r = sh([tool("goalcup"), "setup", "--harness", harness, "--yes"], env=self.env)
         homes = [p for p in ((a or b).rstrip(".,:;)") for a, b in re.findall(r'"([^"]+)"|(/\S+)', r.stdout)) if os.path.isdir(p)]
         if r.returncode or not homes:  # S15 prints the isolated home's path
-            raise Step("FAIL", "goalcup setup exit %d, %d home paths printed" % (r.returncode, len(homes)))
+            said = shown(r.stderr, self.known() or [])  # goalcup's refusal is its last stderr line
+            raise Step("FAIL", "goalcup setup exit %d, %d home paths printed" % (r.returncode, len(homes)) + (": " + said if said else ""))
         home = self.st["home"] = homes[-1]
         extra = sec.get("pad_only", [])  # config no participant writes: merged, and the row never counts (table)
         extra = [e for e in extra if harness_version.matches(version, e["match"])]
@@ -480,9 +488,7 @@ class Run:
             self.refusal()
             screen = self.pane()
             lines = [ln.strip() for ln in screen.splitlines() if ln.strip() and not ln.strip().startswith("Pane is dead")]  # tmux's own footer is not goalcup's
-            last = (lines or [""])[-1]
-            last = replace_known(last, self.known() or [])[0]
-            last = re.sub(r"[\x00-\x1f\x7f]", "", last)[:120]
+            last = shown((lines or [""])[-1], self.known() or [])
             raise Step("INCONCLUSIVE", "start-refused: " + ("(exit %s) " % status if status.isdigit() else "") + last)
         got = wait(look, self.left(), 3)
         if not got:
@@ -1040,7 +1046,8 @@ class Run:
             self.fault("seal-now", exit="timeout", began=began)  # the line lands at the step's end; began is when the seal started
             return "timeout", "goalcup seal did not finish within the step's limit"
         self.fault("seal-now", exit=r.returncode, began=began)  # the seal step names the cap from this line
-        return ("ok", "sealed at the spend cap") if r.returncode == 0 else ("FAIL", "goalcup seal exit %d" % r.returncode)
+        said = shown(r.stderr, self.known() or [])
+        return ("ok", "sealed at the spend cap") if r.returncode == 0 else ("FAIL", "goalcup seal exit %d" % r.returncode + (": " + said if said else ""))
 
     def watch(self, _):
         """Section 4, started by type_prompt: status 10 s, procs 30 s, pane and upload 1 min, live 5 min, until watch.stop,
