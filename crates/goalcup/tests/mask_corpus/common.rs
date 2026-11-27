@@ -116,6 +116,11 @@ pub fn keys() -> Vec<(&'static str, String, usize)> {
             ["do", "p_v1_", &run(HEX, 40, 16)].concat(),
             7,
         ),
+        (
+            "aws_access_key",
+            ["AS", "IA", &run(UPPER, 16, 17)].concat(),
+            4,
+        ),
     ]
 }
 

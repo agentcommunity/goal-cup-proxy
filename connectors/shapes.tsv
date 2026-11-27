@@ -16,7 +16,7 @@ openai_key	1	sk-(?:proj-)?[A-Za-z0-9_\-]{20,}
 masked_key	0	(?i)sk-[A-Za-z0-9-]{1,8}(?:\.{3}|…|\\u2026|\*{3,64})[A-Za-z0-9]{3,4}
 github_token	1	github_pat_[A-Za-z0-9_]{22,}
 github_token	1	gh[pousr]_[A-Za-z0-9]{20,}
-aws_access_key	1	AKIA[0-9A-Z]{16}
+aws_access_key	1	A[KS]IA[0-9A-Z]{16}
 bearer	0	(?i)bearer\s+[A-Za-z0-9._\-]{16,}
 jwt	1	eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}
 private_key	0	-----BEGIN [A-Z ]*PRIVATE KEY-----(?:(?-u:[\x00-\xFF]){0,15872}?-----END [A-Z ]*PRIVATE KEY-----|(?-u:[\x00-\xFF]){0,15872})

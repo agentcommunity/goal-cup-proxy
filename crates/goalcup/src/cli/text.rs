@@ -345,7 +345,7 @@ pub fn masking(db: Option<&str>) -> String {
          values of known keys found in your project's own files and in your environment are hidden \
          too, held in memory only and never written. A hidden value is replaced by stars of the same length. It cannot catch every secret. These \
          can still be recorded: a key the model repeats back in its reply, a key written right \
-         after a letter, a digit or `_`, a short password, {and}a value with no known shape (for \
+         after a letter, a digit or `_`, a short password, an AWS secret access key that is not in your environment or your project's `.env` files, most of an AWS session token, {and}a value with no known shape (for \
          example a line of `cat .env` whose name is not one of those){db}. Your email address and \
          your plan and credit balance are recorded. Raw records stay private and are cleaned \
          before research use. Use keys you can revoke, and rotate every key after the run."

@@ -423,7 +423,7 @@ prefix, login headers, cookies, passwords in URLs, private keys, login tokens, v
 `api_key`, `secret`, `token` or `password`, and your project's GitHub token. A hidden value is
 replaced by stars of the same length. It cannot catch every secret. These can still be recorded: a
 key the model repeats back in its reply, a key written right after a letter, a digit or `_`, a short
-password, and a value with no known shape (for example a line of `cat .env` whose name is not one of
+password, an AWS secret access key that is not in your environment or your project's `.env` files, most of an AWS session token, and a value with no known shape (for example a line of `cat .env` whose name is not one of
 those). For a harness that keeps a database, the database is read whole and can hold the same. Your
 email address and your plan and credit balance are recorded. Raw records stay private and are
 cleaned before research use. Use keys you can revoke, and rotate every key after the run.
