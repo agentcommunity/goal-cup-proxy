@@ -21,8 +21,7 @@ TEMPLATES = os.path.join(ROOT, "scripts", "pad", "runs", "release")
 CHAINS = {
     "signin": ["claude-signin-direct", "claude-signin-dodger", "codex-signin-direct", "codex-signin-dodger", "kill-codex-signin"],
     "gateway": ["gw-claude-code-cli", "gw-codex-cli"],
-    "hermes-0.22.5": ["hermes-direct-0.22.5", "hermes-gateway-0.22.5", "hermes-dodger-0.22.5"],
-    "hermes-0.22.6": ["hermes-direct-0.22.6", "hermes-gateway-0.22.6", "hermes-dodger-0.22.6", "exec-keep"],
+    "hermes": ["hermes-direct", "hermes-gateway", "hermes-dodger", "exec-keep"],
 }
 PAUSE = 30  # seconds between two rows of a chain
 PREFLIGHT_WAIT = 25

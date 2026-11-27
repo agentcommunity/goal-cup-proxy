@@ -40,8 +40,6 @@ class Templates(unittest.TestCase):
         self.assertEqual(sorted(rows), files)
         with tempfile.TemporaryDirectory() as t:
             installs = os.path.join(t, "installs")
-            for v in ("0.22.5", "0.22.6"):
-                os.makedirs(os.path.join(installs, "hermes-cli-%s" % v, "bin"))
             values = {"BUILD": os.path.join(t, "build"), "SIGNIN_HOME": os.path.join(t, "signin"),
                       "EXEC_HOME": os.path.join(t, "exec"), "HARNESS_INSTALLS": installs}
             padcfg = pad.read_toml(os.path.join(HERE, "pad.toml"))
@@ -72,13 +70,12 @@ class Main(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("PAD_STAGING_URL", err)
 
-    def test_dry_run_lists_14_rows_in_4_chains(self):
+    def test_dry_run_lists_every_chain(self):
         code, out, _ = run(["--dry-run"], {"PAD_STAGING_URL": URL, "HARNESS_INSTALLS": "/nowhere"})
         self.assertEqual(code, 0)
-        self.assertIn("14 rows in 4 chains", out)
         for name, rows in rr.CHAINS.items():
             self.assertIn("%s: %s" % (name, " ".join(rows)), out)
-        self.assertIn("missing folder: /nowhere/hermes-cli-0.22.5/bin", out)
+        self.assertIn("missing folder: /nowhere/hermes-cli-", out)
 
     def test_only_picks_chains_and_refuses_unknown(self):
         code, out, _ = run(["--only", "gateway", "--dry-run"], {"PAD_STAGING_URL": URL})

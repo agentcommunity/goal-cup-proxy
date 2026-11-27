@@ -7,9 +7,11 @@
 # background model; ANTHROPIC_DEFAULT_SONNET_MODEL and ANTHROPIC_DEFAULT_OPUS_MODEL decide what the `sonnet` and `opus` aliases
 # resolve to, so a subagent spawned with either alias still runs Haiku): all set to Haiku 5.5 so no run falls back to the default Opus. Gateway id spelling is from the task brief;
 # vercel.com was not reachable when this was written, so the first gateway run confirms it.
-version = "2.1.312"
+version = "2.1.332"
 version_cmd = "claude --version"
-install = "npm i -g @anthropic-ai/claude-code@2.1.312"
+# The versions --release-check needs verified on darwin-arm64: the current build for the cup pad round (read 26 Nov 2026).
+release_versions = ["2.1.332"]
+install = "npm i -g @anthropic-ai/claude-code@2.1.332"
 key_kind = "claude"
 key_route = "env"
 key_env = "ANTHROPIC_API_KEY"

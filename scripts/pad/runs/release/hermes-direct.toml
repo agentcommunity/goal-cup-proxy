@@ -6,5 +6,5 @@ mode = "full"
 box_extra_minutes = 10
 where = "here"
 build = "@BUILD@"
-versions = ["0.22.5"]
-here_path = ["@HARNESS_INSTALLS@/hermes-cli-0.22.5/bin"]
+versions = ["0.23.4"]
+here_path = ["@HARNESS_INSTALLS@/hermes-cli-0.23.4/bin"]
