@@ -119,7 +119,8 @@ fn serve(run: &Path, fake: &FakeWorker, deadline: &str) {
     fs::write(cli::credential(run), CREDENTIAL).unwrap();
 }
 
-const DEADLINE: &str = "2026-11-07T10:00:00Z";
+/// Far in the future, so the tail window (deadline + 24 h) is still open on the real clock.
+const DEADLINE: &str = "2099-11-07T10:00:00Z";
 
 fn upload(run: &Path, entry: &Path, keep: bool) -> Outcome {
     upload_as(run, entry, ENTRY, keep)
