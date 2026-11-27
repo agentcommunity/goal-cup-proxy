@@ -4,6 +4,7 @@
 mod common;
 
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use common::home::TempHome;
 use common::worker::{FakeWorker, Inject, RUN_ID, Route};
@@ -164,11 +165,13 @@ fn the_skill_lands_in_the_harness_home_and_never_in_the_project() {
     assert_eq!(fix.listing(&fix.project), before);
 }
 
-/// A tmux the harness starts never joins the participant's server: `TMUX` and `TMUX_PANE` are not
-/// handed on, and `TMUX_TMPDIR` is the run's folder, so tmux starts its own server there with the
-/// run's environment (G158).
+/// A tmux the harness starts runs its own server with the run's environment, never the
+/// participant's or an earlier part's (G158): `TMUX` and `TMUX_PANE` are not handed on, and
+/// `TMUX_TMPDIR` is a private folder named for this part, short enough that tmux's socket in it
+/// fits macOS's 104-byte path for any uid and any `GOALCUP_HOME`.
 #[test]
-fn a_tmux_the_harness_starts_runs_its_own_server_in_the_run_folder() {
+fn a_tmux_the_harness_starts_runs_its_own_server_in_a_folder_of_the_part() {
+    use std::os::unix::fs::PermissionsExt;
     let fix = Fix::new("{home}/skills", "");
     let mut ctx = fix.ctx(Server::Off);
     for (k, v) in [
@@ -182,8 +185,46 @@ fn a_tmux_the_harness_starts_runs_its_own_server_in_the_run_folder() {
         prepare(&fix.args(), &ctx, &mut Vec::new()).unwrap_or_else(|s| panic!("{}", s.text));
     let v = &ready.plan.env;
     assert!(!v.contains_key("TMUX") && !v.contains_key("TMUX_PANE"));
-    let run = goalcup::cli::run_dir(&fix.gc(), &ready.facts.run);
-    assert_eq!(v["TMUX_TMPDIR"], run.to_string_lossy());
+    let dir = Path::new(&v["TMUX_TMPDIR"]);
+    let named = format!("/tmp/goalcup-{}", ready.facts.entry);
+    assert_eq!(dir, Path::new(&named), "outside GOALCUP_HOME, one per part");
+    let m = std::fs::symlink_metadata(dir).unwrap();
+    assert!(m.is_dir());
+    assert_eq!(m.permissions().mode() & 0o777, 0o700);
+    // macOS resolves `/tmp` to `/private/tmp`; uids go up to ten digits.
+    let socket = format!("/private{}/tmux-4294967295/default", dir.display());
+    assert!(socket.len() < 104, "{socket}");
+    std::fs::remove_dir(dir).unwrap();
+}
+
+/// A tmux folder that is not safe to use (here a link someone put at its name) is never handed on:
+/// `TMUX_TMPDIR` is unset, the participant's own too, and the start goes on.
+#[test]
+fn an_unsafe_tmux_folder_is_left_unset_and_the_start_goes_on() {
+    let fix = Fix::new("{home}/skills", "");
+    let w = FakeWorker::start();
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let entry = format!("e{:08x}{:08x}", std::process::id(), nanos.subsec_nanos());
+    let open = json!({"run_id": RUN_ID, "entry_id": entry, "segment": 0,
+        "official_start": "2026-11-06T10:00:00Z", "deadline_at": "2026-11-06T12:00:00Z",
+        "seconds_left": 7200});
+    let answer = Some((201, open));
+    w.inject(
+        Route::Open,
+        Inject {
+            answer,
+            ..Inject::default()
+        },
+    );
+    let planted = PathBuf::from(format!("/tmp/goalcup-{entry}"));
+    std::os::unix::fs::symlink(fix.t.home(), &planted).unwrap();
+    let mut ctx = fix.ctx(Server::Url(w.url()));
+    ctx.vars.insert("TMUX_TMPDIR".into(), "/tmp".into());
+    let got = prepare(&fix.args(), &ctx, &mut Vec::new());
+    std::fs::remove_file(&planted).unwrap();
+    let ready = got.unwrap_or_else(|s| panic!("{}", s.text));
+    assert_eq!(ready.facts.entry, entry);
+    assert!(!ready.plan.env.contains_key("TMUX_TMPDIR"));
 }
 
 #[test]

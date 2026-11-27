@@ -651,25 +651,45 @@ fn a_continue_uses_each_harness_s_documented_resume_form() {
     }
 }
 
-/// Git fails instead of asking for a login on the harness's screen. Nothing of the participant's
-/// git or SSH login is removed: the SSH agent socket and the tokens Copilot signs in with pass
-/// (P1-container-run-5, decision 6).
+/// Git never asks for a login in the terminal the harness draws on. Nothing of the participant's
+/// git or SSH login is removed: the SSH agent socket, an askpass program and the tokens Copilot
+/// signs in with pass (P1-container-run-5, decision 6).
 #[test]
-fn git_never_asks_on_the_screen_and_the_login_passes() {
+fn git_never_prompts_in_the_terminal_and_the_login_passes() {
     let dir = tempfile::tempdir().unwrap();
     let d = dir.path();
     let theirs = [
-        ("SSH_AUTH_SOCK", "/tmp/agent.sock"),
         ("GIT_TERMINAL_PROMPT", "1"),
+        ("SSH_AUTH_SOCK", "/tmp/agent.sock"),
+        ("GIT_ASKPASS", "/usr/bin/participant-askpass"),
         ("GH_TOKEN", "participant-gh-token"),
         ("GITHUB_TOKEN", "participant-github-token"),
     ];
     let plan = finished("copilot-cli", &env(d, &theirs), d);
     let v = &plan.env;
     assert_eq!(v["GIT_TERMINAL_PROMPT"], "0");
-    for (name, value) in [theirs[0], theirs[2], theirs[3]] {
-        assert_eq!(v[name], value, "{name}");
+    for (name, value) in &theirs[1..] {
+        assert_eq!(v[*name], *value, "{name}");
     }
+}
+
+/// A connector's `env` values fill `{home}` and `{workspace}` as its `home` values do; a value
+/// with neither is kept as written.
+#[test]
+fn env_values_fill_home_and_workspace() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let file = d.join("env-cli.toml");
+    let toml = "id = \"env-cli\"\nname = \"T\"\nprogram = \"true\"\n\
+        env = { TRACES = \"{home}/traces\", WORK = \"{workspace}/app\", SWITCH = \"1\" }\n";
+    std::fs::write(&file, toml).unwrap();
+    let c = connector::load(file.to_str().unwrap(), None).unwrap();
+    let (e, home) = (env(d, &[]), d.join("home"));
+    let plan = connector::plan(&c, &e, &home);
+    let v = &plan.env;
+    assert_eq!(v["TRACES"], home.join("traces").to_string_lossy());
+    assert_eq!(v["WORK"], e.workspace.join("app").to_string_lossy());
+    assert_eq!(v["SWITCH"], "1");
 }
 
 /// OpenClaw's agent works in the participant's project folder, not in a workspace inside its

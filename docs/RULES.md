@@ -151,8 +151,9 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
   `goal-cup` skill goes in the harness's home, not the workspace. Your agent makes the repository
   itself (`git init`) and pushes.
 - The agent pushes its work to the repository with the token you made for it (see Keys). Goal Cup
-  Proxy removes nothing of your git or SSH login. It only makes git fail instead of waiting for a
-  password, and the push lines make the agent's https pushes to github.com use the run's token.
+  Proxy removes nothing of your git or SSH login. It only stops git asking for a password in the
+  terminal; an askpass program (VS Code's terminal sets one) and `ssh` can still ask. The push
+  lines make the agent's https pushes to github.com use the run's token.
   The agent runs as you and can use your SSH keys, `gh` login and credential helpers
   ([results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-26-mac-retest.md)).
   If that matters, run it in a VM or container without them. The commit the server records at the

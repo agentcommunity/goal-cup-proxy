@@ -196,10 +196,11 @@ Do the steps in this order: a token for one repository needs the repository to e
    repository only. The agent still runs as you and can read what your programs can read, so keep no
    other secrets in the project folder.
 
-   **Your git and SSH login are not covered.** goalcup removes nothing of them. It only makes git
-   fail instead of waiting for a password, and the push lines (step 5, below) make the agent's https
-   pushes to github.com use this token. The agent runs as you and can use your SSH keys, `gh` login
-   and credential helpers. If that matters, run it in a VM or container without them.
+   **Your git and SSH login are not covered.** goalcup removes nothing of them. It only stops git
+   asking for a password in the terminal; an askpass program (VS Code's terminal sets one) and `ssh`
+   can still ask. The push lines (step 5, below) make the agent's https pushes to github.com use this
+   token. The agent runs as you and can use your SSH keys, `gh` login and credential helpers. If that
+   matters, run it in a VM or container without them.
 3. **Make the project folder.** A new folder that holds only a `.gitignore` and a `.env.local` (a
    macOS `.DS_Store` is allowed). First the folder and the `.gitignore`:
 

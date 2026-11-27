@@ -53,7 +53,7 @@ The harness's environment is the participant's, with:
 | `HTTPS_PROXY`, `https_proxy` | `http://127.0.0.1:<port>`, the recording proxy |
 | `NO_PROXY`, `no_proxy` | `127.0.0.1,localhost,::1` |
 | `NODE_USE_ENV_PROXY` | `1` |
-| `GIT_TERMINAL_PROMPT` | `0`: git fails instead of asking for a login on the harness's screen |
+| `GIT_TERMINAL_PROMPT` | `0`: git never asks for a login in the terminal. An askpass program (`GIT_ASKPASS`, `core.askPass`, `SSH_ASKPASS`) still runs, and `ssh` still asks for a key passphrase or a new host key |
 | `NODE_EXTRA_CA_CERTS` | the run CA, `run-ca.pem` |
 | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` | `bundle.pem`: the run CA, then the OS roots |
 | each name in the connector's `ca_env` | the run CA, `run-ca.pem` |
@@ -65,9 +65,12 @@ Both CA files are in the part's folder. Removed first: `HTTPS_PROXY`,
 `REQUESTS_CA_BUNDLE`, `TMUX`, `TMUX_PANE`, and the connector's `unset` names. `HTTP_PROXY` is never
 set. `SSL_CERT_DIR`, `CURL_CA_BUNDLE` and `NODE_TLS_REJECT_UNAUTHORIZED` are never touched, so a
 value the participant exported passes through. goalcup never sets a model base URL.
-`GOALCUP_TIME_LEFT_FILE` and `TMUX_TMPDIR` (the run's folder, so a `tmux` the harness starts runs its
-own server with this environment and never joins the participant's) are set by `start` and
-`continue`.
+`GOALCUP_TIME_LEFT_FILE` and `TMUX_TMPDIR` are set by `start` and `continue`. `TMUX_TMPDIR` is
+`/tmp/goalcup-<entry>`, a folder of the part's own with mode 0700, so a `tmux` the harness starts
+runs its own server with this environment and never joins the participant's or an earlier part's.
+The path is short enough for macOS's 104-byte socket path. If that folder cannot be made, or is
+already there and is not the participant's with mode 0700, `TMUX_TMPDIR` is removed and the harness
+starts anyway; its `tmux` then uses the default socket, which may be the participant's server.
 
 The harness gets the `PATH` of the terminal that ran `goalcup start`. `goalcup` must be on it for the agent
 to run `goalcup time-left`.

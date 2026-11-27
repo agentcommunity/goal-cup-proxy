@@ -98,7 +98,8 @@ pub(crate) fn build_env(c: &Connector, env: &Env, home: &Path) -> BTreeMap<Strin
     vars.insert("NO_PROXY".into(), NO_PROXY.into());
     vars.insert("no_proxy".into(), NO_PROXY.into());
     vars.insert("NODE_USE_ENV_PROXY".into(), "1".into());
-    // Git fails instead of asking for a login on the harness's screen.
+    // Git never asks for a login in the terminal the harness draws on. An askpass program
+    // (`GIT_ASKPASS`, `core.askPass`, `SSH_ASKPASS`) still runs, and `ssh` asks for itself.
     vars.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
     for (name, template) in &c.home {
         vars.insert(name.clone(), fill(template, home, &env.workspace));
