@@ -1,5 +1,5 @@
 # Real `--version` first lines: connector id, raw line, expected parse ("-" = none). Tab-separated.
-# Read by connector/version.rs and scripts/pad/test_harness_version.py.
+# Read by connector/version.rs, tests/connector_versions.rs and scripts/pad/test_harness_version.py.
 hermes-cli	Hermes Agent v0.22.6 (2026.9.24)	0.22.6
 hermes-cli	Hermes Agent v0.19.0 (2026.7.20)	0.19.0
 hermes-cli	no dependency environment is committed for this install; run hermes pm repair	-
