@@ -7,6 +7,8 @@ and the pad runs it and prints one table. Nothing is copied here:
 - [Reviewing a connector pull request](../CONTRIBUTING.md#reviewing-a-connector-pull-request): the checklist.
 - [CONNECTOR-SCHEMA](CONNECTOR-SCHEMA.md): every key of a connector and the rule that refuses it.
 
+An agent loop you wrote yourself needs no connector: see [its page](harnesses/homemade-cli.md).
+
 ## Check first
 
 Before you write a connector, read the harness's facts sheet in [harnesses](harnesses/README.md).

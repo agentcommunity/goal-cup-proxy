@@ -25,7 +25,7 @@ It has eight commands: `setup`, `start`, `continue`, `recover`, `status`, `seal`
 - A direct internet connection: company proxy networks are not supported, so `goalcup setup` and
   `goalcup start` refuse when `HTTPS_PROXY` or `ALL_PROXY` is set (`goalcup continue` does not).
 - `git`, and a GitHub account for the competition run.
-- A harness from [the harness list](harnesses/README.md), and the account or API key it uses.
+- A harness from [the harness list](harnesses/README.md) ([not on it?](harnesses/README.md#not-on-the-list)), or [your own agent loop](harnesses/homemade-cli.md), and the account or API key it uses.
 - An Agent Community account signed up at [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup),
   where you hand in your two videos (a setup video before the run, a demo after it) and the
   questionnaire ([RULES](RULES.md#submission)).
@@ -522,7 +522,7 @@ Every folder problem is listed in one refusal, then "Nothing was created." Fix e
 | `It and goalcup's folder "<path>" hold each other or sit side by side.` | Use a folder elsewhere, or set `GOALCUP_HOME` to a folder away from it. |
 | `The prompt file "<path>" is inside the project folder. Move it out.` | Move the file out. |
 | `This is WSL1, which cannot run goalcup.` or `... is on a Windows drive (...)` | Convert to WSL2 (`wsl --set-version <distro> 2`), and use a folder in the Linux home. |
-| `--connector, --hosts and a connector file given to --harness are for practice and test runs. A competition run uses the connectors built into goalcup.` | Remove the flags. |
+| `--connector, --hosts and a connector file given to --harness are for practice and test runs. A competition run uses the connectors built into goalcup.` | Remove the flags. Your own agent loop competes as `--harness homemade` ([its page](harnesses/homemade-cli.md)). |
 | `goalcup cannot tell where to keep your runs: HOME is not set to a full path.` | Set `HOME`, or `GOALCUP_HOME`, to a full path outside your project. |
 | `"<file>" sets <key>, which routes around the recorder. Remove it, then run this again.` | Remove that setting from the file named. The line names the file and key, never the value. |
 | `a run uses "<home>" now. Run this again once it has ended.` | One run at a time can use a harness home. |

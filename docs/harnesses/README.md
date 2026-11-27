@@ -9,7 +9,7 @@ check when Goal Cup Proxy gains a platform or a new way to capture, without aski
 A sheet is also a complete contribution on its own. A harness that does not fit Goal Cup Proxy yet
 sends its sheet with status `facts only`, and the sheet shows what to build.
 
-## The 15 harnesses
+## The harnesses
 
 This is the one harness table; other pages link here and never copy it. Each Connector links to its
 sheet. Each harness has one connector file, `connectors/<id>.toml` (OpenCode 1 and 2 share `opencode-cli`, which has a `1.x` version row; runs started as `opencode2-cli` continue under it).
@@ -32,13 +32,27 @@ sheet. Each harness has one connector file, `connectors/<id>.toml` (OpenCode 1 a
 | 13 | Factory Droid 0.251.0 | [`droid-cli`](droid-cli.md) | A provider key to its base URL; Factory's backend for sign-in and sync | `.factory/sessions/<slug>/<uuid>.jsonl` under the home goalcup sets with `FACTORY_HOME_OVERRIDE` (undocumented; `HOME` stays the participant's) | not verified | A separately started `droid daemon` or desktop app keeps its own environment and cannot be stopped by goalcup (sheet section 8) |
 | 14 | Kimi Code 2.4.1 | [`kimi-code-cli`](kimi-code-cli.md) | HTTPS to `api.kimi.com`, or a provider in `config.toml` | `sessions/<workspace>/<session>/agents/*/wire.jsonl`; index `session_index.jsonl` | not verified | None found |
 | 15 | Cline CLI 3.0.74 | [`cline-cli`](cline-cli.md) | HTTPS to the provider, or Cline's own provider | `data/sessions/<id>/`, index `data/db/sessions.db` | not verified | A hub daemon already running may hold another environment. No continue form: `goalcup continue` starts a new Cline session |
+| 16 | Your own loop (`homemade-agent`), no build checked | [`homemade-cli`](homemade-cli.md) | Whatever your loop calls, through `HTTPS_PROXY` | Any `*.jsonl` it writes below `GOALCUP_TRACE_DIR` | not verified (always) | Calls that ignore `HTTPS_PROXY` or the certificate variables, and anything the loop does not trace |
 
 The Tier column is a snapshot of [`connectors/tiers.toml`](../../connectors/tiers.toml), which the test
 pad writes; that file is the record, and the column is not regenerated. Until the pad has run a harness
 its tier is "not verified" with the reason "not yet run on the pad". A verified or unsupported tier
-appears only after the pad records it (`scripts/pad/rows/PAD-RESULTS.md`). Each sheet
+appears only after the pad records it (`scripts/pad/rows/PAD-RESULTS.md`). Each product sheet
 ends with a "Pad result" section that points to the file. The full list of limits is in section 8 of
-each sheet.
+each product sheet.
+
+## Not on the list
+
+- **Your own agent loop**, one you wrote yourself, needs no connector of its own. Put it on your
+  `PATH` as `homemade-agent` and use `--harness homemade`: [what it must do](homemade-cli.md).
+- **A product not in the table** (for example Cursor CLI or Aider) is not in this build, and a run
+  with it does not count. It joins with its own connector
+  ([HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md)), or ask for it with a
+  [harness request](https://github.com/agentcommunity/goal-cup-proxy/issues/new?template=harness_request.yml).
+  A connector reaches participants only in a release, and counts for Edition 01 only if it is
+  merged before the cup release tag (see [RULES](../RULES.md#timeline)).
+- **Desktop and IDE agents** (Cursor, Windsurf, Zed, VS Code agent mode) are not supported: use a
+  CLI. Cloud agents are not eligible ([RULES](../RULES.md#harness-support)).
 
 ## What is public
 
