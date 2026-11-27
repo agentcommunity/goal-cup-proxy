@@ -139,7 +139,7 @@ BEGIN
   ASSERT (SELECT count(*) FROM goal_cup_tracer.run_credentials
            WHERE member_id = '66666666-6666-6666-6666-666666666666') = 1, 'scenario 6: not one credential row';
 
-  -- 7. Purge (20261105100000): only this deployment's requests expired more than a day ago go.
+  -- 7. Purge (20261127173807): only this deployment's requests expired more than a day ago go.
   INSERT INTO goal_cup_tracer.device_requests (device_hash, user_hash, purpose, mode, connector_id, tracer_version,
                                                created_at, expires_at, staging)
   VALUES (repeat('d', 64), repeat('d', 64), 'run', 'practice', 'c', '1', t0 - interval '2 days',

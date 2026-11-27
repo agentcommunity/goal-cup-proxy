@@ -10,7 +10,7 @@ A rule change touches the Worker (`server/worker/src/`), its local database (`db
 the database must change, the SQL (the website's migration, mirrored in
 `server/worker/sql/goal-cup-tracer-upload.sql`). 1.0 needs website migration `20261021100000`
 (applied) for `stored_bytes` and `chunk_count`. The purge of expired device requests needs
-`20261105100000`, pending in `server/worker/sql/pending/` until the owner applies it. Then run `npm test` in
+`20261127173807` (applied 27 Nov 2026). Then run `npm test` in
 `server/worker` and the full-tier `upload_worker.rs`, which runs the real client against the Worker
 under `wrangler dev` (`sh scripts/gate.sh full` runs both).
 
