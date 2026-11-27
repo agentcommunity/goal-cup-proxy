@@ -511,22 +511,28 @@ fn a_tunnelled_listed_host_is_named_not_on_the_wire() {
     assert_eq!(sum["coverage"]["wire_calls"], 0);
 }
 
-/// Point 3 in the reader: a decode error partway through an entry still gives the summary of what
-/// came, marked `read_error` with a line on stderr, never a clean-looking partial count.
+/// Point 3 in the reader: a decode error partway through an entry, or a closed frame that ends
+/// inside a record, still gives the summary of what came, marked `read_error` with a line on
+/// stderr, never a clean-looking partial count.
 #[test]
 fn a_corrupt_entry_is_marked_not_silent() {
-    let dir = codex_entry("u-corrupt", false);
-    let first = part_files(&dir.join("rec")).unwrap().remove(0);
+    let flipped = codex_entry("u-corrupt", false);
+    let first = part_files(&flipped.join("rec")).unwrap().remove(0);
     let mut bytes = fs::read(&first).unwrap();
     let at = bytes.len() * 3 / 8;
     bytes[at..at + 16].fill(0xA5);
     fs::write(first, bytes).unwrap();
-    let ran = run_usage(&dir);
-    let ok = ran.code == Some(0) && json(&ran.sum)["read_error"] == true;
-    assert!(
-        !ran.stderr.is_empty() && !ran.stderr.contains(MARK) && ok,
-        "{ran:?}"
-    );
+    // A closed frame holding an EVENT that says 32 body bytes and holds 1.
+    let cut = codex_entry("u-cut", false);
+    common::append_raw(&cut, &[0x07, 0x20, 0x00]);
+    for dir in [flipped, cut] {
+        let ran = run_usage(&dir);
+        let ok = ran.code == Some(0) && json(&ran.sum)["read_error"] == true;
+        assert!(
+            !ran.stderr.is_empty() && !ran.stderr.contains(MARK) && ok,
+            "{ran:?}"
+        );
+    }
 }
 
 /// Point 4 on every path: the whole entry, a torn copy of it (exit 0, not sealed), a missing path.
