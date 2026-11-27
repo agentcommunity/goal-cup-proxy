@@ -61,9 +61,9 @@ Before the window opens:
 5. RULES' [Timeline](RULES.md#timeline) names the cup release's tag date: no `<TAG DATE>` is left.
 6. `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, and one practice run
    against production started, sealed and fetched cleanly ([Fetch and check a run](#fetch-and-check-a-run)).
-6. Test runs are deleted ([Test runs and the pad](#test-runs-and-the-pad)) and the bucket lock rule still
+7. Test runs are deleted ([Test runs and the pad](#test-runs-and-the-pad)) and the bucket lock rule still
    covers `traces/goalcup-cup-2026/`.
-7. `MAINTENANCE` is `off`.
+8. `MAINTENANCE` is `off`.
 
 Emails go out at most 20 each 5-minute tick (240 an hour). A burst of 1,500 `started` mails at the window
 opening drains over about six hours. The limit is `NOTICES_PER_TICK` in `server/worker/src/mail.ts`.

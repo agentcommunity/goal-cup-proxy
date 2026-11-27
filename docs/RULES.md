@@ -320,7 +320,7 @@ disclosure and no-side-channel rules.
   model, later human messages, agent and subagent lifecycle, tool calls and results, external sites
   and services used, harness and model identity when available, run continuity, and, at the stop,
   the folder's last commit and a SHA-256 of its `git status` output (a hash only, no file list); a
-  part closed after a crash or reboot records neither.
+  part whose recorder was gone and is closed afterwards (after a reboot, for example) records neither.
 - The record uploads to the server during the run: a round every 5 minutes, or at once when 16 MiB
   of compressed record waits. When the server cannot be reached, the record waits on your disk and
   the upload retries; the run goes on. After the seal, goalcup keeps sending for up to 60 minutes.
@@ -405,7 +405,8 @@ supported recording path and its runs do not count.
   no commit of its own and never force-pushes. Work not pushed by the deadline is not in the submission.
 - At the stop Goal Cup Proxy also records the git commit your project folder had (if the agent made
   a repository there), and a SHA-256 of its `git status` output (a hash only, no file list), in the sealed
-  record. A part closed after a crash or reboot records neither.
+  record. A part whose recorder was gone and is closed afterwards (after a reboot, for example)
+  records neither.
 - The MIT License must exist in the submitted repository. The result must be a fresh, usable or
   executable product.
 - **`GOALCUP.md` is required.** The submitted repository has a `GOALCUP.md` at its root that
