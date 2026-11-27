@@ -5,7 +5,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        A harness is data, not code: one `connectors/<id>/harness.toml` and a facts sheet. If you
+        A harness is data, not code: one `connectors/<id>.toml` and a facts sheet. If you
         want to add it yourself, start with `skills/adding-a-capture-harness/SKILL.md` and
         `docs/HARNESS-ONBOARDING.md` ("Check first" lists what most often blocks a harness).
   - type: input

@@ -41,6 +41,19 @@ appears only after the pad records it (`scripts/pad/rows/PAD-RESULTS.md`). Each 
 ends with a "Pad result" section that points to the file. The full list of limits is in section 8 of
 each sheet.
 
+## Not on the list
+
+- **Your own agent loop**, one you wrote yourself, needs no connector of its own. Put it on your
+  `PATH` as `homemade-agent` and use `--harness homemade`: [what it must do](homemade-cli.md).
+- **A product not in the table** (for example Cursor CLI or Aider) is not in this build, and a run
+  with it does not count. It joins with its own connector
+  ([HARNESS-ONBOARDING](../HARNESS-ONBOARDING.md)), or ask for it with a
+  [harness request](https://github.com/agentcommunity/goal-cup-proxy/issues/new?template=harness_request.yml).
+  A connector reaches participants only in a release, and counts for Edition 01 only if it is
+  merged before the cup release tag (see [RULES](../RULES.md#timeline)).
+- **Desktop and IDE agents** (Cursor, Windsurf, Zed, VS Code agent mode) are not supported: use a
+  CLI. Cloud agents are not eligible ([RULES](../RULES.md#harness-support)).
+
 ## What is public
 
 Everything in a sheet is public. A sheet holds facts from your documentation, or that anyone can

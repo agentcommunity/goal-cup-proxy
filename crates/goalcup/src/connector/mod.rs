@@ -237,11 +237,14 @@ pub fn resolve_id(arg: &str) -> Result<&'static str, ConnectorError> {
         [] => {
             let verified = verified_ids();
             let list = if verified.is_empty() {
-                format!("Choose one of: {}", ids().collect::<Vec<_>>().join(", "))
+                format!(
+                    "Choose one of: {}. Not listed, or your own agent loop: https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/harnesses/README.md#not-on-the-list",
+                    ids().collect::<Vec<_>>().join(", ")
+                )
             } else {
                 let others: Vec<_> = ids().filter(|id| !verified.contains(id)).collect();
                 format!(
-                    "Verified: {}. Not verified yet: {}. Which is which: https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/harnesses/README.md",
+                    "Verified: {}. Not verified yet: {}. Not listed, or your own agent loop: https://github.com/agentcommunity/goal-cup-proxy/blob/main/docs/harnesses/README.md#not-on-the-list",
                     verified.join(", "),
                     others.join(", ")
                 )
@@ -491,7 +494,12 @@ mod tests {
             verified_ids().join(", ")
         );
         assert!(e.contains(&verified), "{e}");
-        assert!(e.contains("docs/harnesses/README.md"), "{e}");
+        assert!(
+            e.contains("docs/harnesses/README.md#not-on-the-list"),
+            "{e}"
+        );
+        let table = include_str!("../../../../docs/harnesses/README.md");
+        assert!(table.lines().any(|l| l == "## Not on the list"));
         assert!(!e.contains("connector"), "{e}");
     }
 
