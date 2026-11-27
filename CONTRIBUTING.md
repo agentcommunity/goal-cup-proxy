@@ -73,11 +73,15 @@ through it. In short:
    ([CONNECTOR-SCHEMA](docs/CONNECTOR-SCHEMA.md)).
 3. Write `scripts/pad/harnesses/<id>.toml` from
    [`pad-harness.toml`](skills/adding-a-capture-harness/templates/pad-harness.toml).
-4. Run `scripts/pad/pad` on a copy of `scripts/pad/runs/micro.toml` until its table passes.
+4. Run `scripts/pad/pad` on a copy of `scripts/pad/runs/micro.toml` with `where = "here"`, as the
+   skill's step 3 says, until the row meets the skill's bar. With the server off the row's result
+   stays INCONCLUSIVE; that is expected.
 5. Open the PR with the pad's `row.json`. A maintainer reruns the pad on staging; a pass gives the
    tier. A maintainer acknowledges a connector PR within 7 days, which is not a promise to merge.
+   For Edition 01, a connector counts only if it is merged before the cup release tag (see
+   [RULES](docs/RULES.md#timeline)).
 
-A new decrypted host is one line in `connectors/model-hosts.toml`. A new rule that connectors
+A new decrypted host is one line in `connectors/model-hosts.toml`; its pad run sets `hosts` (skill step 3). A new rule that connectors
 cannot express (D42, D84; [when](docs/HARNESS-ONBOARDING.md#do-i-need-a-core-change)) is a separate core PR with a `docs/DECISIONS.md` entry. Pad results are
 synthetic: they say "recorded in a test", not "works for every user". Never commit a real trace,
 a key, `pad-out/` or `target/`, and read any fixture by eye first.
@@ -89,9 +93,12 @@ A connector is trusted data compiled into every build, so a code owner reads eac
 - the connector sets no base URL and no endpoint setting;
 - no proxy or CA variable appears outside `ca_env`;
 - `env` holds no key, token or user path, and no variable that names a command, hook or host;
+- `secret_files` covers the harness's key files, and no `native` row copies a file that holds
+  keys, tokens or a search index;
 - every host added to `connectors/model-hosts.toml` has a vendor doc link, and is a model host,
   not a registry or an unrelated service;
-- the pad row is attached, from a run of any installed version (the pad records it), and its table passes;
+- the contributor's pad row is attached, from a run of any installed version (the pad records it),
+  and meets the skill's bar; a maintainer's staging rerun sets the tier;
 - the PR holds no `.rs` file and no real trace.
 
 ## Maintainer-owned files

@@ -13,6 +13,8 @@ The seven points are in [VISION.md](VISION.md#the-seven-points). Every change is
 
 Less code is better. Cut before you add. Ready one week before the start window opens.
 
+Adding a harness? Follow [skills/adding-a-capture-harness/SKILL.md](skills/adding-a-capture-harness/SKILL.md); you do not need ARCHITECTURE or DECISIONS.
+
 Read first: [VISION.md](VISION.md), then [ARCHITECTURE](docs/ARCHITECTURE.md), then
 [DECISIONS](docs/DECISIONS.md) from "Owner decisions in force".
 

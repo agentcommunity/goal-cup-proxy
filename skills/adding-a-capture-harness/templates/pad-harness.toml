@@ -13,7 +13,7 @@ version_cmd = ""              # prints that version; it must print this file's v
 release_versions = []        # optional, one line: versions a release needs verified on darwin-arm64, e.g. ["1.2.3", "1.2.4"]
 install = ""                  # installs exactly that version as a non-root user, e.g. "npm i -g <package>@<version>"
                               # (one line; single quotes around the value when it holds double quotes)
-key_kind = ""                 # which pad key the harness takes: claude, openai, deepseek or gemini
+key_kind = ""                 # which pad key the harness takes: claude, openai, deepseek or gemini; "signin" for a harness that only signs in (skill step 3)
 key_route = ""                # how the key reaches the harness, as its docs say: "login", "file" or "env"
 login = ""                    # "login": a command that reads the key on stdin, run with the isolated home; never an argument
 key_file = ""                 # "file": a path in the isolated home, e.g. "{home}/.env"; written 0600
@@ -21,7 +21,7 @@ key_line = ""                 # "file": the line written there, e.g. "DEEPSEEK_A
 key_env = ""                  # "env": the variable the launch shell exports from the key file, e.g. "DEEPSEEK_API_KEY"
 not_verified = ""             # a stated reason: the pad runs nothing for this harness; leave out otherwise (key_kind = "none" also runs nothing)
 tier_note = ""                # one plain line shown with the harness's row in the table; leave out if none
-model_host = ""               # host of the harness's model calls; required for the dodger case, used only there
+model_host = ""               # host of the harness's model calls: the direct case's C1 needs it decrypted, the dodger case pins it; leave out to accept any decrypted host in direct
 ready_text = ""               # text on screen when the harness takes input; empty: wait 30 s
 ready_wait = 30               # seconds to wait for ready_text
 pre_keys = ""                 # printf format typed once before the prompt, for a first-run dialog, e.g. '\r'; a list types one item per first-run screen, 3 s apart
