@@ -23,7 +23,7 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 | | macOS | Linux | Windows |
 |---|---|---|---|
 | Config dir | `~/.openclaw/openclaw.json` (docs) | `$HOME/.openclaw/openclaw.json`, JSON5 (measured) | unknown |
-| Session store | unknown | `agents/<agent>/agent/openclaw-agent.sqlite` and `state/openclaw.sqlite` under `.openclaw`; no JSONL (measured) | unknown |
+| Session store | unknown | `agents/<agent>/agent/openclaw-agent.sqlite` and `state/openclaw.sqlite` under `.openclaw`; no JSONL (measured); neither is copied (section 4) | unknown |
 | Logs / cache | unknown | `/tmp/openclaw/openclaw-YYYY-MM-DD.log`, outside the home (measured) | unknown |
 | Env vars that move these | | `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, `OPENCLAW_PROFILE` | |
 
@@ -31,12 +31,12 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 
 ## 4. Session format and identity
 
-- One SQLite file per agent plus one shared state file, each with `-wal` and `-shm`; the connector copies both rows at the end as a final set. Transcript rows are in the `transcript_events` table (measured). Session ids are UUIDs, in log lines as `sessionId=<uuid>`.
+- One SQLite file per agent plus one shared state file, each with `-wal` and `-shm`; The connector copies neither. Both hold OpenClaw's auth profiles as plain JSON (`auth_profile_store.store_json` in the agent database, `authProfiles.store` in the state database; 2026.10.9 package, read 26 Nov 2026), and no mask rule names their `key`, `access` and `refresh` fields. Model calls are recorded on the wire. Transcript rows are in the `transcript_events` table (measured). Session ids are UUIDs, in log lines as `sessionId=<uuid>`.
 - Subagents are background runs in their own sessions, keyed `agent:<agentId>:subagent:<uuid>` ([docs](https://docs.openclaw.ai/tools/subagents)). Defaults: 8 concurrent runs and 5 children per session ([docs](https://docs.openclaw.ai/tools/subagents/operations)); these are OpenClaw's caps, not ours.
 
 ## 5. Auth
 
-- Provider keys sit in `$HOME/.openclaw/.env` (for example `DEEPSEEK_API_KEY=`); the file works with no environment variable (measured). Auth profiles are in the agent database.
+- Provider keys sit in `$HOME/.openclaw/.env` (for example `DEEPSEEK_API_KEY=`); the file works with no environment variable (measured). Auth profiles, API keys and OAuth tokens included, are in both databases ([docs](https://docs.openclaw.ai/concepts/oauth), read 26 Nov 2026), so the connector lists them as secret files and copies neither.
 - A variable that moves config and login together: yes, `OPENCLAW_HOME`. The connector sets it, so sign-in and keys stay in the isolated home.
 
 ## 6. Network

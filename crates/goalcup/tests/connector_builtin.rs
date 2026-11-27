@@ -94,25 +94,45 @@ fn resolve(template: &str) -> String {
         .replace("{workspace}", "/w")
 }
 
+/// True when some native row of `c` would read `file`: its resolved root plus `/` prefixes the
+/// resolved file and its pattern matches the rest.
+fn takes(c: &connector::Connector, file: &str) -> bool {
+    let file = resolve(file);
+    c.native.iter().any(|row| {
+        file.strip_prefix(&format!("{}/", resolve(&row.root)))
+            .is_some_and(|rest| {
+                pattern::parse(&row.pattern)
+                    .unwrap()
+                    .matches(Path::new(rest))
+            })
+    })
+}
+
 #[test]
 fn no_native_row_reads_a_key_file() {
     for id in file_ids() {
         let c = connector::load(&id, None).unwrap();
         for secret in &c.secret_files {
-            let secret = resolve(secret).replace('*', "x");
-            for row in &c.native {
-                let Some(rest) = secret.strip_prefix(&format!("{}/", resolve(&row.root))) else {
-                    continue;
-                };
-                let pattern = pattern::parse(&row.pattern).unwrap();
-                assert!(
-                    !pattern.matches(Path::new(rest)),
-                    "{id}: native row {} would read key file {secret}",
-                    row.name
-                );
-            }
+            assert!(
+                !takes(&c, &secret.replace('*', "x")),
+                "{id}: a native row would read key file {secret}"
+            );
         }
     }
+}
+
+/// Databases that no reader uses and masking cannot see are not copied: Copilot's search index
+/// and Codex's logs database. Codex keeps its state database.
+#[test]
+fn no_native_row_takes_an_index_or_a_log_database() {
+    let load = |id| connector::load(id, None).unwrap();
+    assert!(!takes(&load("copilot-cli"), "{home}/session-store.db"));
+    assert!(takes(
+        &load("copilot-cli"),
+        "{home}/session-state/s/events.jsonl"
+    ));
+    assert!(!takes(&load("codex-cli"), "{home}/logs_2.sqlite-wal"));
+    assert!(takes(&load("codex-cli"), "{home}/state_5.sqlite"));
 }
 
 fn load_text(text: &str) -> Result<connector::Connector, connector::ConnectorError> {

@@ -1,5 +1,4 @@
-# OpenCode 1.19.5, checked against opencode.ai/docs (cli, config, permissions, network) and the 1.19.5 package.
-# OpenCode 2 is opencode2-cli: same program and folders, told apart by the version prefix.
+# The keys OpenCode 1.x gets from opencode-cli, compared by opencode_fold_keeps_each_version_s_keys.
 id = "opencode-cli"
 name = "OpenCode"
 program = "opencode"
@@ -15,8 +14,8 @@ host_hints = [
 secret_files = [
   "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/config.json",
   "{home}/.config/opencode/opencode.json", "{home}/.config/opencode/opencode.jsonc",
+  "{home}/.local/share/opencode/opencode.db",
 ]
-native = [{ name = "db", root = "{home}/.local/share/opencode", pattern = "opencode*.db*", form = "final" }]
 no_prompts = [{ file = "{home}/.config/opencode/opencode.json", key = "permission", value = "allow" }]
 
 [usage]

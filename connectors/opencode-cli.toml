@@ -2,6 +2,7 @@
 # 2.x, and against opencode.ai/docs (cli, config, permissions, network) and the package for 1.x (the row below).
 # --standalone runs a private server instead of the shared background service, which keeps its own environment.
 # Approvals stay on in 2.x: OpenCode 2 has no settings row for them (see docs/harnesses/opencode-cli.md).
+# No database row: OpenCode 2 keeps saved keys and OAuth tokens in opencode.db, 1.x its console login (facts sheet, section 5).
 id = "opencode-cli"
 name = "OpenCode"
 program = "opencode"
@@ -19,10 +20,10 @@ host_hints = [
   { file = "{workspace}/opencode.json*", key = "providers.*.settings.baseURL" },
 ]
 secret_files = [
-  "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/opencode.json",
-  "{home}/.config/opencode/opencode.jsonc",
+  "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/config.json",
+  "{home}/.config/opencode/opencode.json", "{home}/.config/opencode/opencode.jsonc",
+  "{home}/.local/share/opencode/opencode.db",
 ]
-native = [{ name = "db", root = "{home}/.local/share/opencode", pattern = "opencode*.db*", form = "final" }]
 
 [[versions]]
 match = "1.x"   # checked on 1.19.5
@@ -33,10 +34,6 @@ host_hints = [
   { file = "{home}/.config/opencode/*.jsonc", key = "provider.*.options.baseURL" },
   { file = "{workspace}/opencode.json*", key = "provider.*.options.baseURL" },
   { file = "{workspace}/.opencode/opencode.json*", key = "provider.*.options.baseURL" },
-]
-secret_files = [
-  "{home}/.local/share/opencode/auth.json", "{home}/.config/opencode/config.json",
-  "{home}/.config/opencode/opencode.json", "{home}/.config/opencode/opencode.jsonc",
 ]
 no_prompts = [{ file = "{home}/.config/opencode/opencode.json", key = "permission", value = "allow" }]
 

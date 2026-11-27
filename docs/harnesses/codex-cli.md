@@ -25,7 +25,7 @@ Source words: "docs" is [learn.chatgpt.com/docs/config-file/config-advanced](htt
 |---|---|---|---|
 | Config dir | `$CODEX_HOME`, default `~/.codex`: `config.toml`, `auth.json`, `.env`, `history.jsonl` (docs; measured) | same (docs; a logged-in Linux run was not measured) | unknown |
 | Session store | `sessions/YYYY/MM/DD/rollout-<local time>-<thread id>.jsonl`, one per thread, child threads too (source; measured) | same | unknown |
-| State database | `$CODEX_HOME/state_*.sqlite` and other SQLite files for logs, goals and thread edges (measured) | same | unknown |
+| State database | `$CODEX_HOME/state_*.sqlite` (thread edges), copied; the other SQLite files (logs, goals, memories, queue, thread history) are not (measured; source rust-v0.165.0) | same | unknown |
 | Logs / cache | inside `$CODEX_HOME`: `cache/`, `plugins/cache/`, `shell_snapshots/`, `thread-writer-locks/`, `tmp/arg0/`, `version.json` while the update check is on (measured) | same; the first start shallow-clones a plugin marketplace into `.tmp/plugins` with `git` (measured, no login) | unknown |
 | Env vars that move these | `CODEX_HOME` and `CODEX_SQLITE_HOME`; `HOME` moves user skills (`~/.agents/skills`) and the login shell's startup files (measured). The connector leaves `HOME` alone, so Codex in its private home still reads the participant's `~/.agents/skills` (measured 3 Nov 2026) | same | unknown |
 
@@ -33,7 +33,7 @@ The connector sets `CODEX_HOME` and `CODEX_SQLITE_HOME` to the isolated home. Ro
 
 ## 4. Session format and identity
 
-- Rollouts are JSONL, `{timestamp, type, payload}`, append-only, with a gap-free `ordinal` that stayed contiguous across a kill and a resume (measured). The connector reads every `rollout-*.jsonl` under `sessions` as it grows, and copies the SQLite files (`*.sqlite*`) as a set when the run ends. The state files hold the parent and child thread edges, so they are copied whole, whatever their size.
+- Rollouts are JSONL, `{timestamp, type, payload}`, append-only, with a gap-free `ordinal` that stayed contiguous across a kill and a resume (measured). The connector reads every `rollout-*.jsonl` under `sessions` as it grows, and copies the state database (`state_*.sqlite*`) whole as a set, about hourly while it changes and at every seal: it holds the parent and child thread edges. The logs database is not copied, because Codex writes it every few seconds and nothing reads it.
 - The thread id is a time-ordered UUID. It is not known at launch: the rollout file appears when the first message is submitted, and its name carries the start time and the id (measured). A typed prompt is a user-role message shaped like the harness's own context messages (measured on 0.153.0).
 - A subagent thread is its own rollout file; its first `session_meta` names the parent and its second replays the parent's (measured). A revert keeps the thread id and writes a new file with a `_<rollout id>` suffix, so watch the folder, not one file (docs).
 - `codex resume <id>` appends to the same rollout when it can take `thread-writer-locks/<id>.lock`; when it cannot, it silently becomes a new thread (measured).
@@ -64,7 +64,7 @@ The connector sets `CODEX_HOME` and `CODEX_SQLITE_HOME` to the isolated home. Ro
 ## 8. Things Goal Cup cannot isolate
 
 - Account state on OpenAI's side: plugins, apps, connectors and memory summaries arrive from the account.
-- A shared `CODEX_HOME` across runs carries older runs' sessions and the state databases, which the end-of-run copy takes whole.
+- A shared `CODEX_HOME` across runs carries older runs' sessions and the state database, which every copy takes whole.
 - Machine-wide managed configuration: path unknown. The connector seeds no `requirements.toml`.
 - A second Codex: another `CODEX_HOME`, an older Homebrew copy, or the Codex desktop app, which shares `CODEX_HOME` (docs).
 - The participant's `~/.agents/skills`: read by Codex in its private home, since the connector leaves `HOME` alone.

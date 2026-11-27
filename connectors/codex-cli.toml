@@ -15,9 +15,10 @@ host_hints = [
 ]
 hint_env = ["OPENAI_BASE_URL"]
 secret_files = ["{home}/auth.json", "{home}/.env"]
+# Only the state database (thread edges): logs_*.sqlite is rewritten every few seconds and nothing reads it.
 native = [
   { name = "sessions", root = "{home}/sessions", pattern = "**/rollout-*.jsonl" },
-  { name = "state", root = "{home}", pattern = "*.sqlite*", form = "final" },
+  { name = "state", root = "{home}", pattern = "state_*.sqlite*", form = "final" },
 ]
 no_prompts = [
   { file = "{home}/config.toml", key = "approval_policy", value = "never" },

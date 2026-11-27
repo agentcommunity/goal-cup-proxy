@@ -446,7 +446,7 @@ Also not recorded, or recorded less:
   passes through unread and is named on the end screen. Company proxy networks are not supported
   ([section 1](#1-what-you-need)).
 - **A token used as the user name of a URL with no password** may be recorded.
-- **SQLite harnesses** keep their data in a database; it is copied once, at the seal.
+- **SQLite harnesses** keep their data in a database; it is copied whole about once an hour while it changes, and at every seal. OpenCode's and OpenClaw's databases are not copied, because they hold your sign-in, and neither is Copilot's search index: their model calls are recorded.
 - **On Linux**, memory `goalcup` holds can reach swap that is not encrypted. It is the one place raw
   bytes can leave memory. Core dumps are switched off.
 
