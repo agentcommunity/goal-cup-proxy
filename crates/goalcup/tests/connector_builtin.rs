@@ -65,6 +65,8 @@ fn a_program_name_picks_its_connector() {
     assert_eq!(id("opencode2-cli"), "opencode-cli");
     // An old id without its `-cli`, as `--harness opencode2`.
     assert_eq!(id("opencode2"), "opencode-cli");
+    assert_eq!(id("homemade"), "homemade-cli");
+    assert_eq!(id("homemade-agent"), "homemade-cli");
 }
 
 #[test]

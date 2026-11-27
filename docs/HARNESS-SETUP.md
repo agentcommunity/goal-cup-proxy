@@ -90,6 +90,7 @@ OpenClaw (and OpenCode 2.x) the facts sheet says what to set yourself.
 | `kimi-code-cli` | `KIMI_CODE_HOME` | `config.toml`: `default_permission_mode = auto` | env |
 | `opencode-cli` | `XDG_*` | 1.x only: `.config/opencode/opencode.json`: `permission = allow` (a `[[versions]]` row) | env |
 | `qwen-cli` | `QWEN_HOME` | `settings.json`: `tools.approvalMode = yolo` | `settings.json`: `general.enableAutoUpdate = false` |
+| `homemade-cli` | `GOALCUP_TRACE_DIR` | | |
 | `cline-cli`, `crush-cli`, `goose-cli`, `openclaw-cli` | see the connector | | env, where the connector has one |
 
 Files are under the private home (`$GOALCUP_HOME/homes/<id>`).

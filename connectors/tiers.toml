@@ -76,6 +76,12 @@ os = "darwin-arm64"
 version = "0.22.5"
 os = "darwin-arm64"
 
+[homemade-cli]
+tier = "not verified"
+version = ""
+os = ""
+reason = "not yet run on the pad"
+
 [kilo-cli]
 tier = "not verified"
 version = ""

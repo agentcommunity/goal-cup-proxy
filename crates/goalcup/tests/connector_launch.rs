@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use goalcup::connector::{self, Env, LaunchPlan, Refusal};
+use goalcup::native::pattern;
 
 const PROXY_AND_CA: &[&str] = &[
     "HTTPS_PROXY",
@@ -218,6 +219,37 @@ fn a_version_line_not_understood_says_so() {
     let say = "goalcup could not understand the version line fakev --version printed, so it used \
         the rules for T 2.0.0.";
     assert_eq!(plan.version_notes, vec![say]);
+}
+
+/// A home-made loop starts bare and gets `--continue` on a resume, and is named by its program.
+/// Its trace folder is its own, made at plan time, whatever the participant exported; any
+/// `*.jsonl` below it is a session row that warns when absent, and nothing else is.
+#[test]
+fn a_home_made_loop_is_told_it_continues_and_its_jsonl_traces_are_session_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let start = finished("homemade-cli", &env(d, &[]), d);
+    assert!(start.argv.is_empty());
+    drop(start); // the plan holds the home's lock
+    let mut e = env(d, &[("GOALCUP_TRACE_DIR", "/elsewhere")]);
+    e.resume = true;
+    let plan = finished("homemade-cli", &e, d);
+    assert_eq!(plan.argv, ["--continue"]);
+    assert!(plan.connector.name.contains("homemade-agent"));
+    let traces = Path::new(&plan.env["GOALCUP_TRACE_DIR"]);
+    assert!(traces.starts_with(&plan.home) && traces.is_dir());
+    let row = |rel: &str| {
+        plan.native.0.iter().find(|r| {
+            traces
+                .join(rel)
+                .strip_prefix(&r.root)
+                .is_ok_and(|rest| pattern::parse(&r.pattern).unwrap().matches(rest))
+        })
+    };
+    for rel in ["run.jsonl", "2026-12-05/sub/agent-1.jsonl"] {
+        assert!(row(rel).is_some_and(|r| r.warn_missing), "{rel}");
+    }
+    assert!(row("run.log").is_none());
 }
 
 #[test]

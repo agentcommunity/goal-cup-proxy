@@ -1,0 +1,8 @@
+# A home-made agent loop, put on PATH as homemade-agent. Wire only, plus the *.jsonl traces the loop
+# writes below GOALCUP_TRACE_DIR. What the loop must do: docs/harnesses/homemade-cli.md.
+id = "homemade-cli"
+name = "Your own loop (homemade-agent)"
+program = "homemade-agent"
+resume = ["--continue"]
+home = { GOALCUP_TRACE_DIR = "{home}/traces" }
+native = [{ name = "traces", root = "{home}/traces", pattern = "**/*.jsonl" }]
