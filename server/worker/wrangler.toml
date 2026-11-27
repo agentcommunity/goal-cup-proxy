@@ -76,7 +76,9 @@ DEVICE_TOKEN_PER_MINUTE = "1200"
 
 # Secrets, set with `wrangler secret put` (never in this file):
 #   SUPABASE_URL         https://<project>.supabase.co
-#   SUPABASE_KEY         a Supabase secret API key whose role may only execute public.goal_cup_upload_*
+#   SUPABASE_KEY         this environment's own Supabase secret API key (sb_secret_...; any other kind is
+#                        refused at start). Sent on `apikey` only. It acts as service_role: the Worker
+#                        itself is what limits it to public.goal_cup_upload_*
 #   RESEND_API_KEY       optional: switches the run emails on (the website's Resend account)
 #   GITHUB_TOKEN         read-only; required in production and staging (the cron's judged-commit reads; it warns without it)
 #   RATE_LIMIT_KEY       random, at least 32 characters: HMAC key of the rate-limit keys (src/ratelimit.ts)

@@ -240,7 +240,7 @@ describe("the test approval is switched off or refused where it must be", () => 
   });
 
   test("TEST_APPROVAL_KEY outside local or STAGING is misconfigured, on every call", async () => {
-    const other = { EVENT_ID: "practice", DB_BACKEND: "supabase", TEST_APPROVAL_KEY: APPROVAL_KEY, SUPABASE_URL: "https://unused.invalid", SUPABASE_KEY: "unused" };
+    const other = { EVENT_ID: "practice", DB_BACKEND: "supabase", TEST_APPROVAL_KEY: APPROVAL_KEY, SUPABASE_URL: "https://unused.invalid", SUPABASE_KEY: "sb_secret_unused" };
     const worker = await startWorker(other);
     try {
       const api = new Client(worker.url);

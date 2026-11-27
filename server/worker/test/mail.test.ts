@@ -85,7 +85,7 @@ test("SupabaseDb: claimNotices -> goal_cup_upload_claim_notices, finishNotice ->
     calls.push({ url: String(input), body: JSON.parse(init?.body as string) });
     return new Response(JSON.stringify(replies.shift()), { status: 200 });
   }) as typeof fetch;
-  const db = new SupabaseDb("https://p.example", "k");
+  const db = new SupabaseDb("https://p.example", "sb_secret_k");
   assert.deepEqual(await db.claimNotices(20, "2026-10-15T12:00:00Z"), [notice(5, "m@example.test")]);
   await db.finishNotice(5, "sent", "m@example.test", "msg", "2026-10-15T12:00:01Z");
   assert.deepEqual(calls.map((c) => c.url.slice("https://p.example/rest/v1/rpc/".length)), ["goal_cup_upload_claim_notices", "goal_cup_upload_finish_notice"]);

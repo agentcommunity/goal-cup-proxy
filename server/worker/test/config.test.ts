@@ -152,7 +152,7 @@ function stubFetch(reply: (url: string, init: RequestInit) => Response) {
 test("SupabaseDb calls public.goal_cup_* through PostgREST RPC with the dedicated key", async () => {
   const cred = { member_id: "member-uuid", run_id: null, mode: "practice", expires_at: "2026-11-06T10:05:00Z" };
   const calls = stubFetch(() => new Response(JSON.stringify(cred), { status: 200, headers: { "content-type": "application/json" } }));
-  const db = new SupabaseDb("https://proj.supabase.example/", "service-key");
+  const db = new SupabaseDb("https://proj.supabase.example/", "sb_secret_test_key");
   assert.deepEqual(await db.credential("ab".repeat(32), "2026-11-06T09:06:00Z"), cred);
   const c = calls[0]!;
   assert.equal(c.url, "https://proj.supabase.example/rest/v1/rpc/goal_cup_upload_credential");
@@ -160,13 +160,13 @@ test("SupabaseDb calls public.goal_cup_* through PostgREST RPC with the dedicate
   const h = c.init.headers as Record<string, string>;
   assert.equal(h["content-profile"], undefined); // schema public: no profile header
   assert.equal(h["accept-profile"], undefined);
-  assert.equal(h.apikey, "service-key");
-  assert.equal(h.authorization, "Bearer service-key");
+  assert.equal(h.apikey, "sb_secret_test_key");
+  assert.equal(h.authorization, undefined); // the secret key goes on apikey only (H23)
   assert.deepEqual(JSON.parse(c.init.body as string), { p_credential_hash: "ab".repeat(32), p_now: "2026-11-06T09:06:00Z" });
 });
 
 test("SupabaseDb: unknown credential is null; errors become 502; odd answers become 502", async () => {
-  const db = new SupabaseDb("https://p.example", "k");
+  const db = new SupabaseDb("https://p.example", "sb_secret_k");
   stubFetch(() => new Response("null", { status: 200 }));
   assert.equal(await db.credential("x", "t"), null);
   stubFetch(() => new Response('{"message":"boom"}', { status: 500 }));
