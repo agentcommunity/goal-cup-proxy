@@ -135,6 +135,16 @@ fn no_native_row_takes_an_index_or_a_log_database() {
     assert!(takes(&load("codex-cli"), "{home}/state_5.sqlite"));
 }
 
+/// A long paste into Codex's `/goal` goes to a file in its home, and the goal is a pointer to it:
+/// both goal files are recorded, the images Codex copies beside them are not.
+#[test]
+fn codex_goal_files_are_recorded() {
+    let codex = connector::load("codex-cli", None).unwrap();
+    assert!(takes(&codex, "{home}/attachments/u1/pasted-text-1.txt"));
+    assert!(takes(&codex, "{home}/attachments/u1/goal-objective.md"));
+    assert!(!takes(&codex, "{home}/attachments/u1/image-1.png"));
+}
+
 fn load_text(text: &str) -> Result<connector::Connector, connector::ConnectorError> {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test-cli.toml");

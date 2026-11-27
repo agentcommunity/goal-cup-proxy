@@ -50,12 +50,12 @@ Source words: "docs" is [docs.openclaw.ai](https://docs.openclaw.ai/help/environ
 ## 7. Process model
 
 - `chat` runs the agent inside the CLI process, with no Gateway. Local mode "refuses to start while a Gateway or another embedded writer owns that state" ([docs](https://docs.openclaw.ai/cli/tui)).
-- The Gateway daemon is not started or stopped by goalcup. `openclaw gateway stop` acts on the account's native service (a systemd unit, a launchd agent), which `OPENCLAW_HOME` does not scope ([docs](https://docs.openclaw.ai/cli/gateway/service), [environment](https://docs.openclaw.ai/help/environment)). The connector has no `before` or `after`.
+- The Gateway daemon is not started or stopped by goalcup. `openclaw gateway stop` acts on the account's native service (a systemd unit, a launchd agent), which `OPENCLAW_HOME` does not scope ([docs](https://docs.openclaw.ai/cli/gateway/service), [environment](https://docs.openclaw.ai/help/environment)). The connector has no `before` or `after`. The connector's `first_screen` line asks the participant to stop a running Gateway, and to type `/new` at the start of a new run, because `chat` reattaches the rolling `main` session ([docs](https://docs.openclaw.ai/concepts/session), read 26 Nov 2026).
 
 ## 8. Things Goal Cup cannot isolate
 
 - A value the model restates can stay unmasked (stated loss for 1.0): OpenClaw's model restated a git-remote password in its own reasoning content and then resent that in every later request; the masker's `url_password` shape only matches inside `user:pw@`, and the bare copy is not an exact-value source, so it is not caught (MAC-LEARNINGS.md row 7a on the `archive` branch).
-- Subagents not recorded on the wire when they run in a Gateway started outside goalcup: that daemon keeps its own environment, so its model calls skip the run's proxy. In `chat` a spawn likely fails or reaches such a Gateway (source, unverified by run).
+- Subagents not recorded on the wire when they run in a Gateway started outside goalcup: that daemon keeps its own environment, so its model calls skip the run's proxy. In `chat` a spawn likely fails or reaches such a Gateway (source, unverified by run). The `first_screen` line says so.
 - Logs under `/tmp/openclaw`, shared by every home.
 - The managed browser and raw sockets (section 6).
 

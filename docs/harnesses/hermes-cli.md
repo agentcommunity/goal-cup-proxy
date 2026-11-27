@@ -66,6 +66,7 @@ The connector sets `HERMES_HOME` to the isolated home and leaves `HOME` alone.
 - Host credentials: Hermes reads credential files of other tools from `~/.codex` and `~/.claude` (source).
 - A second `HERMES_HOME`, a `--profile`, a Docker container or the desktop app pointed at a remote `hermes serve` is invisible to goalcup.
 - Machine-wide managed settings: unknown.
+- Bundled skills that start another harness. At every `hermes chat` start Hermes copies its bundled skills into `$HERMES_HOME/skills`, the isolated home. Among them, `claude-code` and `codex` say "Delegate coding to Claude Code CLI (features, PRs)" and "Delegate coding to OpenAI Codex CLI (features, PRs)" (source, v0.22.5 `hermes_cli/main.py`, `tools/skills_sync.py`, `skills/autonomous-ai-agents/`). Hermes gets no goal-cup skill, so nothing in its context states the one-harness rule. The connector's `first_screen` line asks the participant to forbid another harness in the prompt.
 
 ## 9. Quirks and open questions
 

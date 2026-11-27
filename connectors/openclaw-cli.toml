@@ -22,3 +22,4 @@ secret_files = [
   "{home}/.openclaw/.env", "{home}/.openclaw/openclaw.json",
   "{home}/.openclaw/agents/main/agent/openclaw-agent.sqlite", "{home}/.openclaw/state/openclaw.sqlite",
 ]
+first_screen = "Before your prompt: if an OpenClaw Gateway runs on this computer (openclaw gateway status), stop it with openclaw gateway stop; one started outside the run calls models unrecorded. On a new run, type /new first so OpenClaw does not carry on an earlier run's conversation; after goalcup continue, do not."

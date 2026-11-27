@@ -437,6 +437,7 @@ Also not recorded, or recorded less:
 - **Harnesses that ignore the proxy** are "not supported": session files and connections only.
 - **Wire only.** If a harness starts another harness as a subagent, that one's model requests are
   recorded and its session files are not.
+- **MCP servers Codex starts** get a cleared environment without the proxy, so a model call one of them makes is not recorded; the [Codex sheet](harnesses/codex-cli.md) says how to pass the proxy to one.
 - **A model server on this computer** (Ollama, LM Studio) is reached past the proxy and not
   recorded. The status block names it.
 - **An HTTP/2 feature goalcup cannot follow** is passed on unharmed and named as a gap. For an

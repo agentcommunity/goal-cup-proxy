@@ -23,5 +23,5 @@ native = [
   { name = "settings", root = "{home}/.factory/sessions", pattern = "**/*.settings.json", form = "snapshot" },
   { name = "sessions", root = "{home}/.factory/sessions", pattern = "**/*.jsonl" },
 ]
-first_screen = "If Droid asks you to sign in, do it now, before you type your prompt."
+first_screen = "If Droid asks you to sign in, do it now, before you type your prompt. Quit the Factory desktop app and any droid daemon you started before this run: they call models outside the recorder."
 no_prompts = [{ file = "{home}/.factory/settings.json", key = "sessionDefaultSettings.autonomyLevel", value = "high" }]

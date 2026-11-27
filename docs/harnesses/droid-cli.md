@@ -53,7 +53,7 @@ Source words: "docs" is [docs.factory.com](https://docs.factory.com/cli/configur
 ## 7. Process model
 
 - The REPL talks to a background daemon. When Droid starts it as its own child it inherits the launch environment (binary, unverified).
-- `droid daemon` has no `stop` subcommand ([docs](https://docs.factory.com/cli/configuration/cli-reference)), so the connector has no `before` or `after`. A daemon or the Factory desktop app started earlier keeps its own environment and calls outside the proxy.
+- `droid daemon` has no `stop` subcommand ([docs](https://docs.factory.com/cli/configuration/cli-reference)), so the connector has no `before` or `after`. A daemon or the Factory desktop app started earlier keeps its own environment and calls outside the proxy. The connector's `first_screen` line asks the participant to quit both before the run.
 - Exit codes and SIGTERM: unknown.
 
 ## 8. Things Goal Cup cannot isolate

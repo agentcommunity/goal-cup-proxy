@@ -37,6 +37,7 @@ The connector sets `CODEX_HOME` and `CODEX_SQLITE_HOME` to the isolated home. Ro
 - The thread id is a time-ordered UUID. It is not known at launch: the rollout file appears when the first message is submitted, and its name carries the start time and the id (measured). A typed prompt is a user-role message shaped like the harness's own context messages (measured on 0.153.0).
 - A subagent thread is its own rollout file; its first `session_meta` names the parent and its second replays the parent's (measured). A revert keeps the thread id and writes a new file with a `_<rollout id>` suffix, so watch the folder, not one file (docs).
 - `codex resume <id>` appends to the same rollout when it can take `thread-writer-locks/<id>.lock`; when it cannot, it silently becomes a new thread (measured).
+- `/goal` with a paste over 1,000 characters (the push block and a prompt usually are) writes the paste to `$CODEX_HOME/attachments/<uuid>/pasted-text-<n>.txt`, and an objective still over 4,000 characters to `goal-objective.md` in the same folder. The goal is then a pointer to that file (source, rust-v0.165.0 `tui/src/goal_files.rs`, `bottom_pane/chat_composer.rs`). The connector reads both files whole whenever they change; the images Codex copies there are not read.
 
 ## 5. Auth
 
@@ -69,6 +70,7 @@ The connector sets `CODEX_HOME` and `CODEX_SQLITE_HOME` to the isolated home. Ro
 - A second Codex: another `CODEX_HOME`, an older Homebrew copy, or the Codex desktop app, which shares `CODEX_HOME` (docs).
 - The participant's `~/.agents/skills`: read by Codex in its private home, since the connector leaves `HOME` alone.
 - No sandbox comes from goalcup: Codex runs with its own defaults and the participant's settings.
+- MCP servers Codex starts over stdio get a cleared environment: `HOME`, `PATH`, `SHELL`, `USER`, `LANG`, `LC_ALL`, `TERM`, `TMPDIR`, `TZ` and a few more, the CA variables, and the server's own `env` and `env_vars` (source, rust-v0.165.0 `rmcp-client/src/utils.rs`). `HTTPS_PROXY`, `NO_PROXY` and `CODEX_HOME` do not reach them. So a model call an MCP server makes is not recorded and no gap is written, and a `codex mcp-server` helper runs on the real `~/.codex`. To record such calls, add `env_vars = ["HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy", "NODE_USE_ENV_PROXY"]` to that server's `[mcp_servers.<name>]` in the `config.toml` of goalcup's Codex home. For a `codex mcp-server` helper, add `"CODEX_HOME"` to that list too, so it uses goalcup's Codex home.
 
 ## 9. Quirks and open questions
 

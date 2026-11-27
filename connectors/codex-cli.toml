@@ -19,6 +19,10 @@ secret_files = ["{home}/auth.json", "{home}/.env"]
 native = [
   { name = "sessions", root = "{home}/sessions", pattern = "**/rollout-*.jsonl" },
   { name = "state", root = "{home}", pattern = "state_*.sqlite*", form = "final" },
+  # A paste over 1,000 characters into /goal, and an objective over 4,000, go to attachments/<uuid>/ (rust-v0.165.0
+  # tui/src/goal_files.rs:17-20, :186-207; chat_composer.rs LARGE_PASTE_CHAR_THRESHOLD). Its images there are not read.
+  { name = "goal-paste", root = "{home}/attachments", pattern = "*/pasted-text-*.txt", form = "snapshot", warn_missing = false },
+  { name = "goal-objective", root = "{home}/attachments", pattern = "*/goal-objective.md", form = "snapshot", warn_missing = false },
 ]
 no_prompts = [
   { file = "{home}/config.toml", key = "approval_policy", value = "never" },
