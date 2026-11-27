@@ -154,9 +154,7 @@ pub fn problems(st: &Status, state: &State, cx: &Ctx<'_>) -> Vec<String> {
             at(st.last_native_at.as_deref()),
         );
         match (req, native) {
-            (Some(r), Some(n)) if cx.now.saturating_sub(r) >= 600 && n > r => {
-                add(text::quiet_proxy(cx.name))
-            }
+            (Some(r), Some(n)) if n.saturating_sub(r) >= 600 => add(text::quiet_proxy(cx.name)),
             (None, _) if w.model_requests == 0 && started.is_some_and(|s| cx.now >= s + 300) => {
                 add(text::no_request_yet())
             }

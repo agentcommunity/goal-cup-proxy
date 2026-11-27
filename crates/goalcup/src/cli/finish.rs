@@ -94,7 +94,7 @@ pub fn screen(
         head.push(text::RECOVERED.to_owned());
     }
     // Rule 1 by construction: every line that names a loss goes through `loss`, and "Nothing was
-    // lost." is the second line only when none did.
+    // lost." is the second line only when none did and a model request was written.
     let mut body = vec![match st.written.model_requests {
         0 => text::no_request_written(
             name,
@@ -157,7 +157,7 @@ pub fn screen(
     if let Some(o) = st.outlived.as_ref().filter(|o| o.count > 0) {
         body.push(text::outlived(name, o.count, &o.programs));
     }
-    if !lost {
+    if !lost && st.written.model_requests > 0 {
         body.insert(1, text::NOTHING_LOST.to_owned());
     }
     let mut out = String::new();

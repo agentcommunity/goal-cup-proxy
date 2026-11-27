@@ -1035,7 +1035,7 @@ fn advice(practice: bool) -> &'static str {
     if practice {
         "This is a practice run: it needs no repository, so there is nothing to push."
     } else {
-        "Push your work often; work not pushed when the run stops is lost."
+        "Push your work to main often: work not pushed to main when the run stops is not judged."
     }
 }
 
@@ -1071,6 +1071,12 @@ agent cannot push, and you may not send them later.";
 /// After the push lines on `continue` when `start` never wrote the first message.
 pub const PROMPT_AFTER_PUSH: &str =
     "If you gave goalcup start a --prompt, put it after these lines, in the same first message.";
+
+/// `continue` once an earlier part wrote a model request (D73, RULES "One prompt"). A harness's
+/// warm-up request counts, so a part can end with one written and the first message never sent.
+pub const KEEP_GOING: &str = "Type only \"keep going\" and press Enter, now and each time the \
+agent stops. Do not paste the first message or the push lines again. If you never sent your \
+first message, paste it once from first-message.txt in the run's folder.";
 
 pub fn first_message(file: &Path, copied: bool) -> String {
     let clip = if copied { "on your clipboard and " } else { "" };

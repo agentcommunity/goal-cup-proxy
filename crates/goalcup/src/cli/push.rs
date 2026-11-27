@@ -1,5 +1,6 @@
-//! The push block and the first message (PRD-10 section 8). The block is 0.7's `prompt_block`
-//! unchanged: the token stays in `.env.local` and the credential helper reads it at each push.
+//! The push block and the first message (PRD-10 section 8). The block makes `main` (renaming the
+//! branch of a folder already initialised), empties inherited github.com helpers, then adds one
+//! that reads the token from `.env.local` at each push.
 
 use std::collections::BTreeMap;
 use std::io::Write as _;
@@ -27,17 +28,24 @@ pub fn block(
     vec![
         format!("Push to {repo_url}"),
         format!(
-            "The token is GH_TOKEN in {token_file} in this folder. Never print it, and never write \
-             it into a file, a git setting or a remote address."
+            "The token is GH_TOKEN in {token_file} in this folder. Never print it, never write it \
+             into a file, a git setting or a remote address, and never delete, move or overwrite \
+             {token_file}."
         ),
-        "After git init, run:".to_string(),
+        "Run, in this folder:".to_string(),
+        "  git init -b main".to_string(),
+        "  git branch -M main".to_string(),
         format!("  git config user.name \"{name}\""),
         format!("  git config user.email \"{email}\""),
+        "  git config --replace-all credential.https://github.com.helper ''".to_string(),
         format!(
-            "  git config credential.https://github.com.helper '!f() {{ echo \
+            "  git config --add credential.https://github.com.helper '!f() {{ echo \
              username=x-access-token; echo \"password=$(sed -n s/^GH_TOKEN=//p \"{path}\")\"; }}; f'"
         ),
         format!("  git remote add origin {repo_url}.git"),
+        "Push your work to main often (git push -u origin main): only main is judged, not other \
+         branches or pull requests."
+            .to_string(),
     ]
 }
 
@@ -93,8 +101,6 @@ pub mod clipboard {
         "XAUTHORITY",
         "WAYLAND_DISPLAY",
         "XDG_RUNTIME_DIR",
-        "WSL_DISTRO_NAME",
-        "WSL_INTEROP",
     ];
 
     fn tool(vars: &BTreeMap<String, String>) -> Option<(std::path::PathBuf, Vec<&'static str>)> {
@@ -102,11 +108,6 @@ pub mod clipboard {
         let set = |v: &str| vars.get(v).is_some_and(|x| !x.is_empty());
         if cfg!(target_os = "macos") {
             return found("pbcopy").map(|p| (p, vec![]));
-        }
-        if super::super::folder::wsl_version().is_some()
-            && let Some(p) = found("clip.exe")
-        {
-            return Some((p, vec![]));
         }
         if set("WAYLAND_DISPLAY")
             && let Some(p) = found("wl-copy")

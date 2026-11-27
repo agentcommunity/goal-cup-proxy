@@ -36,8 +36,9 @@ The harnesses goalcup records are listed in [docs/harnesses/README.md](docs/harn
    ([the guide, step 5](docs/PARTICIPANT-GUIDE.md#5-a-practice-run)).
 4. **Make the repository, the token and the folder**, in this order. Create a new, empty, public
    GitHub repository (no README, `.gitignore` or licence). Make a fine-grained token for that one
-   repository: Contents read and write, expiry 30 days. Make a new folder holding `.env.local`
-   (exactly one line, `GH_TOKEN=<token>`) and a `.gitignore` with the line `.env*`. Write your
+   repository: Contents and Workflows read and write, expiry 30 days, ending after your start plus
+   7 days. Make a new folder holding `.env.local` (exactly one line, `GH_TOKEN=<token>`) and a
+   `.gitignore` with the line `.env*`. Write your
    prompt in a file outside that folder, for example `~/goal-prompt.txt`. Details:
    [the guide, step 6](docs/PARTICIPANT-GUIDE.md#6-your-run).
 5. **Start** inside the start window, in that folder:

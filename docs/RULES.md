@@ -194,9 +194,10 @@ disclosure and no-side-channel rules.
   run needs the token line (a practice run does not). Model keys there are for your agent's own
   product. The harness's own sign-in happened in setup and does not go there.
 - **One token kind: a GitHub fine-grained personal access token for the one cup repository, with
-  Contents read and write and an expiry of 30 days,** saved as `GH_TOKEN=...` in `.env.local`. You
-  make it after the repository exists. A broader token (a classic token, or one for all your
-  repositories) lets the agent reach more than you meant to give.
+  Contents and Workflows read and write and an expiry of 30 days that ends after your start plus 7
+  days,** saved as `GH_TOKEN=...` in `.env.local`. You make it after the repository exists. A
+  broader token (a classic token, or one for all your repositories) lets the agent reach more than
+  you meant to give.
 - **Delete the token after your run,** on GitHub, and delete `.env.local`.
 - Your agent can use any service and make its own accounts. What it does is in the record and is
   what counts.

@@ -182,8 +182,11 @@ Do the steps in this order: a token for one repository needs the repository to e
 2. **Make a token for it.** On GitHub, Settings, Developer settings, Fine-grained personal access
    tokens, Generate new token:
    - Repository access: **only select repositories**, and pick that one repository.
-   - Repository permissions, **Contents: Read and write**. Read-only fails the push with a 403.
-   - Expiration: **30 days**.
+   - Repository permissions, **Contents: Read and write** and **Workflows: Read and write**.
+     Read-only Contents fails the push with a 403. Without Workflows, GitHub refuses a push that
+     adds or changes a file in `.github/workflows/`, and every later push that still carries it.
+   - Expiration: **30 days**. The date GitHub shows must be after your start plus 7 days, or the
+     token stops working during the run, and you may not replace it then.
 
    Copy it (it starts `github_pat_`). The agent pushes with this token, and it reaches that one
    repository only. The agent still runs as you and can read what your programs can read, so keep no
@@ -212,7 +215,9 @@ Do the steps in this order: a token for one repository needs the repository to e
 
    `pbpaste` is the Mac clipboard; on Linux use `xclip -o -selection clipboard` (or `wl-paste`). Under
    WSL2 the Windows clipboard adds a carriage return, which is refused, so use
-   `"$(powershell.exe Get-Clipboard | tr -d '\r')"` in its place. The line must be exactly
+   `"$(powershell.exe Get-Clipboard | tr -d '\r')"` in its place. Over SSH, or with none of these
+   tools, run `(umask 077; read -rs t; printf 'GH_TOKEN=%s\n' "$t" > .env.local)` instead, paste the
+   token (it does not show) and press Enter. The line must be exactly
    `GH_TOKEN=<token>`: no `export`, no quotes, no spaces. Have it in the file before you start: the
    recorder hides that exact value everywhere, and a token added later is covered by its shape only.
    Keep the folder out of any Git repository, off a Windows drive under WSL2, and out of Desktop,
@@ -241,24 +246,32 @@ host list comes from a file (not verified), and a sleep warning if needed. The l
 
 The harness opens in the project folder. `goalcup` builds your **first message**: the push block,
 a blank line, then your prompt. It is on your clipboard when a tool for that exists (`pbcopy` on a
-Mac, `wl-copy` or `xclip` on Linux, `clip.exe` under WSL2) and always in `first-message.txt` in the
+Mac, `wl-copy` or `xclip` on Linux and on WSL2 with WSLg) and always in `first-message.txt` in the
 run's folder; the screen gives the path. Answer the harness's own first screens, then **paste it
 once as your first message and press Enter**. Without `--prompt` the screen prints the push block and
 says your first message must start with it. The block looks like this; yours differs, and the
-`credential` line is one line:
+long `credential` line is one line:
 
 ```
   Push to https://github.com/<user>/<name>
-  The token is GH_TOKEN in .env.local in this folder. Never print it, and never write it into a file, a git setting or a remote address.
-  After git init, run:
+  The token is GH_TOKEN in .env.local in this folder. Never print it, never write it into a file, a git setting or a remote address, and never delete, move or overwrite .env.local.
+  Run, in this folder:
+    git init -b main
+    git branch -M main
     git config user.name "Goal Cup"
     git config user.email "goalcup@agentcommunity.org"
-    git config credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$(sed -n s/^GH_TOKEN=//p "/full/path/to/my-cup-run/.env.local")"; }; f'
+    git config --replace-all credential.https://github.com.helper ''
+    git config --add credential.https://github.com.helper '!f() { echo username=x-access-token; echo "password=$(sed -n s/^GH_TOKEN=//p "/full/path/to/my-cup-run/.env.local")"; }; f'
     git remote add origin https://github.com/<user>/<name>.git
+  Push your work to main often (git push -u origin main): only main is judged, not other branches or pull requests.
 ```
 
-The block is how the agent learns the repository and how to push; `goalcup` writes nothing into
-your project folder, and the agent runs `git init` and those lines itself. Never paste the token into
+The block is how the agent learns the repository, the branch and how to push; `goalcup` writes
+nothing into your project folder, and the agent runs those lines itself. `git branch -M main`
+puts the folder on `main` even if it was already a repository on another branch. Its first push
+makes `main` the repository's default branch, the one that is judged. The empty `credential`
+line drops any helper your own git config names for github.com, so the agent's pushes over https
+use this token only. Never paste the token into
 your prompt. After the first message you may type only "keep going", when the agent has stopped
 ([RULES](RULES.md#one-prompt-then-only-keep-going)).
 
@@ -345,12 +358,15 @@ the last part died with the computer, it closes that part first and says so. It 
 nothing, if the last part is still recording, if the agent from the last part still runs, if the
 time is up, if the run was continued somewhere else, or if `--connector` or `--hosts` differs from
 what the first part used. If the earlier parts wrote model requests or session files, it resumes the
-harness's last conversation; if that fails at once it opens a new one. When it resumes, type only
-"keep going" and do not paste the first message again. When a new conversation starts (nothing was
-written earlier, or the resume failed at once and goalcup says "Starting a new ... session"), the
-first message is offered again: paste it once and press Enter, as goalcup says. A new conversation can still
-push if the agent's `git config` and `git remote add` lines are saved in the repository's
-`.git/config`. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
+harness's last conversation; if that fails at once it opens a new one. Once an earlier part wrote
+a model request, type only "keep going", as goalcup says, even in a new conversation: do not paste
+the first message or the push lines again ([RULES](RULES.md#one-prompt-then-only-keep-going)). If
+the agent ran the push block's lines, they are saved in the repository's `.git/config`, so a new
+conversation can still push. If you never sent your first message, paste it once from
+`first-message.txt` in the run's folder (`runs/<run>/` in goalcup's folder; the start screen gave
+its path): a harness may send a warm-up request before your prompt, and it counts. While no model
+request was written, your prompt may not have been sent: goalcup offers the first message again,
+so paste it once and press Enter. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
 current part (it asks first; `--yes` skips that). The run stays open and `continue` goes on.
 
 **Time left.** `goalcup time-left` prints when the run stops, from the server's last word; the agent
@@ -384,11 +400,12 @@ Details for support are in "/home/you/.config/goalcup/runs/<run>/<part>/goalcup.
 - The first lines say the agent has exited and, if the run is still open, how to go on with
   `goalcup continue`. A part that ended without `goalcup` (the computer stopped) says so.
 - **Requests to model hosts written**, by host. With none: "No model request was written."
-- **Nothing was lost.** is the second line only when there was no gap, no off time, no tunnel to a
-  model host, no byte hidden for lack of time, no cut file and no byte after the stop. Otherwise each
-  loss has its line with numbers: requests with missing parts, bytes not recorded, gaps of unknown
-  size, recording off, files still growing at the end, bytes that programs the agent started sent
-  after the part ended, and programs still running at the end (which `goalcup` did not stop).
+- **Nothing was lost.** is the second line only when a model request was written and there was no
+  gap, no off time, no tunnel to a model host, no byte hidden for lack of time, no cut file and no
+  byte after the stop. Otherwise each loss has its line with numbers: requests with missing parts,
+  bytes not recorded, gaps of unknown size, recording off, files still growing at the end, bytes
+  that programs the agent started sent after the part ended, and programs still running at the end
+  (which `goalcup` did not stop).
 - **Passed through unread** lists the hosts the agent connected to that `goalcup` does not decrypt,
   by size, five at most and the rest as "and N more hosts". A host on the model list that was passed
   through is always named on its own line with the reason in words
