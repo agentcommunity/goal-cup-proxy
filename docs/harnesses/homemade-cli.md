@@ -86,9 +86,9 @@ Every `*.jsonl` file below that folder is recorded as it grows, masked like any 
 alongside the model calls; other file types there are not. A loop that writes none gets a
 `goalcup status` line saying no traces file was found, and its review has only the model calls.
 The folder is kept between parts, so `--continue` can reload from it. It is also kept between runs
-(it is in the loop's goalcup home, not your project), and every `*.jsonl` in it is recorded from its
-start, old files included: remove earlier runs' files before a competition run, and start a new file
-at each start. Never write a key or an
+(it is in the loop's goalcup home, not your project). An old `*.jsonl` that does not change is not
+recorded, but one your loop changes is recorded from its first byte, earlier runs' lines included:
+start a new file at each start, and never append to an old one. Never write a key or an
 `Authorization` header into a trace: goalcup masks your exported key variables, the `.env` files in
 your project folder and known key shapes, not a key your loop reads from its own config.
 
