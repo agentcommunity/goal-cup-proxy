@@ -36,7 +36,8 @@ fn show(p: Value) -> String {
 }
 
 /// Rule 1: the "nothing was lost" claim with no loss, and never with any one, whose line takes its
-/// place. An unlisted tunnel is not a loss.
+/// place. An unlisted tunnel is not a loss, but with no model request written the claim is never
+/// made.
 #[test]
 fn nothing_lost_only_without_any_loss() {
     let tunnel = |listed: Value| {
@@ -48,6 +49,8 @@ fn nothing_lost_only_without_any_loss() {
     let cases = [
         ("no loss", json!({}), false),
         ("unlisted tunnel", tunnel(Value::Null), false),
+        ("no request, unlisted tunnel", json!({"written": {"model_requests": 0,
+            "tunnel_hosts": {"t.example.org": {"conns": 2, "up": 5, "down": 9}}}}), true),
         ("listed tunnel", tunnel(json!("pinned")), true),
         ("gap", json!({"written": {"gaps": 1}}), true),
         ("gap of unknown size", json!({"written": {"gaps": 1, "lost_unknown": 1}}), true),

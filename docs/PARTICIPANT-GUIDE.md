@@ -387,11 +387,12 @@ Details for support are in "/home/you/.config/goalcup/runs/<run>/<part>/goalcup.
 - The first lines say the agent has exited and, if the run is still open, how to go on with
   `goalcup continue`. A part that ended without `goalcup` (the computer stopped) says so.
 - **Requests to model hosts written**, by host. With none: "No model request was written."
-- **Nothing was lost.** is the second line only when there was no gap, no off time, no tunnel to a
-  model host, no byte hidden for lack of time, no cut file and no byte after the stop. Otherwise each
-  loss has its line with numbers: requests with missing parts, bytes not recorded, gaps of unknown
-  size, recording off, files still growing at the end, bytes that programs the agent started sent
-  after the part ended, and programs still running at the end (which `goalcup` did not stop).
+- **Nothing was lost.** is the second line only when a model request was written and there was no
+  gap, no off time, no tunnel to a model host, no byte hidden for lack of time, no cut file and no
+  byte after the stop. Otherwise each loss has its line with numbers: requests with missing parts,
+  bytes not recorded, gaps of unknown size, recording off, files still growing at the end, bytes
+  that programs the agent started sent after the part ended, and programs still running at the end
+  (which `goalcup` did not stop).
 - **Passed through unread** lists the hosts the agent connected to that `goalcup` does not decrypt,
   by size, five at most and the rest as "and N more hosts". A host on the model list that was passed
   through is always named on its own line with the reason in words
