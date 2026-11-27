@@ -165,7 +165,7 @@ fn a_qwen_record_names_build_rules_and_unread_lines() {
     }));
     assert_eq!(t.harness_semver.as_deref(), Some("0.27.0"));
     assert_eq!(t.version_row, None);
-    assert_eq!(t.native_checked_on.as_deref(), Some("0.26.4"));
+    assert_eq!(t.native_checked_on, Some(common::checked("qwen-cli")));
     assert_eq!(t.lines_unread, 1);
     let base = call_table(&entry("qc-v0"));
     let calls = |t: &CallTable| -> Vec<_> {
