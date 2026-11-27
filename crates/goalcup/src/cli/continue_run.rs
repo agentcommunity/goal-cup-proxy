@@ -82,6 +82,14 @@ pub fn resume_from_files(run_dir: &Path, entries: &[EntryFacts]) -> bool {
     !failed && written > 0
 }
 
+/// Whether an earlier part's sealed `status.json` counts a model request.
+fn prompted(run_dir: &Path, entries: &[EntryFacts]) -> bool {
+    entries.iter().any(|e| {
+        read_json::<Status>(&status_json(&run_dir.join(&e.id)))
+            .is_some_and(|s| s.mode == Mode::Sealed && s.written.model_requests > 0)
+    })
+}
+
 fn refuse(text: impl Into<String>) -> Stop {
     Stop {
         text: text.into(),
@@ -311,7 +319,7 @@ pub fn prepare(
     lines.extend(plan.effective.first_screen.clone());
     lines.extend(first_message(
         &found.run_dir,
-        resumed,
+        prompted(&found.run_dir, &sj.entries),
         sj.repo.as_deref(),
         project,
         vars,
@@ -353,17 +361,18 @@ pub fn prepare(
     })
 }
 
-/// A new session has not seen the first message: it is on the clipboard again. A start stopped
-/// before it wrote one (Ctrl-C after the open, or no prompt) still owes the push lines.
+/// While no model request was written, the first message may not have been sent: it is offered
+/// again (the push lines alone when `start` never wrote it). After one, the participant types only
+/// "keep going" (D73).
 fn first_message(
     run_dir: &Path,
-    resumed: bool,
+    prompted: bool,
     repo: Option<&str>,
     project: &Path,
     vars: &BTreeMap<String, String>,
 ) -> Vec<String> {
-    if resumed {
-        return vec![];
+    if prompted {
+        return vec![text::KEEP_GOING.to_owned()];
     }
     let file = run_dir.join("first-message.txt");
     match std::fs::read_to_string(&file) {

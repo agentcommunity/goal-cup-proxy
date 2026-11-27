@@ -345,12 +345,15 @@ the last part died with the computer, it closes that part first and says so. It 
 nothing, if the last part is still recording, if the agent from the last part still runs, if the
 time is up, if the run was continued somewhere else, or if `--connector` or `--hosts` differs from
 what the first part used. If the earlier parts wrote model requests or session files, it resumes the
-harness's last conversation; if that fails at once it opens a new one. When it resumes, type only
-"keep going" and do not paste the first message again. When a new conversation starts (nothing was
-written earlier, or the resume failed at once and goalcup says "Starting a new ... session"), the
-first message is offered again: paste it once and press Enter, as goalcup says. A new conversation can still
-push if the agent's `git config` and `git remote add` lines are saved in the repository's
-`.git/config`. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
+harness's last conversation; if that fails at once it opens a new one. Once an earlier part wrote
+a model request, type only "keep going", as goalcup says, even in a new conversation: do not paste
+the first message or the push lines again ([RULES](RULES.md#one-prompt-then-only-keep-going)). If
+the agent ran the push block's lines, they are saved in the repository's `.git/config`, so a new
+conversation can still push. If you never sent your first message, paste it once from
+`first-message.txt` in the run's folder (`runs/<run>/` in goalcup's folder; the start screen gave
+its path): a harness may send a warm-up request before your prompt, and it counts. While no model
+request was written, your prompt may not have been sent: goalcup offers the first message again,
+so paste it once and press Enter. Do not delete or move the project folder. `goalcup seal` stops the agent and ends the
 current part (it asks first; `--yes` skips that). The run stays open and `continue` goes on.
 
 **Time left.** `goalcup time-left` prints when the run stops, from the server's last word; the agent

@@ -342,14 +342,17 @@ fn a_run_whose_time_is_up_is_not_continued() {
 }
 
 /// What `continue` prints for a run of `mode` naming `repo` whose start was stopped with Ctrl-C
-/// after the open (no part folder, no `first-message.txt`), or whose part recorded `written`.
-/// A built-in connector on an empty PATH: nothing real runs and no clipboard tool is found.
-fn shown(mode: &str, repo: Option<&str>, written: Option<Value>) -> String {
+/// after the open (no part folder, no `first-message.txt`).
+fn shown(mode: &str, repo: Option<&str>) -> String {
     let mut w = World::new(None);
-    w.part(1, false, written.clone().map(World::sealed));
-    if written.is_none() {
-        std::fs::remove_dir_all(w.run_dir().join(e(1))).unwrap();
-    }
+    w.part(1, false, None);
+    std::fs::remove_dir_all(w.run_dir().join(e(1))).unwrap();
+    printed(&w, mode, repo)
+}
+
+/// What `continue` prints for `w` as a run of `mode` naming `repo`. A built-in connector on an
+/// empty PATH: nothing real runs and no clipboard tool is found.
+fn printed(w: &World, mode: &str, repo: Option<&str>) -> String {
     std::fs::write(w.project.join(".env.local"), "GH_TOKEN=x\n").unwrap();
     let mut sj: Value = serde_json::from_slice(&w.server_json()).unwrap();
     sj["mode"] = json!(mode);
@@ -371,19 +374,50 @@ fn shown(mode: &str, repo: Option<&str>, written: Option<Value>) -> String {
 
 #[test]
 fn the_push_lines_come_back_after_a_ctrl_c_after_the_open() {
-    let said = shown("competition", Some("a/b"), None);
+    let said = shown("competition", Some("a/b"));
     assert!(said.contains(text::PUSH_FRAME), "{said}");
     assert!(said.contains(text::PROMPT_AFTER_PUSH), "{said}");
     assert!(said.contains("https://github.com/a/b"), "{said}");
-    let said = shown("practice", None, None);
+    let said = shown("practice", None);
     assert!(!said.contains(text::PUSH_FRAME), "{said}");
-    // A resumed session has already seen them.
-    let said = shown(
-        "competition",
-        Some("a/b"),
-        Some(json!({"model_requests": 2})),
+}
+
+/// D73: the first message (or the push lines) comes back only while no model request was written,
+/// resumed or not. After one, continue says to type only "keep going", also when the resume failed
+/// at once and a new conversation opens.
+#[test]
+fn the_first_message_comes_back_only_while_no_model_request_was_written() {
+    let after = |parts: &[(bool, Value)]| {
+        let mut w = World::new(None);
+        for (n, (resumed, st)) in (1..).zip(parts) {
+            w.part(n, *resumed, Some(st.clone()));
+        }
+        let file = w.run_dir().join("first-message.txt");
+        std::fs::write(&file, "Push to https://github.com/a/b\n\nBuild it.").unwrap();
+        (
+            printed(&w, "competition", Some("a/b")),
+            file.display().to_string(),
+        )
+    };
+    let requests = World::sealed(json!({"model_requests": 5}));
+    let (out, file) = after(&[
+        (false, requests.clone()),
+        (true, ran(5, json!({"code": 1}))),
+    ]);
+    assert!(
+        out.contains(text::KEEP_GOING) && !out.contains(&file),
+        "failed resume: {out}"
     );
-    assert!(!said.contains(text::PUSH_FRAME), "{said}");
+    let (out, file) = after(&[(false, requests)]);
+    assert!(
+        out.contains(text::KEEP_GOING) && !out.contains(&file),
+        "resumed: {out}"
+    );
+    let (out, file) = after(&[(false, World::sealed(json!({"native_files": 2})))]);
+    assert!(
+        out.contains(&file) && !out.contains(text::KEEP_GOING),
+        "session file only: {out}"
+    );
 }
 
 /// A build that changed since the last part is said and recorded as one `version_read` note.
