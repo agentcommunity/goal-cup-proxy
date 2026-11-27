@@ -19,8 +19,9 @@ on a tag. "By hand" means nothing runs it for you. The header of each script has
 
 The pad runs a real harness in a sandbox box against the staging Worker, a local one or none, and
 decides whether the record is right. It is also how a harness is added. Nobody but a maintainer
-or a harness builder runs it; neither the gate nor CI nor release CI does, and it needs the
-sandbox and model keys from the environment (names only in `pad.toml`).
+or a harness builder runs it; neither the gate nor CI nor release CI does. In a sandbox it needs
+the sandbox and model keys from the environment (names only in `pad.toml`); with `where = "here"`
+it copies each model key from `~/.pad-keys/<key name>` (mode 0600, outside the checkout).
 
 - `pad <settings file>` (a file from `runs/`): walks the steps of one run, a limit on each, always cleans up, prints one table. Exit 0 every row PASS, 1 any FAIL, 3 any INCONCLUSIVE.
 - `pad-run <run dir> <step>`: the half that runs inside the box, one step at a time. It prints no key.

@@ -17,6 +17,6 @@
 
 Follow `skills/adding-a-capture-harness`.
 
-- [ ] The connector is data only (`connectors/<id>.toml`); no `.rs` file is changed.
-- [ ] The pad's `row.json` for this connector is attached or pasted, and its row is PASS.
-      Claim only what passed.
+- [ ] The connector is data only (`connectors/<id>.toml`, plus one `crates/goalcup/tests/fixtures/version-lines.tsv` line per `[[versions]]` row); no `.rs` file is changed.
+- [ ] The pad's `row.json` for this connector is attached or pasted, and it meets the bar in the
+      skill's step 3 (the result is INCONCLUSIVE with the server off). Claim only what passed.
