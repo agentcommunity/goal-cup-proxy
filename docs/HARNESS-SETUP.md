@@ -85,7 +85,7 @@ OpenClaw (and OpenCode 2.x) the facts sheet says what to set yourself.
 | `amp-cli` | `HOME`, `XDG_*` | | env |
 | `copilot-cli` | `COPILOT_HOME` | `settings.json`: `defaultPermissionMode = allow-all` | env |
 | `droid-cli` | `FACTORY_HOME_OVERRIDE` | `.factory/settings.json`: `sessionDefaultSettings.autonomyLevel = high` | env |
-| `gemini-cli` | `GEMINI_CLI_HOME` | | `.gemini/settings.json`: `general.enableAutoUpdate = false` |
+| `gemini-cli` | `GEMINI_CLI_HOME` | | `.gemini/settings.json`: `general.enableAutoUpdate = false`, `ide.enabled = false`, `ide.hasSeenNudge = true` |
 | `kilo-cli` | `XDG_*` | `.config/kilo/opencode.json`: `permission = allow` | env |
 | `kimi-code-cli` | `KIMI_CODE_HOME` | `config.toml`: `default_permission_mode = auto` | env |
 | `opencode-cli` | `XDG_*` | 1.x only: `.config/opencode/opencode.json`: `permission = allow` (a `[[versions]]` row) | env |

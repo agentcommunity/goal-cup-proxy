@@ -63,6 +63,7 @@ The connector sets `CLAUDE_CONFIG_DIR` to the isolated home and leaves `HOME` al
 - Managed settings override every settings file; their path per OS: unknown.
 - Background agents (`claude agents`, `--bg`, `/background`) run under a per-user supervisor that outlives the shell and keeps the environment of whichever shell started it first (docs). The connector sets `CLAUDE_CODE_DISABLE_AGENT_VIEW=1`; a supervisor started earlier outside goalcup is not under that control.
 - A second `claude` under another config folder shows only as a second project folder.
+- An editor connection. In a VS Code, Cursor or JetBrains terminal Claude Code connects to the editor by itself and adds the open file or selection to every prompt; before 2.1.318 it also installs its extension there. The connector sets `CLAUDE_CODE_AUTO_CONNECT_IDE=false` and `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` ([env-vars](https://code.claude.com/docs/en/env-vars), read 26 Nov 2026). A `/ide` typed in the run still connects, and counts as typing.
 
 ## 9. Quirks and open questions
 

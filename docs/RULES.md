@@ -224,7 +224,7 @@ disclosure and no-side-channel rules.
   Codex app's thread tools (`send_message_to_thread`, `create_thread`, `fork_thread`,
   `handoff_thread`) and its queued follow-up mode; OpenCode's `POST /session/:id/shell`, which runs a
   real command and is invisible to hook-based recording; Hermes gateway, serve and cron delivery;
-  Claude Remote Control and Channels. A message sent through them is a human message like any other.
+  Claude Remote Control and Channels; an editor (IDE) connection, such as Claude Code's `/ide` or Gemini CLI's IDE companion, which adds your open files and selection to the agent's context (goalcup switches the automatic connection off for both). A message sent through them is a human message like any other.
   Goal Cup Proxy records it where it can see it, and the review treats one it cannot see as unexplained.
 - The human may not write code, answer questions, make product decisions, approve actions or edit the
   product (except the harness setup before the first prompt, above).

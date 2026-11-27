@@ -141,7 +141,7 @@ provider's usage page.
 
 **Tools on PATH.** The harness gets the environment of the terminal you run `goalcup start` in,
 `PATH` included, minus proxy and certificate variables, plus the variables that move its own config
-and data into its Goal Cup home. Install what the agent needs (for example `rg`) first. In a practice run, ask the agent to run `goalcup time-left` to see it works.
+and data into its Goal Cup home. Install what the agent needs (for example `rg`) first. In a practice run, ask the agent to run `goalcup time-left` to see it works. Claude Code and Gemini CLI do not connect to your editor during the run, even in its terminal; typing `/ide` in Claude Code connects it, and that counts as typing.
 
 **First-run screens.** Before your prompt a harness may show its own screens (a sign-in, a
 trust-this-folder question, a wizard). Answering them is allowed; it is not a message to the agent.

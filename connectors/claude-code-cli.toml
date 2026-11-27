@@ -5,7 +5,7 @@ program = "claude"
 checked = "2.1.312"
 resume = ["--continue"]
 home = { CLAUDE_CONFIG_DIR = "{home}" }
-env = { DISABLE_AUTOUPDATER = "1", DISABLE_UPDATES = "1", CLAUDE_CODE_DISABLE_AGENT_VIEW = "1", CLAUDE_CODE_RETRY_WATCHDOG = "1" }
+env = { DISABLE_AUTOUPDATER = "1", DISABLE_UPDATES = "1", CLAUDE_CODE_DISABLE_AGENT_VIEW = "1", CLAUDE_CODE_RETRY_WATCHDOG = "1", CLAUDE_CODE_AUTO_CONNECT_IDE = "false", CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL = "1" }
 unset = ["CLAUDE_CODE_CERT_STORE"]
 refuse_if_set = [
   { file = "{home}/settings.json", keys = ["env.HTTPS_PROXY", "env.https_proxy", "env.NO_PROXY", "env.no_proxy", "env.CLAUDE_CODE_CERT_STORE", "env.NODE_EXTRA_CA_CERTS"] },

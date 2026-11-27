@@ -62,6 +62,7 @@ The connector sets `GEMINI_CLI_HOME` to the isolated home, so every `~/.gemini` 
 - `cloudcode-pa.googleapis.com` mixes model calls with sign-in calls (section 6).
 - `--sandbox` runs tools in a container with its own proxy setting (default `http://localhost:8877`) (package), and the browser agent starts Chrome with a profile under `~/.gemini/cli-browser-profile/` (docs).
 - The system keyring, if sign-in is kept there.
+- An editor connection. In a VS Code terminal Gemini CLI offers its IDE companion at first start; once it is on, it adds open files, the cursor and up to 16 KB of selection to turns as user-role parts (upstream `client.ts`, `AppContainer.tsx`). The connector's `update_off` rows write `ide.enabled = false` and `ide.hasSeenNudge = true` at every start, so the offer never shows and a yes to it is undone.
 
 ## 9. Quirks and open questions
 
