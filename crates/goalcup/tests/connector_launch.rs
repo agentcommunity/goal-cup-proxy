@@ -650,3 +650,24 @@ fn a_continue_uses_each_harness_s_documented_resume_form() {
         assert_eq!(finished(id, &e, d).argv, resume, "{id} continue");
     }
 }
+
+/// Git fails instead of asking for a login on the harness's screen. Nothing of the participant's
+/// git or SSH login is removed: the SSH agent socket and the tokens Copilot signs in with pass
+/// (P1-container-run-5, decision 6).
+#[test]
+fn git_never_asks_on_the_screen_and_the_login_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let d = dir.path();
+    let theirs = [
+        ("SSH_AUTH_SOCK", "/tmp/agent.sock"),
+        ("GIT_TERMINAL_PROMPT", "1"),
+        ("GH_TOKEN", "participant-gh-token"),
+        ("GITHUB_TOKEN", "participant-github-token"),
+    ];
+    let plan = finished("copilot-cli", &env(d, &theirs), d);
+    let v = &plan.env;
+    assert_eq!(v["GIT_TERMINAL_PROMPT"], "0");
+    for (name, value) in [theirs[0], theirs[2], theirs[3]] {
+        assert_eq!(v[name], value, "{name}");
+    }
+}

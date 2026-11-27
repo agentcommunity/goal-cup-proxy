@@ -53,6 +53,7 @@ The harness's environment is the participant's, with:
 | `HTTPS_PROXY`, `https_proxy` | `http://127.0.0.1:<port>`, the recording proxy |
 | `NO_PROXY`, `no_proxy` | `127.0.0.1,localhost,::1` |
 | `NODE_USE_ENV_PROXY` | `1` |
+| `GIT_TERMINAL_PROMPT` | `0`: git fails instead of asking for a login on the harness's screen |
 | `NODE_EXTRA_CA_CERTS` | the run CA, `run-ca.pem` |
 | `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE` | `bundle.pem`: the run CA, then the OS roots |
 | each name in the connector's `ca_env` | the run CA, `run-ca.pem` |
