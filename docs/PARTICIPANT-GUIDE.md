@@ -67,12 +67,14 @@ It starts no run and needs no GitHub. Run it again whenever it names something t
    `.env.local` is not for it. To use a gateway, set it up inside that home as you would without
    Goal Cup: nothing else is needed, and the gateway's host is recorded like any model service.
 3. **Settings.** Setup always switches the harness's auto-update off in its home where the harness
-   has a setting for it (for example Codex, Hermes, Gemini CLI and Qwen Code). Then it asks one
-   question: whether to set the harness to never stop and ask for approval. Say yes: nobody may
-   answer a prompt during the run, and a harness that waits for you waits until the deadline. A line
-   then says what it set and where. With `--yes` the question is skipped and the answer is yes, and
-   setup asks and opens nothing else. If you say no, set it yourself
-   ([section 4](#4-your-harness-the-list-and-the-tiers)).
+   has a setting for it (for example Codex, Hermes, Gemini CLI and Qwen Code). Then, for a harness
+   that stops to ask, it asks one question: whether to set it to never stop and ask for approval.
+   Say yes: nobody may answer a prompt during the run, and a harness that waits for you waits until
+   the deadline. Where the harness has a setting, setup writes it in that home; where it has only a
+   launch flag (Gemini CLI, Crush, OpenCode 2), `goalcup start` and `goalcup continue` add the flag.
+   A line then says what setup set in that home, and where. With `--yes` the question is skipped
+   and the answer is yes, and setup asks and opens nothing else. If you say no, run `goalcup setup`
+   again and answer Y before your run.
 4. **This computer.** One warning line each, none of which stops setup: the computer may sleep
    (keep it on mains power, lid open; under WSL2 set Windows sleep to Never), the server cannot be
    reached, `git` is missing, or the WSL problem above. Then the paragraph of
@@ -115,10 +117,11 @@ harness; a fact about one harness is in its row or sheet in `docs/harnesses/`.
 
 **Run without permission prompts.** A prompt waits for an answer, answering is typing, and you may
 type only "keep going". On the test day a Codex run spent 8.7 of its 10 minutes at an approval
-prompt. Setup writes the no-prompt values into the harness's home when you say yes
-([section 3](#3-set-up)); check in the practice run that the agent commits without asking. The agent
-then changes anything your user can, so use a machine or container you let it change. Run the harness
-as a normal user: Claude Code refuses to skip prompts as root.
+prompt. Setup writes the no-prompt values into the harness's home, or has goalcup add the
+harness's launch flag, when you say yes ([section 3](#3-set-up)); check in the practice run that
+the agent commits without asking. The agent then changes anything your user can, so use a machine
+or container you let it change. Run the harness as a normal user: Claude Code refuses to skip
+prompts as root.
 
 **Let the agent commit and push.** What is judged is the last push to your repository's default
 branch before the deadline, and `goalcup` never pushes for the agent. Say in your prompt that it

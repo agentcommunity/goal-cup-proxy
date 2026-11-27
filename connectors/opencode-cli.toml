@@ -1,7 +1,7 @@
 # OpenCode, checked against opencode.ai/v2/docs (cli, config, providers) and the npm @opencode/cli package for
 # 2.x, and against opencode.ai/docs (cli, config, permissions, network) and the package for 1.x (the row below).
 # --standalone runs a private server instead of the shared background service, which keeps its own environment.
-# Approvals stay on in 2.x: OpenCode 2 has no settings row for them (see docs/harnesses/opencode-cli.md).
+# Approvals: 2.x switches them off with --auto (no_prompts_args, added after setup's yes); 1.x with the no_prompts row below.
 # No database row: OpenCode 2 keeps saved keys and OAuth tokens in opencode.db, 1.x its console login (facts sheet, section 5).
 id = "opencode-cli"
 name = "OpenCode"
@@ -11,9 +11,9 @@ old_ids = ["opencode2-cli"]
 checked = "2.2.2"
 args = ["--standalone"]
 resume = ["--continue"]
+no_prompts_args = ["--auto"]
 home = { XDG_CONFIG_HOME = "{home}/.config", XDG_DATA_HOME = "{home}/.local/share", XDG_STATE_HOME = "{home}/.local/state", XDG_CACHE_HOME = "{home}/.cache" }
 env = { OPENCODE_DISABLE_AUTOUPDATE = "1" }
-first_screen = "OpenCode asks before it runs a tool, and goalcup does not switch that off for OpenCode 2. Approve at the first prompt, or allow for the session if it offers that, to let the run go on."
 # OpenCode 2 still reads a 1.x `provider` block and `.opencode/` (opencode.ai/v2/docs/migrate-v1 and /config),
 # and 1.x has no `providers` key, so both versions read both shapes.
 host_hints = [
@@ -37,7 +37,7 @@ secret_files = [
 [[versions]]
 match = "1.x"   # checked on 1.19.5
 args = []
-first_screen = ""
+no_prompts_args = []
 no_prompts = [{ file = "{home}/.config/opencode/opencode.json", key = "permission", value = "allow" }]
 
 [usage]

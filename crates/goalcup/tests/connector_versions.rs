@@ -144,7 +144,7 @@ fn keys(c: &Connector) -> String {
             (&c.args, &c.resume, &c.home, &c.env, &c.ca_env, &c.unset),
             (&c.host_hints, &c.secret_files, &c.native, &c.no_prompts),
             (&c.update_off, &c.first_screen, &c.before, &c.after),
-            (&c.mask, &c.usage),
+            (&c.mask, &c.usage, &c.no_prompts_args),
         )
     )
 }
