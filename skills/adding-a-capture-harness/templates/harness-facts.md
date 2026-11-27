@@ -68,8 +68,9 @@ Machine-wide or managed settings, server-side state, anything outside a per-run 
 ## Run without permission prompts
 The setting in the harness's own config that stops its permission prompts, the file and key it
 lives in, and the values that mean so (source or measurement). It becomes
-the connector's top-level `no_prompts` (docs/CONNECTOR-SCHEMA.md). `goalcup setup` writes it into
-the isolated home after its one question. "None needed" is a fact too: say how you know.
+the connector's top-level `no_prompts`, or `no_prompts_args` when the only switch is a launch flag
+(docs/CONNECTOR-SCHEMA.md). `goalcup setup` writes `no_prompts` into the isolated home after its one
+question; `goalcup start` and `continue` add `no_prompts_args` after a yes. "None needed" is a fact too: say how you know.
 
 ## Pad result
 From the test pad's `row.json` and `report.txt` for this connector and version, not from memory.

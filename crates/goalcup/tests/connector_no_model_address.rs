@@ -1,5 +1,6 @@
 //! goalcup never sets a model address (hard rule): the loader refuses a connector whose `env`
-//! names one, or whose `env`, `no_prompts` or `update_off` values hold a URL (PRD-11 section 2).
+//! names one, or whose `env`, `no_prompts` or `update_off` values hold a URL, or whose `args`,
+//! `resume` or `no_prompts_args` hold one (PRD-11 section 2).
 //! The one exception is `ca_settings` (AGENTS.md): its fallback trust addresses name shared-list
 //! hosts over https, and its CA value is never an address.
 //! That all shipped connectors load is `connector_builtin.rs`.
@@ -27,6 +28,7 @@ fn every_refused_shape_fails_load() {
         "env = { HARNESS_SWITCH = \"https://example.com\" }",
         "no_prompts = [{ file = \"{home}/c.json\", key = \"a\", value = \"http://127.0.0.1:9\" }]",
         "update_off = [{ file = \"{home}/c.json\", key = \"a\", value = \"wss://example.com\" }]",
+        "args = [\"--base-url\", \"https://example.com/v1\"]",
         &trust("value = \"https://api.deepseek.com/v1\"\nfallback = []"),
         &trust("value = \"x\"\nfallback = [\"http://127.0.0.1:9\"]"),
         &trust("value = \"x\"\nfallback = [\"http://api.deepseek.com/v1\"]"),

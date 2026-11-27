@@ -204,6 +204,7 @@ fn connector_data_stays_in_its_home_and_off_the_code_variables() {
         "home = { NODE_EXTRA_CA_CERTS = \"{home}/x\" }",
         "env = { NODE_TLS_REJECT_UNAUTHORIZED = \"0\" }",
         "env = { SSL_CERT_DIR = \"/x\" }",
+        "no_prompts_args = [\"{home}/x\"]",
     ];
     let head = "id = \"test-cli\"\nname = \"Test\"\nprogram = \"test\"\n";
     for body in refused {
