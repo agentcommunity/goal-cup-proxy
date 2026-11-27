@@ -76,9 +76,9 @@ The latest possible run ends 192 hours after the window opens.
 - Your run needs its own prompt, root agent and empty repository.
 - **One harness per run.** Your agent may spawn subagents of its own harness. It must not start a
   different harness (a Codex agent starting Claude Code, under any name), because the cup compares
-  harnesses and models, not assemblies of them, and this build cannot record the second harness.
-  Goal Cup Proxy does not stop it. It records that traffic too, the verifier reports it, and the run is
-  disqualified.
+  harnesses and models, not assemblies of them. Goal Cup Proxy does not stop it. If the second
+  harness uses the proxy, its model requests are recorded but its session files are not. The review
+  looks for it in the recorded traffic, and a run found doing it is disqualified.
 - Work created during one run (a replaced run included) may not be used to seed another run.
 
 ## One prompt, then only "keep going"
@@ -89,8 +89,9 @@ The latest possible run ends 192 hours after the window opens.
   nobody can copy it during the start window.
 - The prompt should be no more than **4,000 characters**. A longer one is not refused; the review sees
   its length. Attachments are allowed.
-- Any instruction file your harness reads from the workspace at the start (`AGENTS.md`, `CLAUDE.md` and
-  the like) is part of the prompt: it is recorded with it and published with it. Prepared context is
+- Any instruction file your harness reads at the start (`AGENTS.md`, `CLAUDE.md` and the like) is
+  part of the prompt: it is recorded as the harness sends it to the model, and published with it.
+  Prepared context is
   allowed. Hidden context is not, and there is nowhere to hide it.
 - **After the first prompt, the only human message permitted is "keep going".** Goal Cup Proxy records
   every message a human sends to the agent, by any channel, so the review can see it. Any other human
@@ -108,7 +109,7 @@ The latest possible run ends 192 hours after the window opens.
   reminders, no automatic "keep going", no automatic restart. `goalcup continue` is yours to run.
 - The agent may run `goalcup time-left` to ask how much time the run has left (D66). It is an answer
   the agent asks for; Goal Cup Proxy never sends it anything.
-- `goalcup seal` refuses to run inside the agent's session, so the agent cannot stop itself. You may
+- `goalcup seal` refuses to run inside the agent's session, so the agent does not stop itself by accident. You may
   run `goalcup seal` yourself from another terminal. It asks first, then stops the agent and ends the
   current part.
   It does not end the run: the run stays open until its deadline, and `goalcup continue` goes on
@@ -140,9 +141,7 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
   hidden starter files or existing product. It may hold only a `.gitignore`, a macOS `.DS_Store` and `.env` or
   `.env.*` files (your token and your agent's keys; `.envrc` is not one), must be outside any Git repository and not beside
   goalcup's own folders, and every `.env` file must be covered by the `.gitignore`;
-  `goalcup start` checks all of this before the approval. The record lists each such key file by
-  name and size, never its content or a hash of it, in the folder and in the harness's home; git's
-  `.git-credentials` is treated the same. Goal Cup Proxy adds nothing to the folder and makes no
+  `goalcup start` checks all of this before the approval. Goal Cup Proxy adds nothing to the folder and makes no
   commit or push in it (at the stop it only reads the repository, to seal it): its own
   `goal-cup` skill goes in the harness's home, not the workspace. Your agent makes the repository
   itself (`git init`) and pushes.
@@ -155,15 +154,15 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
   deadline is what is judged.
 - Prepared capabilities may help the agent work. A prebuilt product, substantial product code or an
   existing application may not be smuggled in as "context". The judged result must be a fresh build.
-- Participant-controlled instructions and task context available to the agent at the start are frozen
-  for that run. A human cannot change them during the run.
+- Participant-controlled instructions and task context available to the agent at the start stay as
+  they are for that run: no human may change them during the run.
 - The original prompt and the participant-controlled context the agent actually uses must be disclosed
   when the run is published. Public skills or pages can be linked by exact version. Private or changeable
   material needs a frozen publishable copy.
 - An empty workspace is not an empty context: some harnesses read the skills in your home directory
   into the system prompt, or inject saved memory. That is allowed, and it is disclosed with your run
   like any other prepared context. Turn it off before you start if you would rather it were not
-  there. You cannot change it during the run.
+  there. You may not change it during the run.
 - If a referenced skill, website, MCP resource or similar source cannot be resolved automatically,
   organizers may ask for access and you must provide the exact frozen material.
 - Credentials, tokens and unrelated private account data are never published.
@@ -285,8 +284,8 @@ disclosure and no-side-channel rules.
   agent reading the harness's login files in Goal Cup Proxy's home (Codex `auth.json`, Hermes `.env`
   and `auth.json`, Amp `secrets.json`, Claude Code's credential store), or your own `~/.codex`,
   `~/.claude` and Keychain. The harness's login header is never stored. A trace in which the
-  verifier finds secret-shaped text is not rejected: it is flagged, and it is cleaned before anyone
-  else gets it. An uploaded raw record cannot be rewritten. So use a login or account you can
+  verifier finds secret-shaped text is not rejected: it is flagged for the organizers, and nothing
+  removes the secret from it. An uploaded raw record cannot be rewritten. So use a login or account you can
   revoke, keep no unrelated secrets in the workspace or your home folder, and log out of the
   harness or rotate its login after the event.
 - **What the evidence covers.** Every request your agent sent to the model service Goal Cup opened is
@@ -315,9 +314,10 @@ disclosure and no-side-channel rules.
 - The server is authoritative for the start window, the official start, the deadline and the stop.
   Without a network at the deadline, Goal Cup Proxy stops the run once the run's length has passed on the
   machine's own clock.
-- Goal Cup Proxy captures the exact prompt, starting workspace state, observable prepared context, later
-  human messages, agent and subagent lifecycle, tool calls and results, external sites and services
-  used, harness and model identity when available, run continuity, and final state.
+- Goal Cup Proxy captures the prompt and the prepared context as the harness sends them to the
+  model, later human messages, agent and subagent lifecycle, tool calls and results, external sites
+  and services used, harness and model identity when available, run continuity, and, at the stop,
+  the folder's last commit and a SHA-256 of its `git status` (which files were uncommitted).
 - The record uploads to the server during the run: a round every 5 minutes, or at once when 16 MiB
   of compressed record waits. When the server cannot be reached, the record waits on your disk and
   the upload retries; the run goes on. After the seal, goalcup keeps sending for up to 60 minutes.
@@ -400,7 +400,7 @@ supported recording path and its runs do not count.
   force-push during the run is flagged. Your agent pushes its own work; Goal Cup Proxy never pushes, makes
   no commit of its own and never force-pushes. Work not pushed by the deadline is not in the submission.
 - At the stop Goal Cup Proxy also records the git commit your project folder had (if the agent made
-  a repository there), and a digest of any uncommitted changes, in the sealed record.
+  a repository there), and a SHA-256 of its `git status` (which files were uncommitted), in the sealed record.
 - The MIT License must exist in the submitted repository. The result must be a fresh, usable or
   executable product.
 - **`GOALCUP.md` is required.** The submitted repository has a `GOALCUP.md` at its root that

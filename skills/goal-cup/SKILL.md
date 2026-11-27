@@ -1,6 +1,6 @@
 ---
 name: goal-cup
-description: This session is a /goal Cup run. What Goal Cup Proxy records, and what the participant may type.
+description: "Read first in every /goal Cup session. No human will answer: decide and approve everything yourself. The run stops at a fixed deadline; run `goalcup time-left` to see the time left. In a run with a repository, push to main often (work not pushed is not judged) and keep GOALCUP.md at its root. Never print or write the value of a key or token. Never start a different harness."
 ---
 
 # /goal Cup
@@ -8,8 +8,8 @@ description: This session is a /goal Cup run. What Goal Cup Proxy records, and w
 This session is a /goal Cup run, recorded by Goal Cup Proxy (`goalcup`).
 
 **What Goal Cup Proxy records.** What this harness sends to and receives from the model services
-`goalcup` records, its session files, and the run's repository if it has one, all uploaded to the
-Goal Cup server. Traffic to hosts `goalcup` does not know passes through unread.
+`goalcup` records, and its session files, all uploaded to the Goal Cup server. Traffic to hosts
+`goalcup` does not know passes through unread.
 
 **What the participant may type.** The participant typed the first prompt. After it they may type
 only "keep going". Any other message a human types in this session is reviewed.
@@ -33,3 +33,7 @@ code. The version in the last push to main before the deadline is the one that i
 
 **One harness.** Subagents of this harness are fine. Starting a different harness from this session
 is not allowed; the run would be disqualified.
+
+**Keys and tokens.** Never print, echo or write the value of any key or token: not in a reply, a
+file or a command. Load it from `.env.local` when the code runs (`$NAME`, or
+`set -a; . ./.env.local; set +a`).
