@@ -149,23 +149,35 @@ fn every_note_gives_its_line() {
     assert!(at("goalcup seal") < at("goalcup continue"), "{tunnel}");
 }
 
-/// The two silence lines, each only past its time and only while the harness runs.
+/// The two silence lines, each only while the harness runs: no request yet past 5 minutes, and
+/// the quiet line only when the session files grew 10 minutes or more after the last request, so
+/// an agent waiting at its prompt gets none.
 #[test]
 fn request_silence_lines() {
     let harness = json!({"pid": 1, "started": "2026-11-07T10:00:00Z", "start_id": 1});
     let none = with(Mode::Recording, json!({"harness": harness}));
-    let quiet = with(
-        Mode::Recording,
-        json!({"harness": harness, "written": {"model_requests": 4},
-            "last_request_at": "2026-11-07T10:00:00Z", "last_native_at": "2026-11-07T10:09:00Z"}),
+    let grew = |native: &str| {
+        with(
+            Mode::Recording,
+            json!({"harness": harness,
+            "written": {"model_requests": 4}, "last_request_at": "2026-11-07T10:00:00Z",
+            "last_native_at": native}),
+        )
+    };
+    // Working 10 minutes past the last request; waiting at its prompt; done after a 5-minute reply.
+    let (busy, idle, long) = (
+        grew("2026-11-07T10:10:00Z"),
+        grew("2026-11-07T10:00:02Z"),
+        grew("2026-11-07T10:05:00Z"),
     );
     let (no_req, quiet_line) = (text::no_request_yet(), text::quiet_proxy("Agent"));
     for (st, alive, age, line, shown) in [
         (&none, true, 200, &no_req, false),
         (&none, true, 301, &no_req, true),
-        (&quiet, true, 599, &quiet_line, false),
-        (&quiet, true, 601, &quiet_line, true),
-        (&quiet, false, 601, &quiet_line, false),
+        (&busy, true, 601, &quiet_line, true),
+        (&busy, false, 601, &quiet_line, false),
+        (&idle, true, 601, &quiet_line, false),
+        (&long, true, 3600, &quiet_line, false),
     ] {
         let lines = problems(st, &State::Recording, &live(true, true, alive, age));
         assert_eq!(lines.contains(line), shown, "{line} {alive} {age}");
