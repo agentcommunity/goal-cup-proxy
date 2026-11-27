@@ -189,19 +189,6 @@ class NotVerified(unittest.TestCase):
         self.assertEqual(tbl.tier_for("amp-cli", [row]), ("not verified", "", "", "no key"))
 
 
-class CrushPermissions(unittest.TestCase):
-    def test_crush_runs_with_its_permission_file(self):
-        h = pad.read_toml(os.path.join(HERE, "harnesses", "crush-cli.toml"))
-        self.assertNotIn("not_verified", h)
-        for case in ("direct", "gateway"):
-            self.assertEqual(h[case]["files"][".config/crush/crushrc"], "direct/crush-cli-crushrc", case)
-        lines = open(os.path.join(HERE, "harnesses", "direct", "crush-cli-crushrc")).read().splitlines()
-        allow = [ln for ln in lines if ln.startswith("permissions allow ")]
-        self.assertEqual(len(allow), 1)
-        self.assertIn("bash", allow[0].split())
-        self.assertEqual(load("padtable2", "table").tier_for("crush-cli", []), ("not verified", "", "", "not yet run on the pad"))
-
-
 class CrushInitQuestion(unittest.TestCase):
     def test_crush_answers_the_initialize_question_before_the_prompt(self):  # S2: 0.99.0 stopped at "Would you like to initialize this project?"
         h = pad.read_toml(os.path.join(HERE, "harnesses", "crush-cli.toml"))
@@ -1420,21 +1407,6 @@ class WorkEvidence(unittest.TestCase):
         row = self.row(0, 4)
         self.assertEqual(row["checks"]["C1"], "INCONCLUSIVE")
         self.assertTrue(any("commits since start 0" in w and "model requests 4" in w for w in row["why"]), row["why"])
-
-
-class GeminiApprovals(unittest.TestCase):
-    """Gemini CLI must not stop on 'Apply this change?' in an unattended run (W3; docs reference/configuration:
-    general.defaultApprovalMode, tools.allowed)."""
-
-    def test_settings_file_sets_the_approval_mode(self):
-        here = os.path.join(os.path.dirname(os.path.abspath(__file__)), "harnesses", "direct", "gemini-cli-settings.json")
-        with open(here) as f:
-            cfg = json.load(f)
-        self.assertEqual(cfg["general"]["defaultApprovalMode"], "auto_edit")
-        self.assertIn("run_shell_command", cfg["tools"]["allowed"])
-        self.assertIn("write_file", cfg["tools"]["allowed"])  # S3: 0.66.0 asked "WriteFile ... 1 of 2" under auto_edit
-        self.assertIn("replace", cfg["tools"]["allowed"])
-        self.assertNotIn("baseUrl", json.dumps(cfg).lower())
 
 
 class PromptVariant(unittest.TestCase):

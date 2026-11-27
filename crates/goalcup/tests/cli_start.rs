@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use common::home::TempHome;
 use common::worker::{FakeWorker, Inject, RUN_ID, Route};
 use goalcup::cli::start::{Args, Ctx, prepare};
-use goalcup::cli::{Server, isolated_home, text};
+use goalcup::cli::{Server, isolated_home, setup_json, text};
 use serde_json::{Value, json};
 
 const TOKEN: &str = "ghp_START0123456789ABCDEFGH";
@@ -468,4 +468,45 @@ fn a_proxy_network_is_refused_before_anything_starts() {
         ("GOALCUP_TIME_LEFT_FILE", "/x"),
     ]);
     assert!(!inside.contains("proxy networks"), "{inside}");
+}
+
+/// G34: setup's yes adds the connector's no_prompts_args, for the harness it was given for only;
+/// without that yes the start screen says approvals stay on.
+#[test]
+fn the_setup_yes_adds_the_no_prompts_args_for_that_harness_only() {
+    let extra = "args = [\"go\"]\nno_prompts_args = [\"--no-asking\", \"{workspace}\"]\n";
+    let fix = Fix::new("{home}/skills", extra);
+    let start = |setup: Option<Value>| -> (Vec<String>, String) {
+        let file = setup_json(&fix.gc());
+        match setup {
+            Some(v) => {
+                std::fs::create_dir_all(fix.gc()).unwrap();
+                std::fs::write(&file, v.to_string()).unwrap();
+            }
+            None => {
+                let _ = std::fs::remove_file(&file);
+            }
+        }
+        let mut out = Vec::new();
+        let ready = prepare(&fix.args(), &fix.ctx(Server::Off), &mut out)
+            .unwrap_or_else(|s| panic!("{}", s.text));
+        (ready.plan.argv.clone(), String::from_utf8(out).unwrap())
+    };
+    let ws = fix.project.to_string_lossy().into_owned();
+    let left = text::no_prompts_left("Tester");
+    for setup in [
+        None,
+        Some(json!({"v": 1, "harness": "tester"})),
+        Some(json!({"v": 1, "harness": "other", "prompts_off": true})),
+        Some(json!({"v": 1, "harness": "tester", "prompts_off": false})),
+    ] {
+        let (argv, screen) = start(setup);
+        assert_eq!(argv, ["go"]);
+        assert!(screen.contains(&left), "{screen}");
+    }
+    let (argv, screen) = start(Some(
+        json!({"v": 1, "harness": "tester", "prompts_off": true}),
+    ));
+    assert_eq!(argv, ["go", "--no-asking", ws.as_str()]);
+    assert!(!screen.contains(&left), "{screen}");
 }

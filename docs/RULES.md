@@ -104,7 +104,8 @@ The latest possible run ends 192 hours after the window opens.
   (for example `/model` to switch model) count as typing: they are recorded and reviewed, never
   blocked. Choose your model in setup.
 - Answering a permission prompt is typing too, so set your harness up in setup to run without them.
-  `goalcup setup` offers to set this for you, in the harness's own home under goalcup, and never
+  `goalcup setup` offers to set this for you, in the harness's own home under goalcup or, where the
+  harness has only a launch flag for it, by adding that flag when goalcup starts it. It never
   changes your own settings (D86; [guide](PARTICIPANT-GUIDE.md#3-set-up)).
 - The review works out who said each message from what the model saw and how the harness structures its
   messages. That is a detection, not a proof. An organizer reviews a message it cannot explain.

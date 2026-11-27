@@ -312,6 +312,21 @@ fn continue_adds_the_next_part_and_resumes_the_session() {
     assert_eq!(sj["entries"].as_array().unwrap().len(), 2);
 }
 
+/// G34: continue adds the arguments too, after `resume`.
+#[test]
+fn continue_adds_the_no_prompts_args_after_the_setup_yes() {
+    let worker = FakeWorker::start();
+    next_part(&worker);
+    let mut w = World::new(Some(worker.url()));
+    let toml = std::fs::read_to_string(&w.connector).unwrap();
+    std::fs::write(&w.connector, toml + "no_prompts_args = [\"--no-asking\"]\n").unwrap();
+    w.part(1, false, Some(World::sealed(json!({"model_requests": 2}))));
+    let setup = json!({"v": 1, "harness": "tester", "prompts_off": true});
+    put(&w.gc(), "setup.json", &setup);
+    let ready = w.prepare().unwrap_or_else(|s| panic!("{}", s.text));
+    assert_eq!(ready.plan.argv, ["go", "--resume", "--no-asking"]);
+}
+
 #[test]
 fn a_part_that_recorded_nothing_starts_a_new_session() {
     let worker = FakeWorker::start();

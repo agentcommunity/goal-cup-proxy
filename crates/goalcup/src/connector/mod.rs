@@ -106,14 +106,15 @@ pub struct NativeSources(pub Vec<NativeSource>);
 pub struct LaunchPlan {
     pub connector: ConnectorRef,
     /// The connector with the `[[versions]]` row for the read version laid over it: read
-    /// `first_screen`, `no_prompts` and `update_off` from here.
+    /// `first_screen`, `no_prompts`, `no_prompts_args` and `update_off` from here.
     pub effective: Connector,
     /// The `match` of the row applied, if any.
     pub version_row: Option<String>,
     pub harness_version: Option<String>,
     /// Resolved on the participant's `PATH`, else the bare name.
     pub program: PathBuf,
-    /// `args`, or `args` and `resume`, templates filled.
+    /// `args`, or `args` and `resume`, templates filled; then `no_prompts_args` after the setup
+    /// yes, added by `cli`.
     pub argv: Vec<String>,
     /// The complete harness environment, minus the port and the CA paths (`finish_env`).
     pub env: BTreeMap<String, String>,

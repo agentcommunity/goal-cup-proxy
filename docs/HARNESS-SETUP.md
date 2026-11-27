@@ -30,8 +30,9 @@ With a terminal and no `--yes`, it:
 1. Prints the harness name, version and path; prints the `say` of a `[[versions]]` row that matches.
 2. Opens the harness once in its private home, for sign-in. Quit it to go on.
 3. Writes the connector's `update_off` rows.
-4. Asks one question, then writes the `no_prompts` rows on yes.
-5. Saves the harness id and the rows written in `$GOALCUP_HOME/setup.json`.
+4. Asks one question when the connector has `no_prompts` rows or `no_prompts_args`; on yes it writes the rows, and `goalcup start` and `continue` add the arguments.
+5. Saves the harness id, the rows written and the answer (`prompts_off`) in `$GOALCUP_HOME/setup.json`.
+   A launch-flag answer applies to the harness you set up most recently.
 6. Prints one warning line each for: sleep lock, server unreachable, `git` missing, the WSL folder.
 
 With `--yes` it writes both row lists and opens nothing. Without a terminal and without `--yes` it
@@ -73,11 +74,12 @@ naming the file and key. `ca_settings` rows are written into the private home (s
 
 ## What setup writes, per harness
 
-From `connectors/*.toml`. "Prompts" is the `no_prompts` rows; "Update" the `update_off` rows (an env switch
-in `env` is set at launch instead). A blank means the connector has none: for Amp, Cline, Crush, Gemini, Goose,
-OpenClaw (and OpenCode 2.x) the facts sheet says what to set yourself.
+From `connectors/*.toml`. "Prompts" is the `no_prompts` rows, or the launch flag (`no_prompts_args`)
+that `goalcup start` and `continue` add after setup's yes; "Update" the `update_off` rows (an env
+switch in `env` is set at launch instead). A blank Prompts means the harness does not ask: Amp,
+Cline, Goose and OpenClaw (the facts sheet says how far that is known), and setup asks them no question.
 
-| Id | Home variable | Prompts (file: key = value) | Update |
+| Id | Home variable | Prompts (file: key = value, or launch flag) | Update |
 |---|---|---|---|
 | `claude-code-cli` | `CLAUDE_CONFIG_DIR` | `settings.json`: `permissions.defaultMode = bypassPermissions`, `skipDangerousModePermissionPrompt = true` | env |
 | `codex-cli` | `CODEX_HOME` | `config.toml`: `approval_policy = never`, `sandbox_mode = danger-full-access` | `config.toml`: `check_for_update_on_startup = false` |
@@ -85,13 +87,14 @@ OpenClaw (and OpenCode 2.x) the facts sheet says what to set yourself.
 | `amp-cli` | `HOME`, `XDG_*` | | env |
 | `copilot-cli` | `COPILOT_HOME` | `settings.json`: `defaultPermissionMode = allow-all` | env |
 | `droid-cli` | `FACTORY_HOME_OVERRIDE` | `.factory/settings.json`: `sessionDefaultSettings.autonomyLevel = high` | env |
-| `gemini-cli` | `GEMINI_CLI_HOME` | | `.gemini/settings.json`: `general.enableAutoUpdate = false`, `ide.enabled = false`, `ide.hasSeenNudge = true` |
+| `gemini-cli` | `GEMINI_CLI_HOME` | launch flag `--approval-mode yolo` | `.gemini/settings.json`: `general.enableAutoUpdate = false`, `ide.enabled = false`, `ide.hasSeenNudge = true` |
 | `kilo-cli` | `XDG_*` | `.config/kilo/opencode.json`: `permission = allow` | env |
 | `kimi-code-cli` | `KIMI_CODE_HOME` | `config.toml`: `default_permission_mode = auto` | env |
-| `opencode-cli` | `XDG_*` | 1.x only: `.config/opencode/opencode.json`: `permission = allow` (a `[[versions]]` row) | env |
+| `opencode-cli` | `XDG_*` | 2.x: launch flag `--auto`; 1.x: `.config/opencode/opencode.json`: `permission = allow` (a `[[versions]]` row) | env |
 | `qwen-cli` | `QWEN_HOME` | `settings.json`: `tools.approvalMode = yolo` | `settings.json`: `general.enableAutoUpdate = false` |
 | `homemade-cli` | `GOALCUP_TRACE_DIR` | | |
-| `cline-cli`, `crush-cli`, `goose-cli`, `openclaw-cli` | see the connector | | env, where the connector has one |
+| `crush-cli` | `XDG_*` | launch flag `--yolo` | |
+| `cline-cli`, `goose-cli`, `openclaw-cli` | see the connector | | env, where the connector has one |
 
 Files are under the private home (`$GOALCUP_HOME/homes/<id>`).
 

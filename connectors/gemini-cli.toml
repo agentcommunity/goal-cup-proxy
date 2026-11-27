@@ -23,6 +23,10 @@ update_off = [
   { file = "{home}/.gemini/settings.json", key = "ide.enabled", value = "false" },
   { file = "{home}/.gemini/settings.json", key = "ide.hasSeenNudge", value = "true" },
 ]
+# Approvals: only the launch flag switches them off (docs/harnesses/gemini-cli.md); start and continue add it after setup's yes.
+no_prompts_args = ["--approval-mode", "yolo"]
+# An untrusted folder turns yolo back off, and the docs disagree on whether folder trust is on by default.
+first_screen = "Gemini CLI may ask whether you trust this folder. Trust it so Gemini can use automatic approval."
 
 [usage]
 readers = [{ row = "chats", file = "*.jsonl", reader = "gemini-chat" }]

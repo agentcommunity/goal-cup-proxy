@@ -1167,8 +1167,12 @@ pub fn seal_could_not() -> String {
 pub fn no_prompts_question(name: &str) -> String {
     format!(
         "{name} will run for days with nobody watching. goalcup can set it to never stop and ask \
-         for approval (it can then change any file you can). Set this in goalcup's own {name} home?"
+         for approval (it can then change any file you can). Use this for runs with goalcup?"
     )
+}
+
+pub fn no_prompts_flag(name: &str) -> String {
+    format!("goalcup will start {name} with its automatic approval flag.")
 }
 
 pub fn no_prompts_left(name: &str) -> String {

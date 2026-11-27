@@ -44,6 +44,9 @@ pub struct Connector {
     /// shown.
     pub end_note: Option<String>,
     pub no_prompts: Vec<SettingRow>,
+    /// Launch arguments `start` and `continue` append after `args` and `resume` when setup's
+    /// no-prompts answer was yes.
+    pub no_prompts_args: Vec<String>,
     pub update_off: Vec<SettingRow>,
     pub skills_dir: Option<String>,
     /// Read by goalcup-verify only (docs/CONNECTOR-SCHEMA.md#the-usage-table); the recorder never
@@ -83,6 +86,7 @@ pub struct VersionRow {
     pub host_hints: Option<Vec<HintRow>>,
     pub secret_files: Option<Vec<String>>,
     pub no_prompts: Option<Vec<SettingRow>>,
+    pub no_prompts_args: Option<Vec<String>>,
     pub update_off: Option<Vec<SettingRow>>,
     pub native: Option<Vec<NativeRow>>,
     /// `""` clears the base line.
@@ -114,6 +118,7 @@ impl Connector {
         over(&mut c.host_hints, &r.host_hints);
         over(&mut c.secret_files, &r.secret_files);
         over(&mut c.no_prompts, &r.no_prompts);
+        over(&mut c.no_prompts_args, &r.no_prompts_args);
         over(&mut c.update_off, &r.update_off);
         over(&mut c.native, &r.native);
         over(&mut c.before, &r.before);
@@ -487,8 +492,15 @@ fn check(c: &Connector, file: &str) -> Result<(), ConnectorError> {
             ));
         }
     }
-    for (list, args) in [("args", &c.args), ("resume", &c.resume)] {
+    for (list, args) in [
+        ("args", &c.args),
+        ("resume", &c.resume),
+        ("no_prompts_args", &c.no_prompts_args),
+    ] {
         for (i, arg) in args.iter().enumerate() {
+            if arg.contains("://") {
+                return Err(address(format!("{list}[{i}]")));
+            }
             if !templates_ok(arg) {
                 return Err(invalid(
                     format!("{list}[{i}]"),

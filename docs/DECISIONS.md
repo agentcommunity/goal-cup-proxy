@@ -1415,4 +1415,9 @@ own isolated harness home. After one question it writes the no-prompt values the
 app-wide config (default, PRD-00 question 2). If the owner answers no, the no-prompt clause is not
 written and D67 stands for it.
 
+*26 Nov 2026, owner ("not sure but yes"; audit finding G34).* The same yes covers a launch flag
+as it covers a settings row: a connector's `no_prompts_args` (Gemini CLI, Crush, OpenCode 2) is
+added by `goalcup start` and `continue` only when `setup.json` holds that yes for the harness. A
+connector with nothing to switch off gets no question.
+
 This supersedes D67.
