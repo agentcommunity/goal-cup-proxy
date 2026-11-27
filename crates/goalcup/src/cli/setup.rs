@@ -4,7 +4,8 @@
 //! - `--record-host HOST` adds one host to `record-hosts.txt` and does nothing else.
 //! - Without `--yes` and without a terminal setup asks nothing, opens nothing and writes nothing:
 //!   steps 1 and 4, then `Ready.` or the step to fix. With a terminal it picks the harness, opens
-//!   it in the isolated home to sign in, writes `update_off`, asks the one `no_prompts` question.
+//!   it in the isolated home to sign in, writes `update_off`, asks the one `no_prompts` question
+//!   when the connector has something to switch off.
 //! - With `--yes` it also writes the connector's `update_off` and `no_prompts` rows into the
 //!   isolated home and prints that home's path, the last folder path on stdout (S15: the pad takes
 //!   the last quoted folder path as the home).
@@ -27,7 +28,8 @@ use crate::connector::{Refusal, SettingRow};
 use crate::connector::{Source, builtin};
 use crate::upload::client::ServerClient;
 
-/// `$GOALCUP_HOME/setup.json`: the saved harness and the rows written: file, key and value.
+/// `$GOALCUP_HOME/setup.json`: the saved harness, the rows written (file, key and value) and the
+/// no-prompts answer, which `start` and `continue` read for `no_prompts_args`.
 #[derive(Serialize, Deserialize)]
 struct Saved {
     v: u32,
@@ -36,6 +38,8 @@ struct Saved {
     update_off: Vec<Row>,
     #[serde(default)]
     no_prompts: Vec<Row>,
+    #[serde(default)]
+    prompts_off: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -101,9 +105,10 @@ pub fn run(harness: Option<&str>, yes: bool, record_host: Option<&str>) -> ExitC
 
 /// `--yes` (or `ask`, with a terminal): `plan` takes the home's lock, makes the home, probes the version and writes
 /// `update_off`; then every `update_off` and `no_prompts` row is written (a row already holding
-/// its value is left as it is), and `setup.json` saves those written. `Ok(Some(step))` is a
-/// refusal to show after the machine lines; `Err` a home another run holds, where nothing was
-/// written. `ask` opens the harness once to sign in and asks before the `no_prompts` rows.
+/// its value is left as it is), and `setup.json` saves those written and the answer.
+/// `Ok(Some(step))` is a refusal to show after the machine lines; `Err` a home another run holds,
+/// where nothing was written. `ask` opens the harness once to sign in and asks before the
+/// `no_prompts` rows, when the connector has those rows or `no_prompts_args`.
 fn write_home(
     c: &Connector,
     home: &Path,
@@ -141,10 +146,15 @@ fn write_home(
     }
     let rows = &plan.effective;
     let update_off = write_rows(&plan.home, &rows.update_off);
-    let no_prompts = if !ask || confirm(&format!("{} [Y/n] ", text::no_prompts_question(&c.name))) {
+    let asks = !rows.no_prompts.is_empty() || !rows.no_prompts_args.is_empty();
+    let question = format!("{} [Y/n] ", text::no_prompts_question(&c.name));
+    let prompts_off = asks && (!ask || confirm(&question));
+    if asks && !prompts_off {
+        put(&text::no_prompts_left(&c.name));
+    }
+    let no_prompts = if prompts_off {
         write_rows(&plan.home, &rows.no_prompts)
     } else {
-        put(&text::no_prompts_left(&c.name));
         Vec::new()
     };
     let (update, prompts) = (!update_off.is_empty(), !no_prompts.is_empty());
@@ -153,6 +163,7 @@ fn write_home(
         harness: c.id.clone(),
         update_off,
         no_prompts,
+        prompts_off,
     };
     let file = setup_json(home);
     if save(&file, &saved).is_err() {

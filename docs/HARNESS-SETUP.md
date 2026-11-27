@@ -30,8 +30,8 @@ With a terminal and no `--yes`, it:
 1. Prints the harness name, version and path; prints the `say` of a `[[versions]]` row that matches.
 2. Opens the harness once in its private home, for sign-in. Quit it to go on.
 3. Writes the connector's `update_off` rows.
-4. Asks one question, then writes the `no_prompts` rows on yes.
-5. Saves the harness id and the rows written in `$GOALCUP_HOME/setup.json`.
+4. Asks one question when the connector has `no_prompts` rows or `no_prompts_args`; on yes it writes the rows, and `goalcup start` and `continue` add the arguments.
+5. Saves the harness id, the rows written and the answer (`prompts_off`) in `$GOALCUP_HOME/setup.json`.
 6. Prints one warning line each for: sleep lock, server unreachable, `git` missing, the WSL folder.
 
 With `--yes` it writes both row lists and opens nothing. Without a terminal and without `--yes` it

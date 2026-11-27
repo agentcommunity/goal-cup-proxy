@@ -323,6 +323,60 @@ fn answering_n_still_writes_update_off_and_leaves_no_prompts() {
     assert_ne!(saved["update_off"], Value::Array(vec![]), "{saved}");
 }
 
+/// `home.home()/tester.toml`: `id = "tester"`, `name = "Tester"`, `program = "goalcup-tester"`,
+/// then `extra`.
+fn tester(home: &TempHome, extra: &str) -> PathBuf {
+    let file = home.home().join("tester.toml");
+    let head = "id = \"tester\"\nname = \"Tester\"\nprogram = \"goalcup-tester\"\n";
+    fs::write(&file, format!("{head}{extra}")).unwrap();
+    file
+}
+
+/// `setup.json` parsed.
+fn saved(home: &TempHome) -> Value {
+    let bytes = fs::read(setup_json(&home.goalcup_home())).unwrap();
+    serde_json::from_slice(&bytes).expect("setup.json parses")
+}
+
+/// G34: the yes is kept for a harness whose switch is a launch argument, and a later `n` clears it.
+#[test]
+fn the_no_prompts_answer_is_kept_for_launch_arguments() {
+    let _guard = guard();
+    let home = TempHome::new();
+    let file = tester(&home, "no_prompts_args = [\"--no-asking\"]\n");
+    let (fake, file) = (
+        Fake::new("goalcup-tester"),
+        file.to_string_lossy().into_owned(),
+    );
+    let (out, all) = setup(&home, &fake.path(), &["--harness", &file, "--yes"]);
+    assert_eq!(out.status.code(), Some(0), "{all}");
+    assert_eq!(saved(&home)["prompts_off"], Value::Bool(true), "{all}");
+    // The flag is not in the home, so the home line claims no approval setting there.
+    let iso = isolated_home(&home.goalcup_home(), "tester");
+    assert!(
+        all.contains(&text::settings_set("Tester", &iso, false, false)),
+        "{all}"
+    );
+    let (code, all) = setup_tty(&home, &fake.path(), &["--harness", &file], "\nn\n");
+    assert_eq!(code, Some(0), "{all}");
+    assert_eq!(saved(&home)["prompts_off"], Value::Bool(false), "{all}");
+}
+
+/// G34: nothing to switch off asks nothing and claims nothing about approvals.
+#[test]
+fn nothing_to_switch_off_asks_no_question() {
+    let _guard = guard();
+    let home = TempHome::new();
+    let file = tester(&home, "").to_string_lossy().into_owned();
+    let fake = Fake::new("goalcup-tester");
+    // Enter for the sign-in open; the `n` would answer the question if one were asked.
+    let (code, all) = setup_tty(&home, &fake.path(), &["--harness", &file], "\nn\n");
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains(&text::no_prompts_question("Tester")), "{all}");
+    assert!(!all.contains(&text::no_prompts_left("Tester")), "{all}");
+    assert_eq!(saved(&home)["prompts_off"], Value::Bool(false), "{all}");
+}
+
 /// A proxy network is refused in one plain line that names the variable, never its value, and
 /// setup writes nothing. An empty variable is no proxy.
 #[test]
