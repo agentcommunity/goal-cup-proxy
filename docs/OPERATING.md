@@ -6,8 +6,8 @@ and how to release. A developer's path (build, gate, one capture) is in the [REA
 server's design and operator steps are in the [Worker README](../server/worker/README.md); its wire
 contract is [UPLOAD-API](UPLOAD-API.md).
 
-Never write a secret, a key value or a key file path into a doc, an issue, a log or a chat. This page
-names secrets only.
+Never write a secret, a key value or a real key file's path into a doc, an issue, a log or a chat; a
+pattern such as `~/.pad-keys/<key name>` names no key. This page names secrets only.
 
 ## Where things run
 
