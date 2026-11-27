@@ -37,7 +37,7 @@ curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/down
 ```
 
 It installs the latest release into `~/.local/bin`, with no `sudo`. If it says that folder is not on
-your `PATH`, run the line it prints. Update later by running the same command, with no run open:
+your `PATH`, run the line it prints. Update later by running the same command, with nothing recording:
 the installer refuses while a run is recording. After an update, run `goalcup setup` again before you start a run.
 
 If a firewall such as Little Snitch or LuLu asks about `goalcup`, allow it. It runs from
@@ -404,8 +404,9 @@ inside `tmux`. Sleep suspends the agent too and loses nothing, but the clock run
 
 **News from the organizers.** During the run, news comes by email to your Agent Community address
 and on the event page, [agentcommunity.org/goalcup](https://agentcommunity.org/goalcup). For a
-competition run the server also emails you when it has not heard from the run for 20 minutes,
-when the agent has made no model request for 3 hours (and again at 6), and when the run has ended
+competition run the server also emails you when the run starts, when it has not heard from the run
+for 20 minutes, when the agent has made no model request for 3 hours (and again at 6), when the
+recording has a problem, and when the run has ended
 (if part of it has not arrived, with the time until which it can still be uploaded).
 
 **Change nothing the agent can read:** files, issues, messages, documents, websites. See

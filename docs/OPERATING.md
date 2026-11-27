@@ -58,7 +58,8 @@ Before the window opens:
 2. The cup release is GitHub's latest release, and production carries the Worker from `main` ([Deploy](#deploy)) with `MIN_COMPETITION_VERSION` at the cup release.
 3. The `EVENT_ID` switch is done. Staging keeps its own event ids.
 4. The pad's release rows hold ([Releasing](#releasing)).
-5. `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, and one practice run
+5. RULES' [Timeline](RULES.md#timeline) names the cup release's tag date: no `<TAG DATE>` is left.
+6. `GET https://ingest.agentcommunity.org/v1/health` answers `{"status":"ok"}`, and one practice run
    against production started, sealed and fetched cleanly ([Fetch and check a run](#fetch-and-check-a-run)).
 6. Test runs are deleted ([Test runs and the pad](#test-runs-and-the-pad)) and the bucket lock rule still
    covers `traces/goalcup-cup-2026/`.
@@ -82,8 +83,8 @@ CLOUDFLARE_ACCOUNT_ID=<id> npx wrangler deploy                # production: top 
 **Staging (agents may).** Deploy with `--env staging` from the integration head. It carries the same
 `MIN_COMPETITION_VERSION` as production (`test/config.test.ts` fails if they differ), and every pad run uploads to it.
 
-**Production (the owner, after the merge to `main`).** The first 1.0 deploy follows
-[Deploying 1.0](../server/worker/README.md#deploying-10) once, in its order. Every later one is from `main` with
+**Production (the owner, after the merge to `main`).** The first 1.0 deploy was done on 27 Nov 2026
+([Deploying 1.0](../server/worker/README.md#deploying-10)). Every later one is from `main` with
 every deploy check, and `npx wrangler versions view <version-id>` must show the `MIN_COMPETITION_VERSION`
 `wrangler.toml` holds.
 There is no rollback to the 0.7 Worker. A bad 1.0 Worker is held with `MAINTENANCE=on` and fixed forward
@@ -282,7 +283,7 @@ or the client's own count to the deadline. Fix the server and the runs catch up.
 
 **A bug in goalcup during the event.** The owner finds the open runs it hits by `tracer_version` on each run's
 newest row in `goal_cup_tracer.entries` (a read-only SELECT; no API shows it). Fix it on `main` and
-release as [Releasing](#releasing) says: a change under `crates/` needs the
+release as [Releasing](#releasing) says: a change under a `GUARDED` path in `scripts/pad/table` needs the
 [release rows](#release-rows-on-the-mac) again first, about 3 hours on the Mac. Then tell the
 affected participants by email and on the event page: run `goalcup seal` from another terminal,
 install the fixed build with the install line, then `goalcup continue` in the same project folder;

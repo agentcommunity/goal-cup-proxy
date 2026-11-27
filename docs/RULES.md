@@ -78,7 +78,7 @@ The latest possible run ends 192 hours after the window opens.
 - **One harness per run.** Your agent may spawn subagents of its own harness. It must not start a
   different harness (a Codex agent starting Claude Code, under any name), because the cup compares
   harnesses and models, not assemblies of them. Goal Cup Proxy does not stop it. If the second
-  harness uses the proxy, its model requests are recorded but its session files are not. The review
+  harness uses the proxy, its requests to listed model hosts are recorded but its session files are not. The review
   looks for it in the recorded traffic, and a run found doing it is disqualified.
 - Work created during one run (a replaced run included) may not be used to seed another run.
 
@@ -319,7 +319,8 @@ disclosure and no-side-channel rules.
 - Goal Cup Proxy captures the prompt and the prepared context as the harness sends them to the
   model, later human messages, agent and subagent lifecycle, tool calls and results, external sites
   and services used, harness and model identity when available, run continuity, and, at the stop,
-  the folder's last commit and a SHA-256 of its `git status` (which files were uncommitted).
+  the folder's last commit and a SHA-256 of its `git status` output (a hash only, no file list); a
+  part closed after a crash or reboot records neither.
 - The record uploads to the server during the run: a round every 5 minutes, or at once when 16 MiB
   of compressed record waits. When the server cannot be reached, the record waits on your disk and
   the upload retries; the run goes on. After the seal, goalcup keeps sending for up to 60 minutes.
@@ -390,7 +391,8 @@ with the connector id, how each harness is signed in and what goalcup cannot rec
 harnesses the test pad has verified. A tier does not decide whether you may take part.
 
 Other harnesses can join through the [connector process](HARNESS-ONBOARDING.md).
-A merged connector ships in the next release. A harness without a shipped connector has no
+A merged connector ships in the next release; for Edition 01 it counts only if merged before the cup
+release tag ([Timeline](#timeline)). A harness without a shipped connector has no
 supported recording path and its runs do not count.
 
 ## Submission
@@ -402,7 +404,8 @@ supported recording path and its runs do not count.
   force-push during the run is flagged. Your agent pushes its own work; Goal Cup Proxy never pushes, makes
   no commit of its own and never force-pushes. Work not pushed by the deadline is not in the submission.
 - At the stop Goal Cup Proxy also records the git commit your project folder had (if the agent made
-  a repository there), and a SHA-256 of its `git status` (which files were uncommitted), in the sealed record.
+  a repository there), and a SHA-256 of its `git status` output (a hash only, no file list), in the sealed
+  record. A part closed after a crash or reboot records neither.
 - The MIT License must exist in the submitted repository. The result must be a fresh, usable or
   executable product.
 - **`GOALCUP.md` is required.** The submitted repository has a `GOALCUP.md` at its root that
