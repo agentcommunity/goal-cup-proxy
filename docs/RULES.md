@@ -151,11 +151,11 @@ The 4,000-character limit applies to the direct prompt. It is not a limit on the
   `goal-cup` skill goes in the harness's home, not the workspace. Your agent makes the repository
   itself (`git init`) and pushes.
 - The agent pushes its work to the repository with the token you made for it (see Keys). Goal Cup
-  Proxy passes the agent no git login, SSH agent or `gh` configuration, but the agent runs as you,
-  and `ssh` reads `~/.ssh` whatever `HOME` says. In a test on 26 Oct 2026 the agent used the
-  tester's own SSH key unprompted, so it can push to any repository that key reaches. Give the key
-  a passphrase or a per-use confirmation, or run in a Docker container
-  ([results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-26-mac-retest.md)). The commit the server records at the
+  Proxy removes nothing of your git or SSH login. It only makes git fail instead of waiting for a
+  password, and the push lines make the agent's https pushes to github.com use the run's token.
+  The agent runs as you and can use your SSH keys, `gh` login and credential helpers
+  ([results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-26-mac-retest.md)).
+  If that matters, run it in a VM or container without them. The commit the server records at the
   deadline is what is judged.
 - Prepared capabilities may help the agent work. A prebuilt product, substantial product code or an
   existing application may not be smuggled in as "context". The judged result must be a fresh build.
@@ -260,10 +260,10 @@ disclosure and no-side-channel rules.
 - **GitHub calls.** `goalcup setup` makes none. `goalcup start` makes a few public, unauthenticated
   calls to `api.github.com` for the repository check (public, and no commits). If GitHub cannot
   be asked, it goes on, and the server checks when it opens the run. The Worker calls
-  GitHub when it opens the run, and again at judging to read the last push. Nothing of your git
-  login is passed to the agent: not your SSH agent, your `gh` configuration or your credential
-  helper. Your agent runs as you, so it can still read what any program of yours can read (next
-  bullets), including an SSH key in `~/.ssh` (see Keys).
+  GitHub when it opens the run, and again at judging to read the last push. Goal Cup Proxy
+  removes nothing of your git or SSH login. Your agent runs as you, so it can use what any program
+  of yours can (next bullets), including your SSH keys, `gh` login and credential helpers
+  ([Prepared agent setups](#prepared-agent-setups-are-allowed)).
 - **Platforms.** See the [README table](../README.md#platforms). On Windows, use WSL2 for the event.
   Native Windows comes later. Company proxy networks are not supported
   ([guide](PARTICIPANT-GUIDE.md#1-what-you-need)).
