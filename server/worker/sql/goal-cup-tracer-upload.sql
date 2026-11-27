@@ -1,9 +1,12 @@
 -- COPY, for reference. The authority is the website repo (agentCommunity_PAGE), supabase/migrations/.
--- This file is every *goal_cup*.sql migration there, in name order, one after the other, each
+-- This file is every *goal_cup*.sql migration there (supabase/history/ and supabase/migrations/), in name
+-- order, one after the other, each
 -- under a "-- ===== <file name> =====" line. Do not edit it by hand. After a website migration merges,
 -- run this from the root of the website checkout (at its main), with F set to this file, to rewrite it
 -- (the header above the REGEN-END line is kept, the rest is regenerated):
---   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in supabase/migrations/*goal_cup*.sql; do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
+--   F=<tracer>/server/worker/sql/goal-cup-tracer-upload.sql; { sed '/^-- REGEN-END/q' "$F"; for m in $(ls supabase/history/*goal_cup*.sql supabase/migrations/*goal_cup*.sql | awk -F/ '{print $NF" "$0}' | sort | cut -d' ' -f2); do printf '\n-- ======================== %s ========================\n' "${m##*/}"; cat "$m"; done; } > "$F.new" && mv "$F.new" "$F"
+-- (The website's 2026-11-15 baseline moved every older migration into supabase/history/, so both
+-- folders are read.)
 -- Change a migration there first, then regenerate here.
 -- Scope (widened 2026-10-26 from *goal_cup_tracer*.sql): the sign-up migrations (20261021120000 to
 -- 20261021120400) and 20261017150200 replace goal_cup_upload_open_run and goal_cup_upload_claim_notices,
@@ -11,15 +14,18 @@
 -- glob also replaces a mirrored function: 20261017110000_email_delivery_rules.sql replaces
 -- goal_cup_upload_claim_notices, and 20261017150200 replaces it again. Check that no other one does,
 -- from the website root:
---   grep -lE 'FUNCTION +(public|goal_cup_tracer)\.' supabase/migrations/*.sql | xargs grep -lE 'FUNCTION +(public\.goal_cup|goal_cup_tracer\.)' | grep -v goal_cup
--- It must print only 20261017110000_email_delivery_rules.sql. A new name there means a mirrored
--- function may have a newer body outside this file: widen the glob or stop.
+--   grep -lE 'FUNCTION +(public|goal_cup_tracer)\.' supabase/history/*.sql supabase/migrations/*.sql | xargs grep -lE 'FUNCTION +(public\.goal_cup|goal_cup_tracer\.)' | grep -v goal_cup
+-- It must print only 20261017110000_email_delivery_rules.sql and 20261115060444_baseline.sql (the
+-- squash of the migrations before it, the same bodies). A new name there means a mirrored function
+-- may have a newer body outside this file: widen the glob or stop.
 -- Applied to the shared database: everything up to 20261021100000 (the last on 2026-10-22),
 -- 20261021120000 to 20261021120200 (2026-10-23), and 20261027100000 (2026-10-27, owner approved,
 -- pnpm db:check passed). NOT applied as of 2026-10-27:
 -- 20261021120400_goal_cup_terms_2026_10_23.sql (website GOAL-CUP-SIGNUP-RUNBOOK, step 4).
--- Regenerated from website main 6e607d64, then the pending migration appended as the last section:
--- 20261105100000_goal_cup_purge_device_requests.sql (sql/pending/; not in the website repo yet).
+-- Applied 2026-11-27 (owner approved; pnpm db:sitting applied it, then db:check and db:certify
+-- passed): 20261127173807_goal_cup_purge_device_requests.sql, the website's copy of the former
+-- sql/pending/20261105100000 file (search_path pg_catalog, pg_temp; schema-qualified names).
+-- Regenerated from website main 4e72e7e0. sql/pending/ is empty.
 -- REGEN-END
 
 -- ======================== 20261015120000_goal_cup_tracer_upload.sql ========================
@@ -4467,8 +4473,14 @@ END $$;
 -- (docs/SUPABASE.md, "SECURITY DEFINER grants"). Only goal_cup_upload_open_run calls it.
 REVOKE ALL ON FUNCTION goal_cup_tracer.repo_key(text) FROM PUBLIC, anon, authenticated;
 
--- ======================== 20261105100000_goal_cup_purge_device_requests.sql ========================
--- Goal Cup Proxy: purge expired device requests (2026-11-05).
+-- ======================== 20261127173807_goal_cup_purge_device_requests.sql ========================
+-- what: public.goal_cup_upload_purge_device_requests(p_now text), a new function only (no table change): the Goal Cup tracer Worker's 5-minute cron deletes its own deployment's device requests that expired more than a day before p_now, and gets the count back. The Worker already calls it; until this lands each tick logs the missing function.
+-- undo: supabase/rollbacks/20261127173807_goal_cup_purge_device_requests.sql (to run it in production, copy it to a new supabase/migrations/<UTC now>_goal_cup_purge_device_requests_rollback.sql)
+-- goes with: supabase/rollbacks/20261127173807_goal_cup_purge_device_requests.sql; the goal_cup_tracer.device_requests row of supabase/certify-volatile.tsv (its rows now fall in normal operation); goal-cup-proxy server/worker/sql/pending/20261105100000_goal_cup_purge_device_requests.sql (the Worker repository's pending copy); docs/AGENT-HANDOFF.md, "Goal Cup proxy cron calls a missing function"
+-- apply: no-data-removed this file only creates a function and deletes nothing when applied; the DELETE in its body runs later, when the Worker's cron calls it, on device requests (15-minute sign-in requests) that expired more than a day ago
+--
+-- Written by pnpm db:new from scripts/db/migration-template.sql (docs/DATABASE.md).
+-- Goal Cup Proxy: purge expired device requests (pending in the Worker repository since 2026-11-05).
 --
 -- A device request lives 15 minutes, but its row stayed for good: every `goalcup login` or start
 -- left one behind. public.goal_cup_upload_purge_device_requests deletes the caller's deployment's
@@ -4476,14 +4488,40 @@ REVOKE ALL ON FUNCTION goal_cup_tracer.repo_key(text) FROM PUBLIC, anon, authent
 -- 5-minute cron calls it as its last step; a Worker deployed before this migration logs the missing
 -- function and runs its other steps as before.
 --
--- New function only; no table changes.
+-- New function only; no table changes. No mail is sent or queued by anything here.
+-- Changed from the Worker repository's pending file, for docs/DATABASE.md §2b only: search_path is pg_catalog, pg_temp
+-- (was goal_cup_tracer, pg_temp) and the two objects in the body are schema-qualified. The body does the same.
+
+DO $pre$
+DECLARE
+  r text;
+BEGIN
+  IF current_user <> 'postgres' THEN RAISE EXCEPTION 'run as postgres (current_user is %)', current_user; END IF;
+  FOREACH r IN ARRAY ARRAY['anon', 'authenticated', 'service_role', 'goal_cup_ingest_staging', 'goal_cup_ingest_production'] LOOP
+    IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = r) THEN
+      RAISE EXCEPTION 'role % is missing', r;
+    END IF;
+  END LOOP;
+  IF to_regclass('goal_cup_tracer.device_requests') IS NULL THEN
+    RAISE EXCEPTION 'goal_cup_tracer.device_requests is missing';
+  END IF;
+  IF to_regprocedure('goal_cup_tracer.caller_is_staging()') IS NULL THEN
+    RAISE EXCEPTION 'goal_cup_tracer.caller_is_staging() is missing';
+  END IF;
+  IF to_regprocedure('public.goal_cup_upload_purge_device_requests(text)') IS NOT NULL THEN
+    RAISE EXCEPTION 'public.goal_cup_upload_purge_device_requests(text) already exists: this file creates it';
+  END IF;
+END
+$pre$;
+
+-- body: goal_cup_purge_device_requests
 
 CREATE FUNCTION public.goal_cup_upload_purge_device_requests(p_now text) RETURNS integer
-LANGUAGE sql SECURITY DEFINER SET search_path = goal_cup_tracer, pg_temp
+LANGUAGE sql SECURITY DEFINER SET search_path = pg_catalog, pg_temp
 AS $$
   WITH gone AS (
-    DELETE FROM device_requests
-     WHERE staging = caller_is_staging() AND expires_at < p_now::timestamptz - interval '1 day'
+    DELETE FROM goal_cup_tracer.device_requests
+     WHERE staging = goal_cup_tracer.caller_is_staging() AND expires_at < p_now::timestamptz - interval '1 day'
     RETURNING 1
   )
   SELECT count(*)::integer FROM gone
@@ -4494,3 +4532,35 @@ $$;
 REVOKE ALL ON FUNCTION public.goal_cup_upload_purge_device_requests(text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.goal_cup_upload_purge_device_requests(text)
   TO goal_cup_ingest_staging, goal_cup_ingest_production, service_role;
+
+DO $post$
+DECLARE
+  v_oid oid := to_regprocedure('public.goal_cup_upload_purge_device_requests(text)');
+  r text;
+BEGIN
+  IF v_oid IS NULL THEN RAISE EXCEPTION 'public.goal_cup_upload_purge_device_requests(text) is missing'; END IF;
+  IF NOT (SELECT p.prosecdef FROM pg_catalog.pg_proc p WHERE p.oid = v_oid) THEN
+    RAISE EXCEPTION 'public.goal_cup_upload_purge_device_requests(text) is not SECURITY DEFINER';
+  END IF;
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid = v_oid AND 'search_path=pg_catalog, pg_temp' = ANY (p.proconfig)
+  ) THEN
+    RAISE EXCEPTION 'public.goal_cup_upload_purge_device_requests(text): search_path is not pinned to pg_catalog, pg_temp';
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM pg_catalog.pg_proc p, pg_catalog.aclexplode(p.proacl) a WHERE p.oid = v_oid AND a.grantee = 0
+  ) OR (SELECT p.proacl IS NULL FROM pg_catalog.pg_proc p WHERE p.oid = v_oid) THEN
+    RAISE EXCEPTION 'public.goal_cup_upload_purge_device_requests(text): PUBLIC may execute it';
+  END IF;
+  FOREACH r IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+    IF has_function_privilege(r, v_oid, 'EXECUTE') THEN
+      RAISE EXCEPTION 'public.goal_cup_upload_purge_device_requests(text): % may execute it', r;
+    END IF;
+  END LOOP;
+  FOREACH r IN ARRAY ARRAY['goal_cup_ingest_staging', 'goal_cup_ingest_production', 'service_role'] LOOP
+    IF NOT has_function_privilege(r, v_oid, 'EXECUTE') THEN
+      RAISE EXCEPTION 'public.goal_cup_upload_purge_device_requests(text): % cannot execute it', r;
+    END IF;
+  END LOOP;
+END
+$post$;

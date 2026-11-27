@@ -82,10 +82,9 @@ build box, a log or a command line. Every organizer script opens `BEGIN READ ONL
 runs it.
 
 **Website database.** The 1.0 Worker needs website migration `20261021100000` (applied 22 Oct 2026),
-which adds `stored_bytes` and `chunk_count`. One migration is pending:
-`sql/pending/20261105100000_goal_cup_purge_device_requests.sql`, for the cron's purge of expired
-device requests ([Deploying a pending migration](#deploying-a-pending-migration)). Otherwise the
-Worker fits the tables as they are:
+which adds `stored_bytes` and `chunk_count`, and `20261127173807` (applied 27 Nov 2026) for the
+cron's purge of expired device requests. No migration is pending. Otherwise the Worker fits the
+tables as they are:
 
 | 1.0 | How it fits |
 |---|---|
@@ -515,13 +514,15 @@ There is no rollback to 0.7 after step 5. A bad 1.0 Worker is held with
 ## Deploying a pending migration
 
 A migration in `sql/pending/` is applied by the owner, in the website repo, before the Worker that
-calls it is deployed. Pending now: `20261105100000_goal_cup_purge_device_requests.sql` (a new
-function only, no table change).
+calls it is deployed. Pending now: none (the last one, the purge of expired device requests, was
+applied on 27 Nov 2026 as website migration `20261127173807`).
 
 1. `sh scripts/check-sql.sh` passes: it applies the mirror and the pending file to a throwaway
    Postgres and runs the Worker's scenarios.
-2. In the website checkout, add the same file to `supabase/migrations/`, merge it to `main`, and
-   apply it as in [Change a start window](#change-a-start-window), steps 3 to 5.
+2. In the website checkout, follow its `docs/DATABASE.md`: write the migration from its template
+   (`pnpm db:new`, §2b; `search_path = pg_catalog, pg_temp` and schema-qualified names), rehearse it,
+   merge it to `main`, and the operator applies it with `pnpm db:sitting` (§4). The sitting's restore
+   check needs the `supabase/postgres` Docker image it names; pull it first.
 3. Here, remove the file from `sql/pending/` and note it as applied in the mirror's header.
 4. Deploy the Worker, with every [deploy check](#deploy-checks).
 
