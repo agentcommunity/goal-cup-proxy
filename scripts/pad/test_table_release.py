@@ -335,8 +335,9 @@ class ReleaseVersions(Repo):
         code, out = self.check(self.repo(rows))
         self.assertIn("codex-cli gateway full: missing", out)
 
-    def test_the_hermes_file_requires_0_22_6(self):
-        self.assertIn("0.22.6", table.release_versions(table.harness_lines("hermes-cli")))
+    def test_every_core_file_names_its_release_versions(self):
+        for cid in table.CORE:
+            self.assertTrue(table.release_versions(table.harness_lines(cid)), cid)
 
 
 if __name__ == "__main__":

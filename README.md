@@ -142,8 +142,8 @@ flow are [ARCHITECTURE](docs/ARCHITECTURE.md).
 | Platform | Status |
 |---|---|
 | macOS arm64 | Tested on the owner's Mac (macOS 26.6). |
-| Linux x86_64 | Tested in sandboxes. |
-| Linux arm64 | Built (release.yml, `aarch64-unknown-linux-gnu`), not yet tested. |
+| Linux x86_64 | CI runs the gate's tests on Ubuntu 24.04, with stand-in harnesses. No real harness has run through the test pad on Linux yet. |
+| Linux arm64 | Built and checked at each release on Ubuntu 22.04 arm64 (release.yml: the Rust tests, the tarball smoke test and `install.sh`). No real harness run. |
 | Windows | Use WSL2 (below). |
 
 macOS on Intel is not supported.

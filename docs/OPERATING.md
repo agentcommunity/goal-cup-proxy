@@ -111,7 +111,7 @@ and prints one table; the ladder is `micro`, `cycle` and `full`, and the other f
 failure, 3 inconclusive, 2 a usage error. The staging Worker's address is not in the repo: set `PAD_STAGING_URL` (an `https` address whose first host label contains `staging`) or `staging_url` in an untracked settings file. Model keys are named in `scripts/pad/pad.toml` and read by name
 from the conductor's environment; they and the staging approval and database credentials never enter the
 sandbox. `scripts/pad/table` writes the rows and `PAD-RESULTS.md`, and
-`scripts/pad/table --release-check <commit>` is the release gate ([Releasing](#releasing)). For the core harnesses it needs a passing `full` row for every build in the harness file's `release_versions` on macOS arm64 (`darwin-arm64`): for Hermes, **0.22.5 and 0.22.6 both verified**. Design and
+`scripts/pad/table --release-check <commit>` is the release gate ([Releasing](#releasing)). For the core harnesses it needs a passing `full` row for every build in the harness file's `release_versions` on macOS arm64 (`darwin-arm64`). Design and
 settings: `scripts/pad/pad.toml` and the mode files in `scripts/pad/runs/`.
 
 Delete every test run, database rows and R2 objects, in one go (from `server/worker`):
@@ -136,13 +136,14 @@ not deleted, it lists them in `delete-test-runs.failed`; retry only those with
 
 Prerequisites: a clean checkout at the commit to release, `tmux`, the pad's usual environment (model keys,
 staging approval and fetch credentials) with `PAD_STAGING_URL` set, the Claude and ChatGPT sign-ins in
-`GOALCUP_SIGNIN_HOME` (default `~/gc-signin/home`), and Hermes 0.22.5 and 0.22.6 under `HARNESS_INSTALLS`
+`GOALCUP_SIGNIN_HOME` (default `~/gc-signin/home`), Claude Code and Codex at their harness files' `release_versions` first on `PATH`, and Hermes at its `release_versions` under `HARNESS_INSTALLS`
 (default `~/dev/harness-installs/hermes-cli-<version>/bin`). Then run `python3 scripts/pad/release-rows`: it builds
-HEAD into `~/gc-release-build/<sha8>`, checks the new build reaches staging, runs the 14 rows of
-`scripts/pad/runs/release/` in four chains at once, and ends with `scripts/pad/table` and the release check.
+HEAD into `~/gc-release-build/<sha8>`, checks the new build reaches staging, runs the rows of
+`scripts/pad/runs/release/` in chains at once, and ends with `scripts/pad/table` and the release check.
+Run it only after the last merge under `GUARDED` in `scripts/pad/table`: a later change there voids the rows. `scripts/pad/table` rewrites `pad-rows.jsonl` from `pad-out/` alone: on a machine whose `pad-out/` lacks the committed rows, first write each line of `pad-rows.jsonl` to its own `pad-out/committed-rows/<n>/row.json`.
 If it stops at the reach check, allow that `goalcup` build in Little Snitch (or another network filter) and run it again.
 The two exec verdicts stay your judgement: it prints the `goalcup-verify dump` commands and where the verdict files go.
-To rerun one chain: `python3 scripts/pad/release-rows --only signin` (also `gateway`, `hermes-0.22.5`, `hermes-0.22.6`; `--dry-run` lists them).
+To rerun one chain: `python3 scripts/pad/release-rows --only <chain>` (`--dry-run` lists the chains).
 
 ## Fetch and check a run
 
@@ -233,7 +234,7 @@ deleted for 180 days.
 goalcup never refuses a harness build. The canary only tells the maintainer that a build exists that no pad
 row has verified. It covers Claude Code, Codex, Amp and Hermes, needs `npm` and `curl` on PATH, and no keys.
 
-Run `python3.11 scripts/pad/canary` on the maintainer Mac every 2 hours for Claude Code, Codex and Hermes, and
+Run `python3.11 scripts/pad/canary` on an always-on maintainer machine every 2 hours for Claude Code, Codex and Hermes, and
 hourly for Amp (about 7 npm builds a day, [Amp section 2](harnesses/amp-cli.md#2-install-and-record-a-version)):
 `python3.11 scripts/pad/canary --only amp-cli`. Exit 0 means nothing new; 1 a new build, named in its line
 (read every line: a lookup can have failed too); 2 a lookup failed or the canary could not start: read the

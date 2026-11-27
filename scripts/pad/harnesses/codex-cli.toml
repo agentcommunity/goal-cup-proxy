@@ -2,9 +2,11 @@
 # Vendor pages read 30 Oct 2026: https://github.com/openai/codex/releases/tag/rust-v0.165.0 (the release),
 # https://learn.chatgpt.com/docs/auth (`codex login --with-api-key` reads the key on stdin; auth.json in CODEX_HOME),
 # https://vercel.com/docs/ai-gateway/coding-agents/openai-codex (gateway provider in config.toml, AI_GATEWAY_API_KEY).
-version = "0.165.0"
+version = "0.172.0"
 version_cmd = "codex --version"
-install = "npm i -g @openai/codex@0.165.0"
+# The versions --release-check needs verified on darwin-arm64: the current build for the cup pad round (read 26 Nov 2026).
+release_versions = ["0.172.0"]
+install = "npm i -g @openai/codex@0.172.0"
 key_kind = "openai"
 key_route = "login"
 login = "codex login --with-api-key"
