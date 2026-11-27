@@ -123,6 +123,19 @@ class PathAndPass(Repo):
         self.assertEqual(code, 1)
         self.assertIn("skills/goal-cup/SKILL.md", out)
 
+    def test_only_what_the_core_rows_ran_is_guarded(self):  # G10, G280
+        self.repo(green_rows())
+        root, other = table.ROOT, next(c for c in table.CONNECTOR_IDS if c not in table.CORE)
+        code, out = self.check(commit(root, {"connectors/%s.toml" % other: "changed\n",
+                                             "server/worker/src/index.ts": "changed\n",  # the rows ran on the deployed Worker
+                                             "skills/adding-a-capture-harness/SKILL.md": "changed\n"}, "contributor"))
+        self.assertEqual(code, 0, out)
+        code, out = self.check(commit(root, {"connectors/zz-new-cli.toml": "id = 1\n"}, "new connector"))
+        self.assertNotIn("connectors/zz-new-cli.toml", out)  # only tiers.toml asks for work, never a core re-pad
+        for f in ("connectors/codex-cli.toml", "connectors/model-hosts.toml", "connectors/shapes.tsv"):
+            code, out = self.check(commit(root, {f: "changed\n"}, f))  # exit is 1 anyway: tiers.toml is stale since zz-new-cli
+            self.assertIn(f, out)
+
 
 def hermes_rows(**over):
     return [dict(r, **over) for r in green_rows() if r["connector"] == "hermes-cli"]

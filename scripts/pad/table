@@ -14,8 +14,13 @@ ROWS_REL = "scripts/pad/rows/pad-rows.jsonl"
 RESULTS = ROOT / "scripts/pad/rows/PAD-RESULTS.md"
 CASES, CHECKS = ("direct", "gateway", "dodger"), ("C1", "C2", "C3", "C4", "C5", "C6")
 CORE = ("claude-code-cli", "codex-cli", "hermes-cli")
-GUARDED = ["crates/", "server/worker/src/", "connectors/", "skills/", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml",
-           ":(exclude)connectors/tiers.toml", ":(glob,exclude)crates/*/tests/**"]  # tests are not in the binary; skills/ is include_str!ed
+# What the core rows ran: the crates less their tests, the core connectors (a row names its id, so no other
+# connector file is read), the shared lists and the goal-cup skill (include_str!ed). Not server/worker/src/: the
+# rows ran against the deployed Worker, not this source. Listed, not excluded: a git exclusion wins over every
+# include, so excluding connectors/*.toml would drop the core files too.
+GUARDED = ["crates/", "connectors/model-hosts.toml", "connectors/shapes.tsv", "skills/goal-cup/", "Cargo.lock",
+           "Cargo.toml", "rust-toolchain.toml", ":(glob,exclude)crates/*/tests/**"] + [
+    "connectors/%s.toml" % c for c in CORE]
 def ids(names):
     """Connector ids from file names in connectors/: the same rule as crates/goalcup-format/build.rs."""
     return sorted(n[:-5] for n in names if n.endswith(".toml") and not n.startswith(".")
