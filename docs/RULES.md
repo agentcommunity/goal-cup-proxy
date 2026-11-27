@@ -35,8 +35,9 @@ All times are UTC.
   with `curl -fsSL https://github.com/agentcommunity/goal-cup-proxy/releases/latest/download/install.sh | sh`
   ([guide](PARTICIPANT-GUIDE.md#2-install)).
 - **Until the start window:** you prepare with `goalcup setup` and practice runs, which are not
-  limited to any window. The release is published before the start window; it is not a cutoff, and
-  releases may follow (D70).
+  limited to any window. A harness competes only through a connector in the goalcup release you
+  start with. The cup release is tagged on `<TAG DATE>`, so a connector pull request must be
+  merged before the cup release tag.
 - **Start window:** opens 5 December 2026, 00:00 UTC and lasts 24 hours. The date and the length
   may still move; the event site gives the final ones.
 - **During the window:** you finalize your prompt and start your run.
@@ -107,6 +108,7 @@ The latest possible run ends 192 hours after the window opens.
   messages. That is a detection, not a proof. An organizer reviews a message it cannot explain.
 - Goal Cup Proxy never sends anything to the agent, and never relays, edits or blocks your input: no
   reminders, no automatic "keep going", no automatic restart. `goalcup continue` is yours to run.
+- For your harness's goal mode, ask for it in your prompt in plain words; never type `/goal`.
 - The agent may run `goalcup time-left` to ask how much time the run has left (D66). It is an answer
   the agent asks for; Goal Cup Proxy never sends it anything.
 - `goalcup seal` refuses to run inside the agent's session, so the agent does not stop itself by accident. You may
