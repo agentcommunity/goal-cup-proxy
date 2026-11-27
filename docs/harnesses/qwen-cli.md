@@ -36,6 +36,7 @@ The connector sets both variables to the isolated home, so `settings.json`, `.en
 ## 5. Auth
 
 - The free Qwen sign-in ended on 2026-04-15 and is no longer in the `/auth` menu; the choices are QwenCloud, Alibaba ModelStudio, third-party providers (DeepSeek is a preset) and a custom provider ([docs](https://qwenlm.github.io/qwen-code-docs/en/users/configuration/auth/)).
+- Qwen Code 0.28.6 (npm latest on 26 Nov 2026) puts "Qwen Account with Subscription" first in `/auth`. Its calls go only to `https://api.qwen.ai/compatible-mode/v1`, and it refuses a base-URL override (package).
 - Keys come from the shell, from `.qwen/.env`, `<QWEN_HOME>/.env` or `~/.env` (the first file found is used, files are not merged), or from the `env` block of `settings.json`, "stored in plain text" (docs). The connector lists `{home}/settings.json` and `{home}/.env` as secret files.
 - Does the harness have a variable that moves its config and login? Yes, `QWEN_HOME`; the connector sets it.
 
@@ -43,7 +44,7 @@ The connector sets both variables to the isolated home, so `settings.json`, `.en
 
 - Proxy: the order is `--proxy`, then the `proxy` setting, then `HTTPS_PROXY`, `https_proxy`, `HTTP_PROXY`, `http_proxy` (source; the docs name `--proxy` and the setting). `NO_PROXY` is honoured through a process-wide undici proxy agent (source). So a `proxy` setting beats goalcup's variable: the connector refuses the start, naming file and key and never the value, if `proxy` is set in `{home}/settings.json` or `{workspace}/.qwen/settings.json`. goalcup passes no `--proxy`.
 - CA: `NODE_EXTRA_CA_CERTS` adds to the roots ([docs](https://qwenlm.github.io/qwen-code-docs/en/users/support/troubleshooting/)). Node: yes.
-- Hosts: `api.deepseek.com` and the `dashscope` hosts are provider hosts; `chat.qwen.ai` (sign-in) is never decrypted. Usage statistics go to an `rum.aliyuncs.com` host and the model catalog is read from `models.dev` (source); both pass as tunnels.
+- Hosts: `api.deepseek.com`, `api.qwen.ai` (the subscription), the QwenCloud hosts `maas.qwencloudapi.com` and `maas.qianwenaiapi.com` with their `token-plan.` forms, and the `dashscope` hosts, the Coding Plan ones included, are provider hosts; `chat.qwen.ai` (sign-in) is never decrypted. Usage statistics go to an `rum.aliyuncs.com` host and the model catalog is read from `models.dev` (source); both pass as tunnels.
 - Model address: providers are in `modelProviders` in `settings.json`, each with a `baseUrl`; the connector hints `modelProviders.*.*.baseUrl` in the user and workspace settings. A key in the environment (`OPENAI_BASE_URL`) is not hinted. goalcup never sets a model address.
 - Calls are HTTP/1.1; no WebSocket or gRPC on the model path (source, unverified by a run).
 

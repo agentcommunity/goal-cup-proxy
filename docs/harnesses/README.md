@@ -2,7 +2,7 @@
 
 One public page per harness, `docs/harnesses/<connector-id>.md`. It says where that harness keeps
 its sessions, config and logins on each OS, how it authenticates, and which hosts it calls.
-Hosts that a harness opens on purpose but that carry no model calls (Codex's `ab.chatgpt.com`, Claude Code's Datadog intake) are listed as expected tunnels in the `expected` array of `connectors/model-hosts.toml`.
+Hosts that a harness or the agent's own tools open on purpose but that carry no model calls (Codex's `ab.chatgpt.com`, Claude Code's Datadog intake, GitHub and the package registries) are listed as expected tunnels in the `expected` array of `connectors/model-hosts.toml`.
 
 A connector describes only what Goal Cup Proxy does today. The sheet records the rest: what to
 check when Goal Cup Proxy gains a platform or a new way to capture, without asking each team again.
@@ -25,8 +25,8 @@ sheet. Each harness has one connector file, `connectors/<id>.toml` (OpenCode 1 a
 | 6 | Amp 0.0.1793275344 | [`amp-cli`](amp-cli.md) | One WebSocket to `ampcode.com`; Amp's servers call the model | No transcript; a metadata log per thread | not verified | Provider calls are made on Amp's servers |
 | 7 | GitHub Copilot CLI 1.0.105 | [`copilot-cli`](copilot-cli.md) | HTTPS to `*.githubcopilot.com`, or a provider key | `session-state/<id>/events.jsonl`; `session-store.db`, a search index, is not copied | not verified | Sign-in and token exchange to `github.com` and `api.github.com` pass through as tunnels and are not read; `/delegate` runs a cloud agent (sheet section 8) |
 | 8 | Gemini CLI 0.66.0 | [`gemini-cli`](gemini-cli.md) | HTTPS to `generativelanguage.googleapis.com`; Code Assist on Google sign-in | `.gemini/tmp/<project>/chats/session-*.jsonl` | not verified | `cloudcode-pa.googleapis.com` carries both Code Assist model calls and sign-in calls; remote A2A subagents run elsewhere |
-| 9 | Goose 1.57.0 | [`goose-cli`](goose-cli.md) | HTTPS to the provider | `data/sessions/sessions.db`; subagents are rows in it | not verified | None found |
-| 10 | Kilo CLI 7.8.25 | [`kilo-cli`](kilo-cli.md) | HTTPS to the provider, Kilo's gateway or Vercel AI Gateway | `kilo.db`; subagents are child sessions | not verified | None found |
+| 9 | Goose 1.57.0 | [`goose-cli`](goose-cli.md) | HTTPS to the provider | `data/sessions/sessions.db`; subagents are rows in it | not verified | A provider picked from the built-in catalog is recorded only if its host is on the shared list; otherwise it is a tunnel (sheet section 6) |
+| 10 | Kilo CLI 7.8.25 | [`kilo-cli`](kilo-cli.md) | HTTPS to the provider, Kilo's gateway or Vercel AI Gateway | `kilo.db`; subagents are child sessions | not verified | A provider picked from the built-in catalog is recorded only if its host is on the shared list; otherwise it is a tunnel (sheet section 6) |
 | 11 | Qwen Code 0.26.4 | [`qwen-cli`](qwen-cli.md) | Chat Completions to the provider | `projects/<p>/chats/<id>.jsonl`; subagents under `projects/<p>/subagents/` | not verified | Its built-in `claude-code` and `codex` subagents are wire only; a settings `proxy` is refused at start |
 | 12 | Crush 0.99.0 | [`crush-cli`](crush-cli.md) | Chat Completions to the provider | `<workspace>/.crush/crush.db`; subagents are child rows | not verified | A run started below a repository root that has `.crush` writes `crush.db` there, not where goalcup reads; an unhinted provider stays a tunnel (sheet section 8) |
 | 13 | Factory Droid 0.251.0 | [`droid-cli`](droid-cli.md) | A provider key to its base URL; Factory's backend for sign-in and sync | `.factory/sessions/<slug>/<uuid>.jsonl` under the home goalcup sets with `FACTORY_HOME_OVERRIDE` (undocumented; `HOME` stays the participant's) | not verified | A separately started `droid daemon` or desktop app keeps its own environment and cannot be stopped by goalcup (sheet section 8) |

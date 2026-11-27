@@ -681,9 +681,9 @@ pub fn long_tunnel(host: &str, minutes: Option<u64>, up: u64) -> String {
     )
 }
 
-/// A host the proxy passes through on purpose (telemetry): information, not a problem.
+/// A host the proxy passes through on purpose (telemetry, GitHub, a package registry): information, not a problem.
 pub fn expected_tunnel(host: &str) -> String {
-    format!("Not recorded, expected (telemetry): {host}.")
+    format!("Not recorded, expected (not a model service): {host}.")
 }
 
 /// A listed host tunnelled unread, by its GAP reason name (or note `ca_refused`).

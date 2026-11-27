@@ -1,11 +1,11 @@
 # The one shared host list: hosts decrypted and recorded byte for byte for every harness. Everything else is a tunnel.
 # Patterns: exact name; "*.a.b" (one or more labels before a.b); one "*" inside one label.
 # Arrays: provider, gateway, vendor (the kind), never (sign-in hosts, never decrypted), pinned (empty at ship),
-# expected (non-model hosts a harness opens on purpose; tunnelled unrecorded, never decrypted, not a kind).
+# expected (non-model hosts a harness or the agent's own tools open on purpose; tunnelled unrecorded, never decrypted, not a kind).
 provider = [
   "api.anthropic.com", "api.openai.com", "chatgpt.com", "api.deepseek.com",
   "generativelanguage.googleapis.com", "api.moonshot.ai", "api.moonshot.cn", "api.kimi.com", "api.kimi.ai",
-  "dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com", "cn-hongkong.dashscope.aliyuncs.com",
+  "dashscope.aliyuncs.com", "dashscope-intl.aliyuncs.com", "*.dashscope.aliyuncs.com",
   "*.maas.aliyuncs.com",
   "api.mistral.ai", "api.x.ai",
   "api.z.ai", "open.bigmodel.cn", "api.groq.com", "api.together.ai", "us-api.together.ai",
@@ -15,11 +15,24 @@ provider = [
   "aiplatform.googleapis.com", "*-aiplatform.googleapis.com",
   "aiplatform.us.rep.googleapis.com", "aiplatform.eu.rep.googleapis.com",
   "*.openai.azure.com", "*.services.ai.azure.com",
+  # Qwen Code 0.28.6 package (npm): the Qwen subscription, QwenCloud and the DashScope regional hosts.
+  "dashscope-us.aliyuncs.com",
+  "api.qwen.ai", "maas.qwencloudapi.com", "*.maas.qwencloudapi.com", "maas.qianwenaiapi.com", "*.maas.qianwenaiapi.com",
+  # Catalog providers: the `api` hosts in https://models.dev/api.json (OpenCode's and Kilo's catalog, read
+  # 26 Nov 2026) and in Hermes v0.23.4 plugins/model-providers (source).
+  "api.minimax.io", "api.minimaxi.com", "integrate.api.nvidia.com", "ollama.com", "api.deepinfra.com", "llm.chutes.ai",
+  "api.novita.ai", "api.siliconflow.com", "api.siliconflow.cn", "api.sambanova.ai", "inference.baseten.co",
+  "api.stepfun.ai", "api.stepfun.com",
+  # Claude Platform on AWS and Claude Models on Google Cloud: https://code.claude.com/docs/en/claude-platform-on-aws
+  # and https://code.claude.com/docs/en/claude-models-on-google-cloud-anthropic-managed (read 26 Nov 2026).
+  "aws-external-anthropic.*.api.aws", "claude.googleapis.com",
 ]
 gateway = [
   "ai-gateway.vercel.sh", "openrouter.ai", "eu.openrouter.ai", "gateway.ai.cloudflare.com",
   "api.kilo.ai", "ai-gateway.kilo.ai", "api.cline.bot", "opencode.ai", "hyper.charm.land",
   "api.router.tetrate.ai", "router.huggingface.co",
+  # Gateways in https://models.dev/api.json (read 26 Nov 2026).
+  "router.requesty.ai", "zenmux.ai",
 ]
 vendor = [
   "ampcode.com", "api.factory.ai", "api.eu.factory.ai", "api.githubcopilot.com", "*.githubcopilot.com",
@@ -33,4 +46,9 @@ never = [
 pinned = []
 # Source: Codex otel/src/config.rs (Statsig metrics exporter); Claude Code 2.1.316 binary strings, the two
 # /api/v2/logs intake URLs (https://code.claude.com/docs/en/data-usage says only "third-party logging").
-expected = ["ab.chatgpt.com", "http-intake.logs.us5.datadoghq.com", "browser-intake-us5-datadoghq.com"]
+# Then the hosts the agent's own git, npm, pip, cargo and go reach through the proxy; none is a model service.
+expected = [
+  "ab.chatgpt.com", "http-intake.logs.us5.datadoghq.com", "browser-intake-us5-datadoghq.com",
+  "github.com", "codeload.github.com", "*.githubusercontent.com", "registry.npmjs.org", "registry.yarnpkg.com",
+  "pypi.org", "files.pythonhosted.org", "index.crates.io", "static.crates.io", "proxy.golang.org",
+]

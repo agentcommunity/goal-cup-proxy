@@ -78,7 +78,7 @@ It starts no run and needs no GitHub. Run it again whenever it names something t
    reached, `git` is missing, or the WSL problem above. Then the paragraph of
    [section 9](#9-what-is-recorded-and-what-is-not).
 
-A model host `goalcup` does not know, such as a gateway of your own:
+A model service `goalcup` does not know (your own gateway, or a provider not on the list):
 
 ```sh
 goalcup setup --record-host llm.example.com

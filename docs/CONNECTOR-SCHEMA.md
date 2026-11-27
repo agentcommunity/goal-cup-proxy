@@ -143,7 +143,7 @@ optional, and no other key. `provider`, `gateway` and `vendor` hold the hosts, t
 each host's `kind`; `never` holds hosts never decrypted, whatever another list says; `pinned` holds
 names or patterns of hosts known to pin their certificate, which marks a listed host pinned (a
 `pinned` name in no other array is listed with kind `other`); `expected` holds non-model hosts a
-harness opens on purpose, tunnelled unrecorded and flagged as expected. goalcup's own server
+harness or the agent's own tools open on purpose (telemetry, GitHub, package registries), tunnelled unrecorded and flagged as expected. goalcup's own server
 (`agentcommunity.org` and its subdomains, any name holding `goalcup`, and the server a run uploads
 to) is `never` in code. A pattern is an exact name, `*.a.b` (one or more labels before `a.b`), or one
 `*` inside one label with at least two labels after it. A name outside `never` that fails the host
