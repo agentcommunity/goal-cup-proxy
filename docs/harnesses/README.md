@@ -37,9 +37,9 @@ sheet. Each harness has one connector file, `connectors/<id>.toml` (OpenCode 1 a
 The Tier column is a snapshot of [`connectors/tiers.toml`](../../connectors/tiers.toml), which the test
 pad writes; that file is the record, and the column is not regenerated. Until the pad has run a harness
 its tier is "not verified" with the reason "not yet run on the pad". A verified or unsupported tier
-appears only after the pad records it (`scripts/pad/rows/PAD-RESULTS.md`). Each sheet
+appears only after the pad records it (`scripts/pad/rows/PAD-RESULTS.md`). Each product sheet
 ends with a "Pad result" section that points to the file. The full list of limits is in section 8 of
-each sheet.
+each product sheet.
 
 ## Not on the list
 

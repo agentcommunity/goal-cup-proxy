@@ -397,8 +397,9 @@ harnesses the test pad has verified. A tier does not decide whether you may take
 `PATH` as `homemade-agent` ([what it must do](harnesses/homemade-cli.md)). It is for home-made loops
 only: a product someone else publishes needs its own connector. The loop's source must be public,
 at the latest at the end of the event. The first line of `homemade-agent --version` must name the
-loop, its version and the commit it runs, and link its public source. Do not change the loop during
-the run. The record keeps that line; a home-made run whose record lacks it is reviewed by hand. The
+loop, its version and the commit it runs, and link its public source, within 64 characters. Do not
+change the loop during the run. The record keeps that line; a home-made run whose record lacks it is
+reviewed by hand. The
 loop may be built on any SDK, including ones that run Claude Code or Codex underneath (the Claude
 Agent SDK, the Codex SDK): it is still your loop and one harness. A wrapper that only starts a
 product is that product. One harness per run holds otherwise: your loop starts no second harness.
