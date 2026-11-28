@@ -25,7 +25,7 @@ is the participant's project folder.
 | `args` | string list | `[]` | Arguments for `goalcup start`. Template `{workspace}` only |
 | `resume` | string list | `[]` | Appended to `args` for `goalcup continue`. Template `{workspace}` only |
 | `home` | map, variable to template | empty | Variables pointed into the isolated home; each value starts with `{home}`. The folders are created with mode 0700. Where it sets `HOME`, goalcup also writes `$HOME/.profile`, putting the handed `PATH` back after a login shell resets it: replaced only when goalcup wrote it, else kept with a log line |
-| `env` | map, variable to string | empty | Fixed variables (auto-update switches, daemon modes), set after `home` |
+| `env` | map, variable to string | empty | Fixed variables (auto-update switches, daemon modes), set after `home`; `{home}` and `{workspace}` are filled, and no folder is made (a `home` entry makes one) |
 | `ca_env` | string list | `[]` | The harness's own CA variables. Each is pointed at the run CA |
 | `unset` | string list | `[]` | Participant variables removed before launch, for those that beat `HTTPS_PROXY` |
 | `refuse_if_set` | list of `{file, keys}` | `[]` | A value at any of `keys` in `file` refuses the start, naming the file and key, never the value. `null`, `""`, `[]` and `{}` are unset; `false` is a value |
@@ -129,9 +129,10 @@ A parse error names the file and the line; a rule error names the file and the k
   in `env` gets this error.
 - `env` names no variable the code owns: the proxy and CA variables it removes and sets
   (`HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY`, `NO_PROXY` in both cases, `NODE_EXTRA_CA_CERTS`,
-  `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`), `NODE_USE_ENV_PROXY`, `HOME`, the three that turn TLS checks
-  off (`SSL_CERT_DIR`, `CURL_CA_BUNDLE`, `NODE_TLS_REJECT_UNAUTHORIZED`), and none in `home`, `ca_env`
-  or `unset`. `ca_env` names none of these and no `home` key; a `home` key none but `HOME`.
+  `SSL_CERT_FILE`, `REQUESTS_CA_BUNDLE`), `NODE_USE_ENV_PROXY`, `GIT_TERMINAL_PROMPT`, `TMUX`,
+  `TMUX_PANE`, `HOME`, the three that turn TLS checks off (`SSL_CERT_DIR`, `CURL_CA_BUNDLE`,
+  `NODE_TLS_REJECT_UNAUTHORIZED`), and none in `home`, `ca_env` or `unset`. `ca_env` names none of
+  these and no `home` key; a `home` key none but `HOME`.
 - Paths stay inside: every component after the leading template is not empty, `.` or `..`, and holds
   no brace or NUL. A `refuse_if_set` or `host_hints` file and a `secret_files` entry start with
   `{home}` or `{workspace}`; a `no_prompts` or `update_off` file and `skills_dir` start with `{home}`,

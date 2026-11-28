@@ -205,6 +205,7 @@ fn connector_data_stays_in_its_home_and_off_the_code_variables() {
         "env = { NODE_TLS_REJECT_UNAUTHORIZED = \"0\" }",
         "env = { SSL_CERT_DIR = \"/x\" }",
         "no_prompts_args = [\"{home}/x\"]",
+        "env = { GIT_TERMINAL_PROMPT = \"1\" }",
     ];
     let head = "id = \"test-cli\"\nname = \"Test\"\nprogram = \"test\"\n";
     for body in refused {

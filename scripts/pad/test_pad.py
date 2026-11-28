@@ -1568,13 +1568,6 @@ class SnippetFill(unittest.TestCase):
         self.assertEqual(json.loads(padrun.fill(t, "/iso", "/run/project")),
                          {"w": "/run/project", "h": "/iso/x", "k": "${AI_GATEWAY_API_KEY}", "e": "{env:DEEPSEEK_API_KEY}"})
 
-    def test_openclaw_works_in_the_project(self):
-        for case in ("direct", "gateway"):
-            with open(os.path.join(HERE, "harnesses", case, "openclaw-cli-config.json")) as f:
-                d = json.load(f)
-            self.assertEqual(d["agents"]["defaults"]["workspace"], "{workspace}", case)
-            self.assertIn("model", d["agents"]["defaults"], case)  # the model pin is kept beside it
-
 
 class ExitKeys(unittest.TestCase):
     def sent(self, keys, dies_after=None):

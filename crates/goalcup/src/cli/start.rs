@@ -369,8 +369,8 @@ pub(super) struct Part {
     pub local_wall: u64,
 }
 
-/// The start facts (seam S17) of `start` and `continue`; adds `GOALCUP_TIME_LEFT_FILE` to the
-/// plan's environment (section 10).
+/// The start facts (seam S17) of `start`, `continue` and recover; adds `GOALCUP_TIME_LEFT_FILE` to
+/// the plan's environment (section 10), and sets or removes `TMUX_TMPDIR`.
 pub(super) fn start_facts(
     project: &Path,
     vars: &BTreeMap<String, String>,
@@ -390,6 +390,16 @@ pub(super) fn start_facts(
             .to_string_lossy()
             .into_owned(),
     );
+    // A tmux the harness starts runs its own server with this environment, never the participant's
+    // or an earlier part's (G158): `TMUX` is removed, and `TMUX_TMPDIR` is this part's own folder,
+    // short enough for macOS's 104-byte socket path. With no safe folder it is unset, and tmux
+    // uses its default socket: the start goes on.
+    match tmux_dir(Path::new("/tmp"), &part.entry) {
+        Some(dir) => plan
+            .env
+            .insert("TMUX_TMPDIR".to_owned(), dir.to_string_lossy().into_owned()),
+        None => plan.env.remove("TMUX_TMPDIR"),
+    };
     StartFacts {
         run: part.run,
         entry: part.entry,
@@ -418,6 +428,19 @@ pub(super) fn start_facts(
         null_since: None,
         notes: plan.notes.clone(),
     }
+}
+
+/// `<base>/goalcup-<entry>` with mode 0700: made now, or already this user's with that mode (a
+/// recover sets up the same part again). `None` when it cannot be made, or is a link, a file,
+/// another user's or open to others.
+fn tmux_dir(base: &Path, entry: &str) -> Option<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt};
+    let dir = base.join(format!("goalcup-{entry}"));
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(&dir);
+    let m = std::fs::symlink_metadata(&dir).ok()?;
+    // SAFETY: `geteuid` takes nothing and cannot fail.
+    let me = unsafe { libc::geteuid() };
+    (m.is_dir() && m.uid() == me && m.mode() & 0o777 == 0o700).then_some(dir)
 }
 
 /// Section 8: the push block and the prompt, written to `first-message.txt` and put on the
@@ -518,6 +541,28 @@ pub(super) fn session_id() -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The part's tmux folder is made private and kept when a recover asks again, and is never a
+    /// link, a file, a folder others can open or one that cannot be made.
+    #[test]
+    fn the_tmux_folder_is_private_or_none() {
+        use std::os::unix::fs::PermissionsExt;
+        let t = tempfile::tempdir().unwrap();
+        let base = t.path();
+        let made = super::tmux_dir(base, "e1").unwrap();
+        let mode = std::fs::metadata(&made).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o700);
+        assert_eq!(super::tmux_dir(base, "e1").as_ref(), Some(&made));
+        std::os::unix::fs::symlink(&made, base.join("goalcup-e2")).unwrap();
+        std::fs::create_dir(base.join("goalcup-e3")).unwrap();
+        let open = std::fs::Permissions::from_mode(0o755);
+        std::fs::set_permissions(base.join("goalcup-e3"), open).unwrap();
+        std::fs::write(base.join("goalcup-e4"), "").unwrap();
+        for entry in ["e2", "e3", "e4"] {
+            assert_eq!(super::tmux_dir(base, entry), None, "{entry}");
+        }
+        assert_eq!(super::tmux_dir(&base.join("none"), "e5"), None);
+    }
+
     /// A tiers file that stops parsing would turn every agent into "not verified" without a word.
     #[test]
     fn tiers_file_parses() {

@@ -1,4 +1,4 @@
-# OpenClaw; facts and the known workspace limit: docs/harnesses/openclaw-cli.md.
+# OpenClaw; facts: docs/harnesses/openclaw-cli.md.
 # No database rows: both SQLite files hold OpenClaw's auth profiles, which masking cannot see (facts sheet, section 5).
 id = "openclaw-cli"
 name = "OpenClaw"
@@ -6,7 +6,7 @@ program = "openclaw"
 checked = "2026.10.9"
 args = ["chat"]
 home = { OPENCLAW_HOME = "{home}" }
-env = { OPENCLAW_NO_AUTO_UPDATE = "1" }
+env = { OPENCLAW_NO_AUTO_UPDATE = "1", OPENCLAW_WORKSPACE_DIR = "{workspace}" }
 unset = ["OPENCLAW_PROXY_URL", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH", "OPENCLAW_PROFILE"]
 refuse_if_set = [
   { file = "{home}/.openclaw/openclaw.json", keys = ["proxy.proxyUrl", "env.OPENCLAW_PROXY_URL", "env.vars.OPENCLAW_PROXY_URL"] },

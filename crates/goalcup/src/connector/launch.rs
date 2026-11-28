@@ -15,7 +15,8 @@ use serde_json::Value;
 use super::hints::{self, yaml_key};
 use super::{Connector, Env, Refusal, SettingRow, Skipped};
 
-/// Removed from the participant's environment before anything is set (step 1).
+/// Removed from the participant's environment before anything is set (step 1): the proxy and CA
+/// variables, and tmux's client variables.
 pub(crate) const REMOVED: &[&str] = &[
     "HTTPS_PROXY",
     "https_proxy",
@@ -28,6 +29,8 @@ pub(crate) const REMOVED: &[&str] = &[
     "NODE_EXTRA_CA_CERTS",
     "SSL_CERT_FILE",
     "REQUESTS_CA_BUNDLE",
+    "TMUX",
+    "TMUX_PANE",
 ];
 
 /// Loopback stays off the proxy (step 3).
@@ -85,7 +88,7 @@ pub(crate) fn fill(s: &str, home: &Path, workspace: &Path) -> String {
 }
 
 /// The harness environment before the port and the CA paths: steps 1, 3, 4 and 6. `plan` creates
-/// the `home` folders.
+/// the `home` folders. `env` values fill `{home}` and `{workspace}` too.
 pub(crate) fn build_env(c: &Connector, env: &Env, home: &Path) -> BTreeMap<String, String> {
     let mut vars = env.vars.clone();
     let unset = c.unset.iter().map(String::as_str);
@@ -95,11 +98,14 @@ pub(crate) fn build_env(c: &Connector, env: &Env, home: &Path) -> BTreeMap<Strin
     vars.insert("NO_PROXY".into(), NO_PROXY.into());
     vars.insert("no_proxy".into(), NO_PROXY.into());
     vars.insert("NODE_USE_ENV_PROXY".into(), "1".into());
+    // Git never asks for a login in the terminal the harness draws on. An askpass program
+    // (`GIT_ASKPASS`, `core.askPass`, `SSH_ASKPASS`) still runs, and `ssh` asks for itself.
+    vars.insert("GIT_TERMINAL_PROMPT".into(), "0".into());
     for (name, template) in &c.home {
         vars.insert(name.clone(), fill(template, home, &env.workspace));
     }
     for (name, value) in &c.env {
-        vars.insert(name.clone(), value.clone());
+        vars.insert(name.clone(), fill(value, home, &env.workspace));
     }
     vars
 }

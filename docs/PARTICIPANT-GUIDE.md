@@ -145,7 +145,7 @@ provider's usage page.
 
 **Tools on PATH.** The harness gets the environment of the terminal you run `goalcup start` in,
 `PATH` included, minus proxy and certificate variables, plus the variables that move its own config
-and data into its Goal Cup home. Install what the agent needs (for example `rg`) first. In a practice run, ask the agent to run `goalcup time-left` to see it works. Claude Code and Gemini CLI do not connect to your editor during the run, even in its terminal; typing `/ide` in Claude Code connects it, and that counts as typing.
+and data into its Goal Cup home ([the full list](HARNESS-SETUP.md#what-goalcup-sets-at-launch)). Install what the agent needs (for example `rg`) first. In a practice run, ask the agent to run `goalcup time-left` to see it works. Claude Code and Gemini CLI do not connect to your editor during the run, even in its terminal; typing `/ide` in Claude Code connects it, and that counts as typing.
 
 **First-run screens.** Before your prompt a harness may show its own screens (a sign-in, a
 trust-this-folder question, a wizard). Answering them is allowed; it is not a message to the agent.
@@ -196,10 +196,11 @@ Do the steps in this order: a token for one repository needs the repository to e
    repository only. The agent still runs as you and can read what your programs can read, so keep no
    other secrets in the project folder.
 
-   **Your SSH key is not covered.** The agent is you, and `ssh` reads `~/.ssh` whatever `HOME` says;
-   in a test the agent used the tester's key within two minutes. Give your key a passphrase, use an
-   SSH agent that asks before each use, or run in a container
-   ([results](https://github.com/agentcommunity/goal-cup-proxy/blob/archive/docs/research/results/2026-10-26-mac-retest.md)).
+   **Your git and SSH login are not covered.** goalcup removes nothing of them. It only stops git
+   asking for a password in the terminal; an askpass program (VS Code's terminal sets one) and `ssh`
+   can still ask. The push lines (step 5, below) make the agent's https pushes to github.com use this
+   token. The agent runs as you and can use your SSH keys, `gh` login and credential helpers. If that
+   matters, run it in a VM or container without them.
 3. **Make the project folder.** A new folder that holds only a `.gitignore` and a `.env.local` (a
    macOS `.DS_Store` is allowed). First the folder and the `.gitignore`:
 

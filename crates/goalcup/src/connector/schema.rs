@@ -374,13 +374,15 @@ fn safe_message(message: &str) -> String {
     }
 }
 
-/// Whether the code owns `name` (PRD-11 section 3): it removes and sets the proxy and CA
-/// variables, sets `NODE_USE_ENV_PROXY`, never sets the variables that turn TLS checks off, and
-/// leaves `HOME` to `home`. No `env` or `ca_env` entry names one; a `home` key names only `HOME`.
+/// Whether the code owns `name` (PRD-11 section 3): it removes every `launch::REMOVED` name, sets
+/// the proxy and CA variables, `NODE_USE_ENV_PROXY` and `GIT_TERMINAL_PROMPT`, never sets the
+/// variables that turn TLS checks off, and leaves `HOME` to `home`. No `env` or `ca_env` entry names
+/// one; a `home` key names only `HOME`.
 fn code_owned(name: &str) -> bool {
     launch::REMOVED.contains(&name)
         || [
             "NODE_USE_ENV_PROXY",
+            "GIT_TERMINAL_PROMPT",
             "HOME",
             "SSL_CERT_DIR",
             "CURL_CA_BUNDLE",
